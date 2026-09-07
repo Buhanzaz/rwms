@@ -20,6 +20,9 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CustomerBooking
+import dev.buhanzaz.rwms.client.data.CustomerCabin
+import dev.buhanzaz.rwms.client.data.CabinPhoto
+import dev.buhanzaz.rwms.client.BuildConfig
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CustomerProfile
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
@@ -304,6 +307,89 @@ class CustomerConditionalNavigationTest {
         composeRule.onNodeWithText("Санкт-Петербург").performClick()
         composeRule.onNodeWithTag("catalog-screen").assertExists()
         composeRule.onNodeWithTag("warehouse-screen").assertDoesNotExist()
+    }
+
+    @Test
+    fun `continue as guest opens catalog without profile or ordering and order action opens login`() {
+        val city = requireNotNull(readyCatalogWorkflow().selectedWarehouse)
+        val cabin = CustomerCabin("public-cabin", 1, "42", 1, 18_000)
+        var state by mutableStateOf<CustomerAppState>(CustomerAppState.SignedOut())
+        val mutations = AtomicInteger()
+        composeRule.setContent {
+            CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
+                CustomerTheme {
+                    CustomerAppContent(
+                        state,
+                        onContinueAsGuest = { state = CustomerAppState.GuestCatalog(CustomerGuestCatalogState(warehouses = listOf(city))) },
+                        onGuestWarehouse = { state = CustomerAppState.GuestCatalog(CustomerGuestCatalogState(
+                            warehouses = listOf(city), selectedWarehouse = it, cabins = listOf(cabin),
+                        )) },
+                        onGuestLogin = { state = CustomerAppState.SignedOut(showLogin = true) },
+                        onToggleCabin = { mutations.incrementAndGet() },
+                        onCheckout = { mutations.incrementAndGet() },
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithTag("customer-auth-guest").performScrollTo().performClick()
+        composeRule.onNodeWithTag("warehouse-screen").assertExists()
+        composeRule.onNodeWithTag("profile-screen").assertDoesNotExist()
+        composeRule.onNodeWithTag("remember-warehouse").assertDoesNotExist()
+        composeRule.onNodeWithTag("menu-button").assertDoesNotExist()
+        composeRule.onNodeWithTag("warehouse-option-${city.id}").performClick()
+        composeRule.onNodeWithTag("cabin-public-cabin").assertExists()
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
+        composeRule.onNodeWithText("В заказ").assertDoesNotExist()
+        composeRule.onNodeWithText("+ Дополнительно").assertDoesNotExist()
+        composeRule.onNodeWithText("Войти для заказа").performScrollTo().performClick()
+        composeRule.onNodeWithTag("customer-login-screen").assertExists()
+        composeRule.onNodeWithTag("customer-auth-start").assertDoesNotExist()
+        composeRule.onNodeWithTag("catalog-screen").assertDoesNotExist()
+        assertThat(mutations.get()).isEqualTo(0)
+    }
+
+    @Test
+    fun `guest can inspect and close photos without entering the customer workflow`() {
+        val city = requireNotNull(readyCatalogWorkflow().selectedWarehouse)
+        // Unsupported test URLs exercise the unavailable-photo state without external network traffic.
+        val cabin = CustomerCabin("public-cabin", 1, "42", 1, 18_000, photos = listOf(CabinPhoto("p", 1, "", "")))
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(CustomerAppState.GuestCatalog(CustomerGuestCatalogState(
+                    warehouses = listOf(city), selectedWarehouse = city, cabins = listOf(cabin),
+                )))
+            }
+        }
+        composeRule.onNodeWithContentDescription("Бытовка 42, фото 1 из 1").performClick()
+        composeRule.onNodeWithTag("gallery-close").assertExists().performClick()
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
+        composeRule.onNodeWithTag("profile-screen").assertDoesNotExist()
+    }
+
+    @Test
+    fun `guest read failure stays visible instead of reporting an empty successful result`() {
+        val city = requireNotNull(readyCatalogWorkflow().selectedWarehouse)
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(CustomerAppState.GuestCatalog(CustomerGuestCatalogState(
+                    selectedWarehouse = city, error = "Каталог временно недоступен",
+                )))
+            }
+        }
+        composeRule.onNodeWithText("Каталог временно недоступен").assertExists()
+        composeRule.onNodeWithText("Свободных бытовок по выбранным условиям нет").assertDoesNotExist()
+        composeRule.onNodeWithTag("header-back").assertExists()
+    }
+
+    @Test
+    fun `guest photo URLs resolve on the gateway and reject foreign origins`() {
+        val publicPath = "/api/logistics/public/v1/catalog/warehouses/w/cabins/c/photos/p?generation=2&variant=LARGE"
+        val privatePath = "/api/logistics/customer/v1/inquiries/i/cabins/c/photos/p?generation=2&variant=LARGE"
+        assertThat(customerMediaUrl(publicPath)).isEqualTo(BuildConfig.PUBLIC_BASE_URL + publicPath)
+        assertThat(customerMediaUrl(BuildConfig.PUBLIC_BASE_URL + publicPath)).isEqualTo(BuildConfig.PUBLIC_BASE_URL + publicPath)
+        assertThat(customerMediaUrl(privatePath)).isEqualTo(BuildConfig.PUBLIC_BASE_URL + privatePath)
+        assertThat(customerMediaUrl("https://foreign.invalid$publicPath")).isEmpty()
     }
 
     private fun readyCatalogWorkflow(): CustomerWorkflowState = CustomerWorkflowState(

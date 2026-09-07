@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.client.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -53,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -143,12 +145,29 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
             }
         }
     }
+    val browsingGuest = state is CustomerAppState.GuestCatalog
+    LaunchedEffect(viewModel, lifecycle, browsingGuest) {
+        if (browsingGuest) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            viewModel.refreshGuestCatalog()
+            var connected: Boolean? = null
+            customerValidatedConnectivity(context.applicationContext).collect { available ->
+                if (connected == false && available) viewModel.refreshGuestCatalog()
+                connected = available
+            }
+        }
+    }
     CustomerTheme(appearanceMode = appearanceMode) {
         CustomerStoreLaunchGate {
             CustomerAppContent(
                 state = state,
                 onLogin = viewModel::login,
                 onRegister = viewModel::register,
+                onContinueAsGuest = viewModel::continueAsGuest,
+                onGuestWarehouse = viewModel::selectGuestWarehouse,
+                onGuestFilters = viewModel::applyGuestFilters,
+                onGuestLoadMore = viewModel::loadMoreGuestCabins,
+                onGuestBack = viewModel::leaveGuestCatalog,
+                onGuestLogin = viewModel::requestGuestLogin,
                 onLogout = viewModel::logout,
                 onSaveProfile = viewModel::saveProfile,
                 onAvatarCropped = viewModel::uploadProfileAvatar,
@@ -207,6 +226,12 @@ fun CustomerAppContent(
     state: CustomerAppState,
     onLogin: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onRegister: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
+    onContinueAsGuest: () -> Unit = {},
+    onGuestWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse) -> Unit = {},
+    onGuestFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit = {},
+    onGuestLoadMore: () -> Unit = {},
+    onGuestBack: () -> Unit = {},
+    onGuestLogin: () -> Unit = {},
     onLogout: () -> Unit = {},
     onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit = {},
     onAvatarCropped: (ByteArray) -> Unit = {},
@@ -251,6 +276,11 @@ fun CustomerAppContent(
             submitting = state.submitting,
             onLogin = onLogin,
             onRegister = onRegister,
+            onContinueAsGuest = onContinueAsGuest,
+            initialPage = if (state.showLogin) CustomerAuthenticationPage.LOGIN else CustomerAuthenticationPage.START,
+        )
+        is CustomerAppState.GuestCatalog -> GuestCustomerCatalog(
+            state.catalog, onGuestWarehouse, onGuestFilters, onGuestLoadMore, onGuestBack, onGuestLogin,
         )
         is CustomerAppState.Ready -> {
             val workflow = state.workflow
@@ -304,6 +334,37 @@ fun CustomerAppContent(
                 )
             }
         }
+    }
+}
+
+/** Guest navigation exposes only city selection, catalog, photos, and the real login entry. */
+@Composable
+private fun GuestCustomerCatalog(
+    state: CustomerGuestCatalogState,
+    onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse) -> Unit,
+    onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit,
+    onLoadMore: () -> Unit,
+    onBack: () -> Unit,
+    onLogin: () -> Unit,
+) {
+    var galleryCabin by rememberSaveable(state.selectedWarehouse?.id) { mutableStateOf<String?>(null) }
+    var galleryPage by rememberSaveable { mutableStateOf(0) }
+    BackHandler(onBack = onBack)
+    if (state.selectedWarehouse == null) {
+        WarehouseScreen(
+            warehouses = state.warehouses, busy = state.busy,
+            onSelect = { warehouse, _ -> onWarehouse(warehouse) }, onMenu = null, onProfile = onLogin,
+            onBack = onBack, allowRemember = false, errorMessage = state.error,
+        )
+    } else {
+        GuestCabinCatalogScreen(
+            state = state, onBack = onBack, onLogin = onLogin, onFilters = onFilters,
+            onLoadMore = onLoadMore, onWarehouse = onWarehouse,
+            onPhoto = { unitId, page -> galleryCabin = unitId; galleryPage = page },
+        )
+    }
+    galleryCabin?.let { cabinId ->
+        FullscreenCabinGallery(state.cabins.firstOrNull { it.unitId == cabinId }, galleryPage) { galleryCabin = null }
     }
 }
 

@@ -56,6 +56,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -88,6 +89,7 @@ import coil3.compose.AsyncImage
 import dev.buhanzaz.rwms.client.BuildConfig
 import dev.buhanzaz.rwms.client.data.AvailableEquipment
 import dev.buhanzaz.rwms.client.data.CabinFilters
+import dev.buhanzaz.rwms.client.data.CabinFacets
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 import java.util.Locale
@@ -269,8 +271,81 @@ fun CabinCatalogScreen(
     avatarUrl: String? = null,
     avatarInitials: String? = null,
 ) {
-    var showFilters by remember { mutableStateOf(false) }
     var furnitureCabin by remember { mutableStateOf<String?>(null) }
+    CustomerCatalogContent(
+        state = CustomerCatalogContentState(
+            state.warehouses, state.selectedWarehouse, state.facets, state.filters, state.cabins,
+            state.cabinPage, state.cabinTotalPages, state.busy, state.selectedCabinIds,
+        ),
+        onMenu = onMenu, onProfile = onProfile, onFilters = onFilters, onLoadMore = onLoadMore,
+        onToggleCabin = onToggleCabin, onFurniture = { furnitureCabin = it }, onPhoto = onPhoto,
+        onWarehouse = onWarehouse, avatarUrl = avatarUrl, avatarInitials = avatarInitials ?: state.profileInitials(),
+    )
+    furnitureCabin?.let { cabinId ->
+        FurnitureSheet(
+            cabin = state.cabins.firstOrNull { it.unitId == cabinId },
+            items = state.equipment,
+            quantities = state.equipmentDraft.filterKeys { it.cabinUnitId == cabinId },
+            onQuantity = { item, quantity -> onEquipment(cabinId, item, quantity) },
+            onDismiss = { furnitureCabin = null },
+        )
+    }
+}
+
+/** Reuses the catalog's filters, cards and gallery affordances without a customer workflow. */
+@Composable
+internal fun GuestCabinCatalogScreen(
+    state: CustomerGuestCatalogState,
+    onBack: () -> Unit,
+    onLogin: () -> Unit,
+    onFilters: (CabinFilters) -> Unit,
+    onLoadMore: () -> Unit,
+    onPhoto: (String, Int) -> Unit,
+    onWarehouse: (CustomerWarehouse) -> Unit,
+) {
+    CustomerCatalogContent(
+        state = CustomerCatalogContentState(
+            state.warehouses, state.selectedWarehouse, state.facets, state.filters, state.cabins,
+            state.cabinPage, state.cabinTotalPages, state.busy, error = state.error,
+        ),
+        onProfile = onLogin, onBack = onBack, onFilters = onFilters, onLoadMore = onLoadMore,
+        onToggleCabin = { onLogin() }, onFurniture = null, onPhoto = onPhoto, onWarehouse = onWarehouse,
+        requiresLogin = true,
+    )
+}
+
+/** Only fields drawn by the shared catalog; it cannot stand in for an authenticated workflow. */
+private data class CustomerCatalogContentState(
+    val warehouses: List<CustomerWarehouse>,
+    val selectedWarehouse: CustomerWarehouse?,
+    val facets: CabinFacets,
+    val filters: CabinFilters,
+    val cabins: List<CustomerCabin>,
+    val cabinPage: Long,
+    val cabinTotalPages: Long,
+    val busy: Boolean,
+    val selectedCabinIds: Set<String> = emptySet(),
+    val error: String? = null,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomerCatalogContent(
+    state: CustomerCatalogContentState,
+    onProfile: () -> Unit,
+    onFilters: (CabinFilters) -> Unit,
+    onLoadMore: () -> Unit,
+    onToggleCabin: (String) -> Unit,
+    onFurniture: ((String) -> Unit)?,
+    onPhoto: (String, Int) -> Unit,
+    onWarehouse: (CustomerWarehouse) -> Unit,
+    onMenu: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
+    avatarUrl: String? = null,
+    avatarInitials: String? = null,
+    requiresLogin: Boolean = false,
+) {
+    var showFilters by remember { mutableStateOf(false) }
     val catalogScroll = rememberLazyListState()
     BackHandler(enabled = showFilters) { showFilters = false }
     Scaffold(
@@ -284,7 +359,8 @@ fun CabinCatalogScreen(
                 warehouses = state.warehouses,
                 onWarehouseSelected = onWarehouse,
                 avatarUrl = avatarUrl,
-                avatarInitials = avatarInitials ?: state.profileInitials(),
+                avatarInitials = avatarInitials,
+                onBack = onBack,
             ) {
                 CatalogStickyFilter(
                     activeFilterCount = state.filters.activeCount,
@@ -315,7 +391,13 @@ fun CabinCatalogScreen(
                     )
                 }
             }
-            if (state.cabins.isEmpty() && !state.busy) {
+            if (requiresLogin && state.busy) {
+                item { LinearProgressIndicator(Modifier.fillMaxWidth().testTag("guest-catalog-loading")) }
+            }
+            state.error?.let { error ->
+                item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp).testTag("guest-catalog-error")) }
+            }
+            if (state.cabins.isEmpty() && !state.busy && state.error == null) {
                 item {
                     Text(
                         "Свободных бытовок по выбранным условиям нет",
@@ -330,7 +412,8 @@ fun CabinCatalogScreen(
                     cabin = cabin,
                     selected = selected,
                     onToggle = { onToggleCabin(cabin.unitId) },
-                    onFurniture = { furnitureCabin = cabin.unitId },
+                    onFurniture = onFurniture?.let { action -> { action(cabin.unitId) } },
+                    requiresLogin = requiresLogin,
                     onPhoto = { page -> onPhoto(cabin.unitId, page) },
                 )
             }
@@ -347,15 +430,6 @@ fun CabinCatalogScreen(
                 }
             }
         }
-    }
-    furnitureCabin?.let { cabinId ->
-        FurnitureSheet(
-            cabin = state.cabins.firstOrNull { it.unitId == cabinId },
-            items = state.equipment,
-            quantities = state.equipmentDraft.filterKeys { it.cabinUnitId == cabinId },
-            onQuantity = { item, quantity -> onEquipment(cabinId, item, quantity) },
-            onDismiss = { furnitureCabin = null },
-        )
     }
 }
 
@@ -392,8 +466,9 @@ private fun CabinCard(
     cabin: CustomerCabin,
     selected: Boolean,
     onToggle: () -> Unit,
-    onFurniture: () -> Unit,
+    onFurniture: (() -> Unit)?,
     onPhoto: (Int) -> Unit,
+    requiresLogin: Boolean = false,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("cabin-${cabin.unitId}"),
@@ -416,6 +491,7 @@ private fun CabinCard(
                         selected = selected,
                         onToggle = onToggle,
                         onFurniture = onFurniture,
+                        requiresLogin = requiresLogin,
                         wide = true,
                         modifier = Modifier.weight(1f),
                     )
@@ -434,6 +510,7 @@ private fun CabinCard(
                         selected = selected,
                         onToggle = onToggle,
                         onFurniture = onFurniture,
+                        requiresLogin = requiresLogin,
                         wide = false,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -448,7 +525,8 @@ private fun CabinCardBody(
     cabin: CustomerCabin,
     selected: Boolean,
     onToggle: () -> Unit,
-    onFurniture: () -> Unit,
+    onFurniture: (() -> Unit)?,
+    requiresLogin: Boolean,
     wide: Boolean,
     modifier: Modifier,
 ) {
@@ -471,6 +549,7 @@ private fun CabinCardBody(
                 onToggle = onToggle,
                 onFurniture = onFurniture,
                 cabinUnitId = cabin.unitId,
+                requiresLogin = requiresLogin,
                 modifier = Modifier.width(205.dp),
             )
         }
@@ -482,6 +561,7 @@ private fun CabinCardBody(
                 onToggle = onToggle,
                 onFurniture = onFurniture,
                 cabinUnitId = cabin.unitId,
+                requiresLogin = requiresLogin,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -493,19 +573,22 @@ private fun CabinCardBody(
 private fun CabinCardAction(
     selected: Boolean,
     onToggle: () -> Unit,
-    onFurniture: () -> Unit,
+    onFurniture: (() -> Unit)?,
     cabinUnitId: String,
+    requiresLogin: Boolean,
     modifier: Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (selected) {
+        if (selected && !requiresLogin) {
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                TextButton(onClick = onFurniture, modifier = Modifier.testTag("cabin-additional-$cabinUnitId")) {
-                    Text("+ Дополнительно")
+                onFurniture?.let { action ->
+                    TextButton(onClick = action, modifier = Modifier.testTag("cabin-additional-$cabinUnitId")) {
+                        Text("+ Дополнительно")
+                    }
                 }
                 TextButton(onClick = onToggle, modifier = Modifier.testTag("cabin-remove")) {
                     Icon(Icons.Default.CheckCircle, contentDescription = "Убрать из заказа", modifier = Modifier.size(18.dp))
@@ -515,9 +598,9 @@ private fun CabinCardAction(
             }
         } else {
             Button(onClick = onToggle, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.ShoppingCart, contentDescription = null)
+                Icon(if (requiresLogin) Icons.Default.Person else Icons.Default.ShoppingCart, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("В заказ")
+                Text(if (requiresLogin) "Войти для заказа" else "В заказ")
             }
         }
     }
@@ -554,14 +637,21 @@ private fun CabinPhotoPager(cabin: CustomerCabin, onPhoto: (Int) -> Unit, modifi
     Box(modifier) {
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
             val photo = cabin.photos[page]
-            AsyncImage(
-                model = customerMediaUrl(photo.thumbnailUrl),
-                contentDescription = "Бытовка ${cabin.accountingNo}, фото ${page + 1} из ${cabin.photos.size}",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(onClickLabel = "Открыть фотографию") { onPhoto(page) },
-            )
+            var failed by remember(photo.photoId, photo.generation, photo.thumbnailUrl) { mutableStateOf(false) }
+            Box(Modifier.fillMaxSize().clickable(onClickLabel = "Открыть фотографию") { onPhoto(page) }) {
+                AsyncImage(
+                    model = customerMediaUrl(photo.thumbnailUrl),
+                    contentDescription = "Бытовка ${cabin.accountingNo}, фото ${page + 1} из ${cabin.photos.size}",
+                    contentScale = ContentScale.Crop,
+                    onError = { failed = true },
+                    onSuccess = { failed = false },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                if (failed) Text(
+                    "Фотография недоступна", Modifier.align(Alignment.Center).padding(16.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         Surface(
             color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.76f),
@@ -935,12 +1025,19 @@ fun FullscreenCabinGallery(cabin: CustomerCabin?, initialPage: Int, onClose: () 
             val pager = rememberPagerState(initialPage = initialPage.coerceIn(cabin.photos.indices)) { cabin.photos.size }
             Box(Modifier.fillMaxSize()) {
                 HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
-                    AsyncImage(
-                        model = customerMediaUrl(cabin.photos[page].url),
-                        contentDescription = "Фото ${page + 1} из ${cabin.photos.size}",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    val photo = cabin.photos[page]
+                    var failed by remember(photo.photoId, photo.generation, photo.url) { mutableStateOf(false) }
+                    Box(Modifier.fillMaxSize()) {
+                        AsyncImage(
+                            model = customerMediaUrl(photo.url),
+                            contentDescription = "Фото ${page + 1} из ${cabin.photos.size}",
+                            contentScale = ContentScale.Fit,
+                            onError = { failed = true },
+                            onSuccess = { failed = false },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (failed) Text("Фотография недоступна", Modifier.align(Alignment.Center), color = Color.White)
+                    }
                 }
                 IconButton(
                     onClick = onClose,
@@ -997,7 +1094,10 @@ private fun LaunchedClose(onClose: () -> Unit) {
     androidx.compose.runtime.LaunchedEffect(Unit) { onClose() }
 }
 
-private fun customerMediaUrl(path: String): String = when {
+/** Keeps both customer and public catalog photos on the configured gateway origin. */
+internal fun customerMediaUrl(path: String): String = when {
+    path.startsWith("/api/logistics/public/v1/catalog/") -> "${BuildConfig.PUBLIC_BASE_URL}$path"
+    path.startsWith("${BuildConfig.PUBLIC_BASE_URL}/api/logistics/public/v1/catalog/") -> path
     path.startsWith("/api/logistics/customer/v1/") -> "${BuildConfig.PUBLIC_BASE_URL}$path"
     path.startsWith("${BuildConfig.PUBLIC_BASE_URL}/api/logistics/customer/v1/") -> path
     else -> ""

@@ -25,6 +25,8 @@ import dev.buhanzaz.rwms.client.data.CheckoutRequest
 import dev.buhanzaz.rwms.client.data.CustomerNotification
 import dev.buhanzaz.rwms.client.data.CustomerProfile
 import dev.buhanzaz.rwms.client.data.CustomerRepository
+import dev.buhanzaz.rwms.client.data.PublicCustomerCatalogApi
+import dev.buhanzaz.rwms.client.data.PublicCustomerCatalogRepository
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 import dev.buhanzaz.rwms.client.data.CustomerWorkflowStore
 import dev.buhanzaz.rwms.client.data.DeliverySlot
@@ -94,6 +96,10 @@ class CustomerSessionBootstrapTest {
     private var bookingChangeReadFailure: CustomerApiException? = null
     private var bookingsReadFailure: CustomerApiException? = null
     private val changeReads = mutableListOf<Pair<String, String>>()
+    private val publicReads = mutableListOf<String>()
+    private var holdNextPublicCabins = false
+    private var heldPublicCabins: Continuation<CabinPage>? = null
+    private var publicCabinFailure: CustomerApiException? = null
 
     @Before
     fun setUp() = runBlocking {
@@ -135,6 +141,8 @@ class CustomerSessionBootstrapTest {
 
     @After
     fun tearDown() = runBlocking {
+        heldPublicCabins?.resumeWith(Result.success(CabinPage()))
+        heldPublicCabins = null
         heldBookings?.resumeWith(Result.success(emptyList()))
         heldBookings = null
         heldCabins?.resumeWith(Result.success(CabinPage()))
@@ -286,7 +294,9 @@ class CustomerSessionBootstrapTest {
         restoredChange = changeQuote().copy(applicationState = BookingChangeApplicationState.APPLYING)
         val viewModel = signedInCheckoutViewModel()
         viewModel.dismissBookingChange()
-        advanceUntilIdle()
+        // DataStore uses real IO; draining virtual time alone does not release the command lane.
+        viewModel.state.first { it is CustomerAppState.Ready && !it.workflow.busy }
+        runCurrent()
         changeReads.clear()
         restoredChange = requireNotNull(restoredChange).copy(
             version = 2,
@@ -350,11 +360,171 @@ class CustomerSessionBootstrapTest {
         assertThat(workflow.bookingChangeReadError).isEqualTo("Статус временно недоступен")
     }
 
+    @Test
+    fun `guest browses and paginates without customer identity inquiry or auth requests`() = runTest(dispatcher) {
+        val viewModel = guestViewModel()
+        viewModel.continueAsGuest()
+        advanceUntilIdle()
+        val city = guestState(viewModel).warehouses.first()
+        viewModel.selectGuestWarehouse(city)
+        advanceUntilIdle()
+        assertThat(guestState(viewModel).cabins).hasSize(1)
+        viewModel.loadMoreGuestCabins()
+        advanceUntilIdle()
+        assertThat(guestState(viewModel).cabins).hasSize(2)
+        assertThat(guestState(viewModel).cabinPage).isEqualTo(1)
+        viewModel.toggleCabin("first-warehouse--0")
+        viewModel.checkout()
+        runCurrent()
+        assertThat(auth.state.value).isInstanceOf(CustomerAuthState.SignedOut::class.java)
+        assertThat(workflowStore.read()).isNull()
+        assertThat(profileCalls).isEqualTo(0)
+        assertThat(server.requestCount).isEqualTo(0)
+        assertThat(publicReads).containsExactly(
+            "warehouses", "facets:first-warehouse", "cabins:first-warehouse::0", "cabins:first-warehouse::1",
+        ).inOrder()
+    }
+
+    @Test
+    fun `late guest page cannot replace the newly selected city`() = runTest(dispatcher) {
+        val viewModel = guestViewModel()
+        viewModel.continueAsGuest()
+        advanceUntilIdle()
+        val cities = guestState(viewModel).warehouses
+        holdNextPublicCabins = true
+        viewModel.selectGuestWarehouse(cities.first())
+        runCurrent()
+        assertThat(heldPublicCabins).isNotNull()
+        viewModel.selectGuestWarehouse(cities.last())
+        runCurrent()
+        completeHeldPublicPage()
+        runCurrent()
+        assertThat(guestState(viewModel).selectedWarehouse?.id).isEqualTo("second-warehouse")
+        assertThat(guestState(viewModel).cabins.single().unitId).isEqualTo("second-warehouse--0")
+    }
+
+    @Test
+    fun `late guest page cannot replace newer filters`() = runTest(dispatcher) {
+        val viewModel = guestViewModel()
+        viewModel.continueAsGuest()
+        advanceUntilIdle()
+        holdNextPublicCabins = true
+        viewModel.selectGuestWarehouse(guestState(viewModel).warehouses.first())
+        runCurrent()
+        viewModel.applyGuestFilters(CabinFilters(cabinType = "Офисная"))
+        runCurrent()
+        completeHeldPublicPage()
+        runCurrent()
+        assertThat(guestState(viewModel).filters.cabinType).isEqualTo("Офисная")
+        assertThat(guestState(viewModel).cabins.single().unitId).isEqualTo("first-warehouse-Офисная-0")
+    }
+
+    @Test
+    fun `leaving the guest catalog fences an unfinished read`() = runTest(dispatcher) {
+        val viewModel = guestViewModel()
+        viewModel.continueAsGuest()
+        advanceUntilIdle()
+        holdNextPublicCabins = true
+        viewModel.selectGuestWarehouse(guestState(viewModel).warehouses.first())
+        runCurrent()
+        viewModel.leaveGuestCatalog()
+        completeHeldPublicPage()
+        runCurrent()
+        assertThat(viewModel.state.value).isEqualTo(CustomerAppState.SignedOut())
+        assertThat(server.requestCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `guest login opens login and old public completion cannot replace the customer session`() = runTest(dispatcher) {
+        val viewModel = guestViewModel()
+        viewModel.continueAsGuest()
+        advanceUntilIdle()
+        holdNextPublicCabins = true
+        viewModel.selectGuestWarehouse(guestState(viewModel).warehouses.first())
+        runCurrent()
+        viewModel.requestGuestLogin()
+        assertThat(viewModel.state.value).isEqualTo(CustomerAppState.SignedOut(showLogin = true))
+        auth.login("first-customer", "test-password", rememberMe = false)
+        completedBootstraps.receive()
+        runCurrent()
+        completeHeldPublicPage()
+        runCurrent()
+        assertThat((viewModel.state.value as CustomerAppState.Ready).workflow.profile?.id).isEqualTo("first-customer")
+    }
+
+    @Test
+    fun `guest read errors stay visible and a foreground refresh can recover`() = runTest(dispatcher) {
+        val viewModel = guestViewModel()
+        viewModel.continueAsGuest()
+        advanceUntilIdle()
+        publicCabinFailure = CustomerApiException(503, "Каталог временно недоступен")
+        viewModel.selectGuestWarehouse(guestState(viewModel).warehouses.first())
+        runCurrent()
+        assertThat(guestState(viewModel).error).isEqualTo("Каталог временно недоступен")
+        assertThat(guestState(viewModel).busy).isFalse()
+        publicCabinFailure = null
+        viewModel.refreshGuestCatalog()
+        runCurrent()
+        assertThat(guestState(viewModel).error).isNull()
+        assertThat(guestState(viewModel).cabins).hasSize(1)
+        assertThat(server.requestCount).isEqualTo(0)
+    }
+
+    private suspend fun TestScope.guestViewModel(): CustomerAppViewModel {
+        val repository = CustomerRepository(context, customerApi(), json, workflowStore)
+        val viewModel = CustomerAppViewModel(auth, repository, workflowStore, CustomerNotifications(context, auth, repository), publicRepository())
+        viewModels.put("guest", viewModel)
+        // Enter at the first signed-out emission, including the protected workflow cleanup race.
+        viewModel.state.first { it is CustomerAppState.SignedOut }
+        return viewModel
+    }
+
+    private fun guestState(viewModel: CustomerAppViewModel): CustomerGuestCatalogState =
+        (viewModel.state.value as CustomerAppState.GuestCatalog).catalog
+
+    private fun completeHeldPublicPage() {
+        requireNotNull(heldPublicCabins).resumeWith(Result.success(publicPage("obsolete", null, 0)))
+        heldPublicCabins = null
+    }
+
+    private fun publicRepository(): PublicCustomerCatalogRepository {
+        val api = Proxy.newProxyInstance(
+            PublicCustomerCatalogApi::class.java.classLoader, arrayOf(PublicCustomerCatalogApi::class.java),
+        ) { _, method, args ->
+            when (method.name) {
+                "warehouses" -> listOf(warehouse("first-warehouse"), warehouse("second-warehouse")).also { publicReads += "warehouses" }
+                "facets" -> CabinFacets().also { publicReads += "facets:${requireNotNull(args)[0]}" }
+                "cabins" -> {
+                    val arguments = requireNotNull(args)
+                    val warehouseId = arguments[0] as String
+                    val type = arguments[1] as String?
+                    val page = arguments[7] as Int
+                    publicReads += "cabins:$warehouseId:${type.orEmpty()}:$page"
+                    publicCabinFailure?.let { throw it }
+                    if (holdNextPublicCabins) {
+                        holdNextPublicCabins = false
+                        @Suppress("UNCHECKED_CAST")
+                        val continuation = arguments.last() as Continuation<CabinPage>
+                        heldPublicCabins = continuation
+                        COROUTINE_SUSPENDED
+                    } else publicPage(warehouseId, type, page)
+                }
+                else -> error("Unexpected public operation: ${method.name}")
+            }
+        } as PublicCustomerCatalogApi
+        return PublicCustomerCatalogRepository(api, json)
+    }
+
+    private fun publicPage(warehouseId: String, type: String?, page: Int) = CabinPage(
+        content = listOf(CustomerCabin("$warehouseId-${type.orEmpty()}-$page", 1, "42", 1, 18_000)),
+        page = page.toLong(), totalPages = 2,
+    )
+
     private fun exerciseOldPollingCompletion(failed: Boolean) = runTest(dispatcher, timeout = 30.seconds) {
         val api = customerApi()
         val repository = CustomerRepository(context, api, json, workflowStore)
         val viewModel = CustomerAppViewModel(
-            auth, repository, workflowStore, CustomerNotifications(context, auth, repository),
+            auth, repository, workflowStore, CustomerNotifications(context, auth, repository), publicRepository(),
         )
         viewModels.put("customer", viewModel)
         auth.login("first-customer", "test-password", rememberMe = false)
@@ -487,7 +657,7 @@ class CustomerSessionBootstrapTest {
         workflowStore.bind(reference, fixture.session)
         restoredChange?.let { workflowStore.rememberBookingChange(CustomerBookingChangeReference(it.bookingId, it.quoteId)) }
         val repository = CustomerRepository(context, customerApi(), json, workflowStore)
-        val viewModel = CustomerAppViewModel(auth, repository, workflowStore, CustomerNotifications(context, auth, repository))
+        val viewModel = CustomerAppViewModel(auth, repository, workflowStore, CustomerNotifications(context, auth, repository), publicRepository())
         viewModels.put("checkout", viewModel)
         auth.login("checkout-customer", "test-password", rememberMe = false)
         completedBootstraps.receive()
@@ -498,6 +668,8 @@ class CustomerSessionBootstrapTest {
                 it is CustomerAppState.Ready && it.workflow.updatesError == bookingChangeReadFailure?.message
             }
         }
+        // A recovered quote is published before bootstrap has finished its storage work.
+        viewModel.state.first { it is CustomerAppState.Ready && !it.workflow.bootstrapping && !it.workflow.busy }
         runCurrent()
         return viewModel
     }

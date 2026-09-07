@@ -25,6 +25,7 @@ import dev.buhanzaz.rwms.client.data.CustomerNotification
 import dev.buhanzaz.rwms.client.notifications.CustomerNotifications
 import dev.buhanzaz.rwms.client.data.CustomerSignatureStroke
 import dev.buhanzaz.rwms.client.data.CustomerRepository
+import dev.buhanzaz.rwms.client.data.PublicCustomerCatalogRepository
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 import dev.buhanzaz.rwms.client.data.CustomerWorkflowReference
 import dev.buhanzaz.rwms.client.data.CustomerWorkflowStore
@@ -39,6 +40,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -293,7 +295,14 @@ sealed interface CustomerAppState {
     data object Loading : CustomerAppState
 
     /** Login/register graph with an optional safe error. */
-    data class SignedOut(val message: String? = null, val submitting: Boolean = false) : CustomerAppState
+    data class SignedOut(
+        val message: String? = null,
+        val submitting: Boolean = false,
+        val showLogin: Boolean = false,
+    ) : CustomerAppState
+
+    /** Anonymous catalog reads, structurally separate from the customer workflow. */
+    data class GuestCatalog(val catalog: CustomerGuestCatalogState) : CustomerAppState
 
     /** Signed-in customer workflow graph. */
     data class Ready(val workflow: CustomerWorkflowState) : CustomerAppState
@@ -306,6 +315,7 @@ class CustomerAppViewModel @Inject constructor(
     private val repository: CustomerRepository,
     private val workflowStore: CustomerWorkflowStore,
     private val notifications: CustomerNotifications,
+    private val publicCatalog: PublicCustomerCatalogRepository,
 ) : ViewModel() {
     private val mutableWorkflow = MutableStateFlow(CustomerWorkflowState())
     private val mutableState = MutableStateFlow<CustomerAppState>(CustomerAppState.Loading)
@@ -316,6 +326,9 @@ class CustomerAppViewModel @Inject constructor(
     private var activeSessionMarker: String? = null
     private var pendingFilters: Pair<String, CabinFilters>? = null
     private val automaticReadPolicy = CustomerAutomaticReadPolicy()
+    private var guestReadJob: Job? = null
+    private var guestReadGeneration = 0L
+    private var showLoginRequested = false
 
     /** Conditional signed-out/signed-in state. */
     val state: StateFlow<CustomerAppState> = mutableState.asStateFlow()
@@ -325,6 +338,7 @@ class CustomerAppViewModel @Inject constructor(
             authRepository.state.collectLatest { auth ->
                 val marker = authRepository.notificationSession()
                 if (auth != CustomerAuthState.SignedIn || marker != activeSessionMarker) {
+                    cancelGuestRead()
                     val registrationDraft = mutableWorkflow.value.registrationProfileDraft
                         .takeUnless { auth is CustomerAuthState.SignedOut }
                     sessionGeneration += 1
@@ -333,8 +347,8 @@ class CustomerAppViewModel @Inject constructor(
                     automaticReadPolicy.reset()
                     bootstrappedSession = false
                     mutableState.value = when (auth) {
-                        is CustomerAuthState.SignedOut -> CustomerAppState.SignedOut(auth.message)
-                        CustomerAuthState.Authenticating -> CustomerAppState.SignedOut(submitting = true)
+                        is CustomerAuthState.SignedOut -> CustomerAppState.SignedOut(auth.message, showLogin = showLoginRequested)
+                        CustomerAuthState.Authenticating -> CustomerAppState.SignedOut(submitting = true, showLogin = showLoginRequested)
                         else -> CustomerAppState.Loading
                     }
                     // Keep the old gate owned until its job has finished every cleanup path.
@@ -345,14 +359,18 @@ class CustomerAppViewModel @Inject constructor(
                 }
                 when (auth) {
                     CustomerAuthState.Loading -> mutableState.value = CustomerAppState.Loading
-                    CustomerAuthState.Authenticating -> mutableState.value = CustomerAppState.SignedOut(submitting = true)
+                    CustomerAuthState.Authenticating -> mutableState.value = CustomerAppState.SignedOut(submitting = true, showLogin = showLoginRequested)
                     is CustomerAuthState.SignedOut -> {
                         runCatching { workflowStore.clear() }
                         bootstrappedSession = false
                         mutableWorkflow.value = CustomerWorkflowState()
-                        mutableState.value = CustomerAppState.SignedOut(auth.message)
+                        // Public reads can start while the old protected workflow finishes clearing.
+                        if (mutableState.value !is CustomerAppState.GuestCatalog) {
+                            mutableState.value = CustomerAppState.SignedOut(auth.message, showLogin = showLoginRequested)
+                        }
                     }
                     CustomerAuthState.SignedIn -> {
+                        showLoginRequested = false
                         mutableState.value = CustomerAppState.Ready(mutableWorkflow.value)
                         if (!bootstrappedSession) {
                             bootstrap()
@@ -367,6 +385,116 @@ class CustomerAppViewModel @Inject constructor(
                     activeSessionMarker != null && activeSessionMarker == authRepository.notificationSession()
                 ) {
                     mutableState.value = CustomerAppState.Ready(workflow)
+                }
+            }
+        }
+    }
+
+    /** Opens public warehouse selection without authenticating or creating a rental inquiry. */
+    fun continueAsGuest() {
+        val signedOut = mutableState.value as? CustomerAppState.SignedOut ?: return
+        if (signedOut.submitting || authRepository.state.value !is CustomerAuthState.SignedOut) return
+        showLoginRequested = false
+        loadGuestCatalog(CustomerGuestCatalogState()) { it.copy(warehouses = publicCatalog.warehouses()) }
+    }
+
+    /** A warehouse change replaces the whole public projection and fences the preceding request. */
+    fun selectGuestWarehouse(warehouse: CustomerWarehouse) {
+        val current = guestCatalog() ?: return
+        val available = current.warehouses.firstOrNull { it.id == warehouse.id } ?: return
+        readGuestFirstPage(CustomerGuestCatalogState(warehouses = current.warehouses, selectedWarehouse = available))
+    }
+
+    /** Applies only server catalog filters; no selection or hold is created. */
+    fun applyGuestFilters(filters: CabinFilters) {
+        val current = guestCatalog() ?: return
+        if (current.selectedWarehouse == null) return
+        readGuestFirstPage(current.copy(filters = filters, cabins = emptyList(), cabinPage = 0, cabinTotalPages = 0))
+    }
+
+    /** Appends the next server page only while it still belongs to this warehouse and filter request. */
+    fun loadMoreGuestCabins() {
+        val current = guestCatalog() ?: return
+        val warehouse = current.selectedWarehouse ?: return
+        if (current.busy || current.cabinPage + 1 >= current.cabinTotalPages) return
+        loadGuestCatalog(current) { snapshot ->
+            val page = publicCatalog.cabins(warehouse.id, snapshot.filters, (snapshot.cabinPage + 1).toInt())
+            snapshot.copy(
+                cabins = (snapshot.cabins + page.content).distinctBy(CustomerCabin::unitId),
+                cabinPage = page.page,
+                cabinTotalPages = page.totalPages,
+            )
+        }
+    }
+
+    /** Refreshes once on foreground/network return, without a retry loop or a local success fallback. */
+    fun refreshGuestCatalog() {
+        val current = guestCatalog() ?: return
+        if (current.busy) return
+        if (current.selectedWarehouse == null) {
+            loadGuestCatalog(current) { it.copy(warehouses = publicCatalog.warehouses()) }
+        } else {
+            readGuestFirstPage(current)
+        }
+    }
+
+    /** Discards the ephemeral guest projection when returning to entry. */
+    fun leaveGuestCatalog() {
+        if (guestCatalog() == null) return
+        cancelGuestRead()
+        showLoginRequested = false
+        mutableState.value = CustomerAppState.SignedOut()
+    }
+
+    /** Ordering from a public card opens the real login form before any customer mutation is possible. */
+    fun requestGuestLogin() {
+        if (guestCatalog() == null) return
+        cancelGuestRead()
+        showLoginRequested = true
+        mutableState.value = CustomerAppState.SignedOut(showLogin = true)
+    }
+
+    private fun guestCatalog(): CustomerGuestCatalogState? =
+        (mutableState.value as? CustomerAppState.GuestCatalog)?.catalog
+            ?.takeIf { authRepository.state.value is CustomerAuthState.SignedOut }
+
+    private fun readGuestFirstPage(current: CustomerGuestCatalogState) {
+        val warehouse = current.selectedWarehouse ?: return
+        loadGuestCatalog(current) { snapshot ->
+            val facets = publicCatalog.facets(warehouse.id)
+            val page = publicCatalog.cabins(warehouse.id, snapshot.filters, 0)
+            snapshot.copy(facets = facets, cabins = page.content, cabinPage = page.page, cabinTotalPages = page.totalPages)
+        }
+    }
+
+    private fun cancelGuestRead() {
+        guestReadGeneration += 1
+        guestReadJob?.cancel()
+        guestReadJob = null
+    }
+
+    private fun loadGuestCatalog(
+        initial: CustomerGuestCatalogState,
+        read: suspend (CustomerGuestCatalogState) -> CustomerGuestCatalogState,
+    ) {
+        cancelGuestRead()
+        val generation = guestReadGeneration
+        mutableState.value = CustomerAppState.GuestCatalog(initial.copy(busy = true, error = null))
+        guestReadJob = viewModelScope.launch {
+            try {
+                val result = read(initial)
+                ensureActive()
+                if (generation == guestReadGeneration && guestCatalog() != null) {
+                    mutableState.value = CustomerAppState.GuestCatalog(result.copy(busy = false, error = null))
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (generation == guestReadGeneration && guestCatalog() != null) {
+                    mutableState.value = CustomerAppState.GuestCatalog(initial.copy(
+                        busy = false,
+                        error = (failure as? CustomerApiException)?.message ?: "Не удалось загрузить каталог.",
+                    ))
                 }
             }
         }

@@ -349,35 +349,28 @@ fun WarehouseScreen(
     warehouses: List<CustomerWarehouse>,
     busy: Boolean,
     onSelect: (CustomerWarehouse, Boolean) -> Unit,
-    onMenu: () -> Unit,
+    onMenu: (() -> Unit)?,
     onProfile: () -> Unit,
     avatarUrl: String? = null,
+    onBack: (() -> Unit)? = null,
+    allowRemember: Boolean = true,
+    errorMessage: String? = null,
 ) {
     var rememberWarehouse by rememberSaveable { mutableStateOf(false) }
     Scaffold(
-        topBar = { CustomerTopBar("Выбор города", onMenu, onProfile, avatarUrl = avatarUrl) },
+        topBar = { CustomerTopBar("Выбор города", onMenu, onProfile, avatarUrl = avatarUrl, onBack = onBack) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("warehouse-screen"),
             contentPadding = PaddingValues(top = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                Column(
-                    Modifier.padding(bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("Начнём с города", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Выберите город, чтобы увидеть доступные бытовки.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            errorMessage?.let { error ->
+                item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("guest-catalog-error")) }
             }
             items(warehouses, key = CustomerWarehouse::id) { warehouse ->
                 Surface(
-                    onClick = { onSelect(warehouse, rememberWarehouse) },
+                    onClick = { onSelect(warehouse, allowRemember && rememberWarehouse) },
                     modifier = Modifier.fillMaxWidth().testTag("warehouse-option-${warehouse.id}"),
                     enabled = !busy,
                     shape = RoundedCornerShape(20.dp),
@@ -419,7 +412,7 @@ fun WarehouseScreen(
                     }
                 }
             }
-            if (warehouses.isEmpty()) {
+            if (warehouses.isEmpty() && errorMessage == null) {
                 item {
                     Text(
                         if (busy) "Загружаем города…" else "Нет доступных городов",
@@ -427,7 +420,7 @@ fun WarehouseScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            } else {
+            } else if (warehouses.isNotEmpty() && allowRemember) {
                 item {
                     Row(
                         modifier = Modifier

@@ -73,6 +73,13 @@ and selected warehouse but atomically rotates the pointer to a new durable
 create key before opening the next cart. A booking from the earlier inquiry
 does not fence mutations in that new cart.
 
+The entry action `Продолжить без входа` opens a separate, ephemeral guest catalog: city selection,
+server filters, prices, paging and photo galleries. Reads and public photos use
+`/api/logistics/public/v1/catalog/**` with a credential-free HTTP client. A guest has no profile,
+inquiry, cart or holds; `Войти для заказа` opens the real login form. Leaving, changing city or
+filters, and authenticating cancel and fence pending reads. Errors remain visible; returning to the
+foreground or restoring connectivity retries reads without replaying commands or fabricating data.
+
 ## Customer flow
 
 After checkout, My Orders shows the immutable server bill as a branded non-fiscal

@@ -1055,6 +1055,13 @@ warehouse, cabin availability, current gallery membership, generation and deriva
 variant. Browsing creates no customer profile, inquiry, selection or booking. Cart,
 delivery and order commands retain customer authentication and ownership checks.
 
+CustomerApp enters that catalog from `Продолжить без входа` using an ephemeral guest state and a
+credential-free HTTP client for data and photos. The shared catalog renderer retains filters,
+paging, prices and gallery navigation; its order action opens login, and no cart or equipment
+mutation is available. City/filter changes, leaving and authentication cancel and generation-fence
+reads. Foreground/network recovery repeats only public GETs, with visible errors and no persisted
+guest domain state.
+
 1. The Android client validates login/password confirmation locally, obtains
    an auth-service CSRF cookie/header pair through the delegated `/auth/**`
    route, and submits one registration command. Auth-service serializes the
