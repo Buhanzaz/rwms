@@ -89,6 +89,10 @@ function kpiCardAppearance(
   now: number,
   palette: KpiPalette | null
 ) {
+  if (entry.entryType === "SHADOW") {
+    return { color: null, style: undefined }
+  }
+
   const color = paletteColorForRemainingPercent(
     taskTimerAt(entry, now).remainingPercent,
     palette
@@ -100,6 +104,7 @@ function kpiCardAppearance(
   return {
     color,
     style: {
+      backgroundColor: `color-mix(in srgb, ${color} 18%, var(--card))`,
       borderColor: color,
       borderLeftWidth: "4px",
     } satisfies CSSProperties,
@@ -196,7 +201,7 @@ function RepairComplexityBadge({
 }
 
 const shadowEntryCardClassName =
-  "border-dashed bg-muted/70 opacity-65 shadow-lg transition-opacity"
+  "border-dashed bg-muted/70 opacity-65 transition-opacity"
 
 function cardActionVisibility(
   entry: TaskBoardEntryDto,
@@ -575,7 +580,10 @@ export const TaskBoardCard = memo(function TaskBoardCard({
       className={cn(
         "data-[size=sm]:[--card-spacing:--spacing(3)]",
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
-        !appearance.color && entry.status === "IN_PROGRESS" && "border-primary",
+        entry.entryType === "REAL" &&
+          !appearance.color &&
+          entry.status === "IN_PROGRESS" &&
+          "border-primary",
         (entry.status === "DONE" || entry.status === "CANCELLED") &&
           "opacity-65",
         routeHighlighted && "ring-2 ring-primary"

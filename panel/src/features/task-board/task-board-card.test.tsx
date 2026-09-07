@@ -584,7 +584,7 @@ describe("TaskBoardCard source details", () => {
 })
 
 describe("TaskBoardCard KPI timer presentation", () => {
-  it("keeps the card surface neutral while its border shows the configured KPI segment", () => {
+  it("colors the real card surface and border with the configured KPI segment", () => {
     renderCard(null, {
       palette: kpiPalette,
       entryPatch: {
@@ -604,7 +604,9 @@ describe("TaskBoardCard KPI timer presentation", () => {
     const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
     expect(card.dataset.kpiColor).toBe("#EAB308")
     expect(card.style.borderColor).toBe("rgb(234, 179, 8)")
-    expect(card.style.backgroundColor).toBe("")
+    expect(card.style.backgroundColor).toBe(
+      "color-mix(in srgb, #EAB308 18%, var(--card))"
+    )
     expect(screen.getByText("Осталось 50%")).toBeTruthy()
     expect(screen.getByText("Перерыв · 10:00")).toBeTruthy()
     expect(screen.getByText("10:00")).toBeTruthy()
@@ -631,6 +633,46 @@ describe("TaskBoardCard KPI timer presentation", () => {
     expect(card.dataset.kpiColor).toBe("#7F1D1D")
     expect(screen.getByText("Просрочено на 00:30")).toBeTruthy()
   })
+
+  it.each(["card", "preview"])(
+    "keeps a shadow %s neutral when it shares an active task's KPI timer",
+    (view) => {
+      const entryPatch: Partial<TaskBoardEntryDto> = {
+        entryType: "SHADOW",
+        status: "IN_PROGRESS",
+        timerSnapshot: {
+          countedActiveSeconds: 600,
+          remainingSeconds: 600,
+          remainingPercent: 50,
+          timerState: "BREAK",
+          nextTransitionAt: null,
+          serverTime: "2026-07-18T10:00:00Z",
+        },
+      }
+
+      if (view === "card") {
+        renderCard(null, { palette: kpiPalette, entryPatch })
+      } else {
+        render(
+          <TaskBoardCardPreview
+            entry={{ ...taskEntry(null), ...entryPatch }}
+            now={Date.parse("2026-07-18T10:00:00Z")}
+            mobile={false}
+            canEdit
+            collapsed={false}
+            palette={kpiPalette}
+          />
+        )
+      }
+
+      const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
+      expect(card.dataset.kpiColor).toBeUndefined()
+      expect(card.style.borderColor).toBe("")
+      expect(card.style.backgroundColor).toBe("")
+      expect(card.classList.contains("bg-muted/70")).toBe(true)
+      expect(card.classList.contains("border-primary")).toBe(false)
+    }
+  )
 
   it("keeps the existing neutral card when no active palette is available", () => {
     renderCard(null, {
