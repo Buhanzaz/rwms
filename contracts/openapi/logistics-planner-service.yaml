@@ -5,11 +5,14 @@ info:
   x-rwms-owner: logistics-planner-service
   x-rwms-stability: admin-catalog-v1
   description: >-
-    Canonical API for the logistics planner's catalog-home vehicles, trailers and warehouse planning settings.
-    Browser traffic enters only through the same-origin gateway prefix
+    Canonical API for the logistics planner's catalog-home vehicles, trailers,
+    warehouse planning settings and global map display settings.
+    Administrator traffic enters through the same-origin gateway prefix
     /api/logistics-planner/v1/admin; the gateway rewrites that prefix to the
-    planner's private FastAPI implementation path /api/admin. This contract does
-    not expose the Spring logistics-service operational vehicle-assignment API.
+    planner's private FastAPI implementation path /api/admin. Operator map reads
+    use the existing /logistics-panel/api Nginx route, declared by the path-level
+    server override. This contract does not expose the Spring logistics-service
+    operational vehicle-assignment API.
 servers:
   - url: /api/logistics-planner/v1
 security:

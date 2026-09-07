@@ -340,6 +340,28 @@ class GatewayRouteSecurityParityTest {
     }
   }
 
+  @Test
+  void plannerMapReadsStayOnTheirNginxApplicationRoute() throws Exception {
+    ContractInventory inventory = contractInventory();
+    List<RouteCandidate> routes = publicRoutes();
+
+    assertThat(inventory.plannerApplication())
+        .singleElement()
+        .satisfies(
+            operation -> {
+              assertThat(operation.owner()).isEqualTo("logistics-planner-service");
+              assertThat(operation.canonicalRoute())
+                  .isEqualTo(new RouteKey(HttpMethod.GET, "/logistics-panel/api/map-settings"));
+              assertThat(operation.security()).isEqualTo(SecurityRequirement.BEARER_JWT);
+              assertThat(matchingRoutes(routes, operation.canonicalRoute())).isEmpty();
+            });
+    assertThat(
+            matchingRoutes(
+                routes, new RouteKey(HttpMethod.GET, "/api/logistics-planner/v1/map-settings")))
+        .as("the operator map read must not acquire an invented gateway alias")
+        .isEmpty();
+  }
+
   private ContractInventory contractInventory() throws Exception {
     Path projectDirectory = Path.of(System.getProperty("rwms.test.project-dir"));
     Path openApiDirectory = projectDirectory.resolve("../../contracts/openapi").normalize();
@@ -347,6 +369,7 @@ class GatewayRouteSecurityParityTest {
     List<GatewayOperation> internal = new ArrayList<>();
     List<GatewayOperation> auth = new ArrayList<>();
     List<GatewayOperation> mediaHealth = new ArrayList<>();
+    List<GatewayOperation> plannerApplication = new ArrayList<>();
     try (var files = Files.list(openApiDirectory)) {
       for (Path contract :
           files
@@ -363,8 +386,11 @@ class GatewayRouteSecurityParityTest {
         Map<String, Object> securitySchemes =
             map(map(document.get("components")).get("securitySchemes"));
         for (var pathEntry : map(document.get("paths")).entrySet()) {
-          String canonicalPath = normalizePath(joinPaths(serverPrefix, pathEntry.getKey()));
-          for (var methodEntry : map(pathEntry.getValue()).entrySet()) {
+          Map<String, Object> pathItem = map(pathEntry.getValue());
+          String pathServerPrefix =
+              pathItem.containsKey("servers") ? serverPrefix(pathItem, contract) : serverPrefix;
+          String canonicalPath = normalizePath(joinPaths(pathServerPrefix, pathEntry.getKey()));
+          for (var methodEntry : pathItem.entrySet()) {
             String methodName = methodEntry.getKey().toLowerCase(Locale.ROOT);
             if (!HTTP_METHODS.contains(methodName)) {
               continue;
@@ -385,6 +411,10 @@ class GatewayRouteSecurityParityTest {
                       requirement));
             } else if (owner.equals(MEDIA_OWNER) && canonicalPath.startsWith("/health/")) {
               mediaHealth.add(
+                  new GatewayOperation(owner, canonicalRoute, canonicalRoute, requirement));
+            } else if (owner.equals("logistics-planner-service")
+                && canonicalPath.startsWith("/logistics-panel/api/")) {
+              plannerApplication.add(
                   new GatewayOperation(owner, canonicalRoute, canonicalRoute, requirement));
             } else if (canonicalPath.startsWith("/api/internal/")) {
               internal.add(
@@ -416,7 +446,8 @@ class GatewayRouteSecurityParityTest {
         publicDomain.stream().sorted(order).toList(),
         internal.stream().sorted(order).toList(),
         auth.stream().sorted(order).toList(),
-        mediaHealth.stream().sorted(order).toList());
+        mediaHealth.stream().sorted(order).toList(),
+        plannerApplication.stream().sorted(order).toList());
   }
 
   private List<RouteCandidate> domainRoutes() {
@@ -767,7 +798,8 @@ class GatewayRouteSecurityParityTest {
       List<GatewayOperation> publicDomain,
       List<GatewayOperation> internal,
       List<GatewayOperation> auth,
-      List<GatewayOperation> mediaHealth) {}
+      List<GatewayOperation> mediaHealth,
+      List<GatewayOperation> plannerApplication) {}
 
   /** One executable gateway router bean together with its owner and effective Spring order. */
   private record RouteCandidate(
