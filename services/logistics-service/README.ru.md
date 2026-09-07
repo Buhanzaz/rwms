@@ -899,6 +899,16 @@ warehouse-local дня, scheduler сохраняет fixed-date/source intent, �
 intake: public create по-прежнему отклоняет прошедшую дату. Checksum сохраняет исходно запрошенный
 день, поэтому только точный запрос повторно возвращает сохранённую эффективную дату без дубликата.
 
+`GET /api/internal/logistics/v1/inventory/returns/{returnId}/inspection` — read-only proof одного
+завершённого осмотра обычного возврата. Маршрут принимает только exact SERVICE token
+`inventory-service` с audience `rwms-services` и единственным scope `logistics.inventory`. Ответ
+доступен лишь после terminal-обработки `ACCEPTED` или `ESTIMATE_REQUESTED` и возвращает immutable
+время прибытия и завершения, а для каждой строки — asset/version, итоговый статус бытовки и точные
+READY media references. Владельцем этих ссылок остаётся `LOGISTICS_RETURN`: чтение не переназначает
+media, не создаёт maintenance work и намеренно не предоставляет passport observation. Неизвестные,
+незавершённые, созданные инвентаризацией и historical-import возвраты не выдаются как завершённый
+proof.
+
 `PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` применяет последнюю завершённую
 инвентаризацию как авторитетную logistics-истину по точным canonical `assetId`. Маршрут принимает
 только exact SERVICE token `inventory-service` с audience `rwms-services` и единственным scope

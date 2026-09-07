@@ -867,6 +867,15 @@ day as the effective `scheduledDate`. This recovery applies only to service-owne
 intake: public creates still reject past dates. Its checksum retains the originally requested day,
 so only the exact request can replay the stored effective date without a duplicate.
 
+`GET /api/internal/logistics/v1/inventory/returns/{returnId}/inspection` is the read-only proof for
+one completed normal return inspection. It accepts only the exact `inventory-service` SERVICE
+token with audience `rwms-services` and sole scope `logistics.inventory`. The response is available
+only after terminal `ACCEPTED` or `ESTIMATE_REQUESTED` processing and returns the immutable arrival
+and completion times plus each line's asset/version, terminal asset status and exact READY media
+references. Those references remain owned by `LOGISTICS_RETURN`; the read neither reassigns media
+nor creates maintenance work, and it deliberately provides no passport observation. Unknown,
+incomplete, inventory-created and historical-import returns are not exposed as completed proof.
+
 `PUT /api/internal/logistics/v1/inventory/outcomes/{inventoryId}` applies the latest completed
 inventory as authoritative logistics truth for exact canonical `assetId` values. It accepts only an
 exact `inventory-service` SERVICE token with audience `rwms-services` and sole scope
