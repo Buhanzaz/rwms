@@ -74,6 +74,29 @@ class CustomerVisualReviewTest {
     }
 
     @Test
+    fun `renders registration in light appearance`() {
+        setAuth(CustomerAppearanceMode.LIGHT)
+        composeRule.onNodeWithTag("customer-auth-register").performScrollTo().performClick()
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("customer-registration-screen").assertIsDisplayed()
+        captureRoot("registration-light")
+    }
+
+    @Test
+    fun `renders password recovery in light appearance`() {
+        setAuth(CustomerAppearanceMode.LIGHT)
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
+        composeRule.onNodeWithTag("customer-login-recovery").performScrollTo().performClick()
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("customer-password-recovery-screen").assertIsDisplayed()
+        captureRoot("password-recovery-light")
+    }
+
+    @Test
     fun `renders catalog in light appearance`() {
         setCatalog(CustomerAppearanceMode.LIGHT)
 
