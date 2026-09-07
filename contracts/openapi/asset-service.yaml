@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.16.0
+  version: 1.17.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
@@ -2143,6 +2143,16 @@ paths:
         current passport. Catalogue display names are resolved only inside asset-service and never
         create catalogue rows. Passport and status changes are committed atomically and retain the
         ordinary rental-item event history.
+        When preserveOperationalState is true, desiredStatus and shipmentContents must be null.
+        That mode applies only the passport observation under the same completed-at/final-plan
+        ordering fence and returns the cabin's actual status. It never changes warehouse, status,
+        transfer state, contents, leases, order reservations or presentation holds, and therefore
+        permits historical passport evidence whose warehouseId no longer matches the cabin. LOST
+        and WRITTEN_OFF cabins remain terminal and reject this mode too.
+        A status-applying outcome may carry the frozen expectedAssetVersion. If the cabin has since
+        entered RENTED or IN_TRANSFER and the desired status is not RENTED, a version mismatch
+        rejects with INVENTORY_OPERATIONAL_STATE_CHANGED before any mutation. Omission retains the
+        legacy request identity and behavior.
         A first or newer FREE, REPAIR, CAPITAL_REPAIR or RENTED source supersedes active order-unit
         reservations, operation leases, presentation holds and transfer state without deleting
         their history. Another key for the same latest immutable source reasserts status,
@@ -4668,6 +4678,17 @@ components:
       type: object
       additionalProperties: false
       required: [warehouseId, assetId, inventoryCompletedAt, finalPlanVersion, finalPlanSha256, findingRevision, desiredStatus, passportObservation, passportObservationSha256, shipmentContents]
+      oneOf:
+        - required: [preserveOperationalState]
+          not:
+            required: [expectedAssetVersion]
+          properties:
+            preserveOperationalState: { type: boolean, const: true }
+            desiredStatus: { type: 'null' }
+            shipmentContents: { type: 'null' }
+        - properties:
+            preserveOperationalState: { type: boolean, const: false }
+            desiredStatus: { $ref: '#/components/schemas/InventoryOutcomeStatus' }
       properties:
         warehouseId: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
@@ -4675,7 +4696,22 @@ components:
         finalPlanVersion: { type: integer, format: int64, minimum: 1 }
         finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
         findingRevision: { type: integer, format: int64, minimum: 1 }
-        desiredStatus: { $ref: '#/components/schemas/InventoryOutcomeStatus' }
+        expectedAssetVersion:
+          description: >-
+            Frozen cabin version for a status-applying outcome. Omit for passport-only outcomes and
+            legacy requests.
+          $ref: '#/components/schemas/ExpectedVersion'
+        desiredStatus:
+          description: Null only when preserveOperationalState is true.
+          oneOf:
+            - { $ref: '#/components/schemas/InventoryOutcomeStatus' }
+            - { type: 'null' }
+        preserveOperationalState:
+          description: >-
+            True applies only passport evidence and preserves every live operational binding and
+            state. Omitted and false retain the status-applying behavior and request fingerprint.
+          type: boolean
+          default: false
         passportObservation: { $ref: '#/components/schemas/InventoryOutcomePassportObservation' }
         passportObservationSha256: { $ref: '#/components/schemas/Sha256' }
         shipmentContents:
@@ -4741,7 +4777,7 @@ components:
         findingId: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
         assetVersion: { $ref: '#/components/schemas/ExpectedVersion' }
-        status: { $ref: '#/components/schemas/InventoryOutcomeStatus' }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
         releasedOrderUnitReservationIds:
           type: array
           uniqueItems: true

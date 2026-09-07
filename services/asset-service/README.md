@@ -210,6 +210,25 @@ asset-owned transaction. See the canonical
 [`InventoryOutcomeRequest`](../../contracts/openapi/asset-service.yaml) and
 [`InventoryAssetOutcomeService`](src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java).
 
+An outcome with `preserveOperationalState=true` is the passport-only publication mode.
+`desiredStatus` and `shipmentContents` must both be `null`. Under the same cabin lock and
+completed-at/final-plan watermark, a `PRESENT` observation may update the passport and
+characteristics, but the command never changes the cabin warehouse, current status, transfer
+state, equipment contents, operation leases, order reservations or presentation holds. This lets
+historical inspection evidence remain applicable after the cabin has moved to another warehouse;
+the response reports its actual full `RentalItemStatus`. `LOST` and `WRITTEN_OFF` remain terminal.
+The mode is rejected for inventory source proposals, which still require an explicit local
+status-applying outcome. Omitted or false `preserveOperationalState` retains the pre-V51 request
+fingerprint and behavior.
+
+New status-applying outcomes may include the final plan's frozen `expectedAssetVersion`. Under the
+same cabin lock, asset-service rejects with `INVENTORY_OPERATIONAL_STATE_CHANGED` before any
+mutation when a different current version is already `RENTED` or `IN_TRANSFER` and the requested
+status is not `RENTED`. This prevents a delayed inventory repair/free publication from replacing a
+new departure, while still allowing a same-version historical rented return. Passport-only
+outcomes must omit this field and remain deliberately non-strict. Legacy requests that omit it keep
+their exact pre-guard fingerprint and behavior.
+
 Flyway V38 adds a permanent successful idempotency receipt and a per-cabin completed-at watermark.
 The same key and request return the frozen result. A new key for the same latest final-plan finding
 reasserts status, reservations, holds and transfer state. At the same completion time, the service
@@ -218,8 +237,9 @@ the current watermark; a lower version or same-version hash drift returns `409`.
 plan correction releases every active operation lease for `FREE`. For `REPAIR` and
 `CAPITAL_REPAIR`, it retains only `MAINTENANCE_REPAIR`, which may already belong to the repair
 created from that finding, and releases stale logistics or rental leases. A strictly older
-completed inventory, another equal-time source, `LOST`, `WRITTEN_OFF` and a wrong warehouse always
-reject without a partial status or receipt.
+completed inventory, another equal-time source, `LOST`, and `WRITTEN_OFF` always reject without a
+partial status or receipt. A wrong warehouse also rejects status-applying outcomes; only the
+explicit passport-only mode accepts historical cross-warehouse evidence without moving the cabin.
 
 Flyway
 [`V39__inventory_outcome_passport_watermark.sql`](src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)

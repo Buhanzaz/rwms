@@ -44,7 +44,8 @@ import tools.jackson.databind.JsonNode;
  * asset-owned bindings without deleting history, updates passport/status/transfer state, emits
  * ordinary asset facts, and advances the per-cabin inventory watermark in the same transaction. A
  * RENTED outcome also replaces the cabin's exact active-catalog contents without reading or
- * changing STOCK.
+ * changing STOCK. Explicit passport-only outcomes retain every operational field and binding while
+ * using the same ordering and replay fences.
  */
 @Service
 final class InventoryAssetOutcomeService {
@@ -137,8 +138,12 @@ final class InventoryAssetOutcomeService {
       throw new IllegalArgumentException(
           "Inventory outcome actor and idempotency key are required");
     }
-    OutcomePlan plan = normalize(inventoryId, findingId, request);
-    String requestSha256 = codec.canonicalHash(plan);
+    NormalizedOutcomePlan plan = normalize(inventoryId, findingId, request);
+    if (allowSourceMaterialization && plan.preserveOperationalState()) {
+      throw new IllegalArgumentException(
+          "Inventory source outcomes cannot preserve operational state");
+    }
+    String requestSha256 = codec.canonicalHash(plan.requestFingerprint());
     receipts.acquireTransactionLock("inventory-outcome-idempotency:" + idempotencyKey);
     InventoryAssetOutcomeReceipt replay = receipts.findById(idempotencyKey).orElse(null);
     if (replay != null) {
@@ -162,7 +167,8 @@ final class InventoryAssetOutcomeService {
               materializationPassport(passport));
     }
     if (asset == null) throw new AssetNotFoundException("Rental item was not found");
-    if (!plan.warehouseId().equals(asset.getWarehouseId())) {
+    if (!plan.preserveOperationalState()
+        && !plan.warehouseId().equals(asset.getWarehouseId())) {
       throw new AssetConflictException(
           "Inventory outcome cabin belongs to another warehouse");
     }
@@ -170,63 +176,72 @@ final class InventoryAssetOutcomeService {
       throw new AssetConflictException(
           "Lost or written-off cabin cannot be replaced by inventory outcome");
     }
+    assertOperationalStateFence(plan, asset);
 
     InventoryAssetOutcomeWatermark watermark =
         watermarks.findByAssetIdForUpdate(plan.assetId()).orElse(null);
     assertLatest(plan, watermark);
 
-    List<UUID> releasedLeaseIds =
-        leases.releaseForCompletedInventory(
-            plan.assetId(), retainedLeaseOwnerTypes(plan.desiredStatus()));
-    List<OrderUnitReservation> activeOrderReservations =
-        orderReservations.findAllByRentalItemIdAndStateForUpdate(
-            plan.assetId(), OrderUnitReservationState.ACTIVE);
-    for (OrderUnitReservation reservation : activeOrderReservations) {
-      reservation.release(actorSubjectId, "SYSTEM_ADMIN");
-    }
-    orderReservations.saveAllAndFlush(activeOrderReservations);
-    List<UUID> releasedOrderReservationIds =
-        activeOrderReservations.stream()
-            .map(OrderUnitReservation::getId)
-            .sorted(Comparator.comparing(UUID::toString))
-            .toList();
+    List<UUID> releasedLeaseIds = List.of();
+    List<UUID> releasedOrderReservationIds = List.of();
+    List<UUID> releasedPresentationHoldIds = List.of();
+    boolean transferSuperseded = false;
+    if (plan.preserveOperationalState()) {
+      asset = applyPassport(asset, passport);
+    } else {
+      releasedLeaseIds =
+          leases.releaseForCompletedInventory(
+              plan.assetId(), retainedLeaseOwnerTypes(plan.desiredStatus()));
+      List<OrderUnitReservation> activeOrderReservations =
+          orderReservations.findAllByRentalItemIdAndStateForUpdate(
+              plan.assetId(), OrderUnitReservationState.ACTIVE);
+      for (OrderUnitReservation reservation : activeOrderReservations) {
+        reservation.release(actorSubjectId, "SYSTEM_ADMIN");
+      }
+      orderReservations.saveAllAndFlush(activeOrderReservations);
+      releasedOrderReservationIds =
+          activeOrderReservations.stream()
+              .map(OrderUnitReservation::getId)
+              .sorted(Comparator.comparing(UUID::toString))
+              .toList();
 
-    OffsetDateTime endedAt = now();
-    List<PresentationUnitHold> activePresentationHolds =
-        presentationHolds.findAllByRentalItemIdAndStateForUpdate(
-            plan.assetId(), PresentationUnitHoldState.ACTIVE);
-    for (PresentationUnitHold hold : activePresentationHolds) {
-      hold.release(endedAt);
-    }
-    presentationHolds.saveAllAndFlush(activePresentationHolds);
-    List<UUID> releasedPresentationHoldIds =
-        activePresentationHolds.stream()
-            .map(PresentationUnitHold::getId)
-            .sorted(Comparator.comparing(UUID::toString))
-            .toList();
+      OffsetDateTime endedAt = now();
+      List<PresentationUnitHold> activePresentationHolds =
+          presentationHolds.findAllByRentalItemIdAndStateForUpdate(
+              plan.assetId(), PresentationUnitHoldState.ACTIVE);
+      for (PresentationUnitHold hold : activePresentationHolds) {
+        hold.release(endedAt);
+      }
+      presentationHolds.saveAllAndFlush(activePresentationHolds);
+      releasedPresentationHoldIds =
+          activePresentationHolds.stream()
+              .map(PresentationUnitHold::getId)
+              .sorted(Comparator.comparing(UUID::toString))
+              .toList();
 
-    RentalItemStatus previous = asset.getStatus();
-    boolean transferSuperseded =
-        previous == RentalItemStatus.IN_TRANSFER || asset.getTransferOriginStatus() != null;
-    asset = applyPassport(asset, passport);
-    long expectedVersion = asset.getVersion();
-    boolean statusChanged = asset.applyCompletedInventoryOutcome(plan.desiredStatus());
-    if (statusChanged) {
-      asset = rentalItems.saveAndFlush(asset);
-    }
-    if (plan.desiredStatus() == RentalItemStatus.RENTED) {
-      rentalContents.replace(plan.warehouseId(), plan.assetId(), plan.shipmentContents());
-    }
-    if (statusChanged) {
-      events.append(
-          AssetAggregateType.RENTAL_ITEM,
-          asset.getId(),
-          expectedVersion,
-          AssetEventType.RENTAL_ITEM_STATUS_CHANGED,
-          projections.fact(asset),
-          projections.snapshot(asset));
-      if (plan.desiredStatus() != RentalItemStatus.RENTED) {
-        equipmentLedger.reclassifyCabinBalances(asset, previous);
+      RentalItemStatus previous = asset.getStatus();
+      transferSuperseded =
+          previous == RentalItemStatus.IN_TRANSFER || asset.getTransferOriginStatus() != null;
+      asset = applyPassport(asset, passport);
+      long expectedVersion = asset.getVersion();
+      boolean statusChanged = asset.applyCompletedInventoryOutcome(plan.desiredStatus());
+      if (statusChanged) {
+        asset = rentalItems.saveAndFlush(asset);
+      }
+      if (plan.desiredStatus() == RentalItemStatus.RENTED) {
+        rentalContents.replace(plan.warehouseId(), plan.assetId(), plan.shipmentContents());
+      }
+      if (statusChanged) {
+        events.append(
+            AssetAggregateType.RENTAL_ITEM,
+            asset.getId(),
+            expectedVersion,
+            AssetEventType.RENTAL_ITEM_STATUS_CHANGED,
+            projections.fact(asset),
+            projections.snapshot(asset));
+        if (plan.desiredStatus() != RentalItemStatus.RENTED) {
+          equipmentLedger.reclassifyCabinBalances(asset, previous);
+        }
       }
     }
 
@@ -242,6 +257,7 @@ final class InventoryAssetOutcomeService {
               plan.finalPlanSha256(),
               plan.findingRevision(),
               plan.desiredStatus(),
+              plan.preserveOperationalState(),
               plan.passport().sha256(),
               plan.shipmentContentsSha256());
     } else {
@@ -254,6 +270,7 @@ final class InventoryAssetOutcomeService {
           plan.finalPlanSha256(),
           plan.findingRevision(),
           plan.desiredStatus(),
+          plan.preserveOperationalState(),
           plan.passport().sha256(),
           plan.shipmentContentsSha256());
     }
@@ -273,6 +290,7 @@ final class InventoryAssetOutcomeService {
                 plan.finalPlanSha256(),
                 plan.findingRevision(),
                 plan.desiredStatus(),
+                plan.preserveOperationalState(),
                 asset.getVersion(),
                 asset.getStatus(),
                 releasedLeaseIds,
@@ -283,7 +301,7 @@ final class InventoryAssetOutcomeService {
   }
 
   private static void assertLatest(
-      OutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
+      NormalizedOutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
     if (watermark == null) return;
     int ordering = plan.inventoryCompletedAt().compareTo(watermark.getInventoryCompletedAt());
     if (ordering < 0) {
@@ -305,7 +323,7 @@ final class InventoryAssetOutcomeService {
    * plan-version drift remains fenced.
    */
   private static boolean sameSourceOrCorrection(
-      OutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
+      NormalizedOutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
     return watermark != null
         && (sameOrLegacySource(plan, watermark)
             || watermark.isNewerPlanRevisionOfSameCompletedFinding(
@@ -327,8 +345,25 @@ final class InventoryAssetOutcomeService {
     return Set.of();
   }
 
+  /** Prevents an observed older cabin version from replacing a later rental or transfer. */
+  private static void assertOperationalStateFence(
+      NormalizedOutcomePlan plan, RentalItem asset) {
+    if (plan.preserveOperationalState()
+        || plan.expectedAssetVersion() == null
+        || plan.desiredStatus() == RentalItemStatus.RENTED) {
+      return;
+    }
+    boolean protectedOperationalState =
+        asset.getStatus() == RentalItemStatus.RENTED
+            || asset.getStatus() == RentalItemStatus.IN_TRANSFER;
+    if (protectedOperationalState && asset.getVersion() != plan.expectedAssetVersion()) {
+      throw new InventoryOperationalStateChangedException(
+          "Cabin entered rental or transfer after the inventory observation");
+    }
+  }
+
   private static boolean sameOrLegacySource(
-      OutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
+      NormalizedOutcomePlan plan, InventoryAssetOutcomeWatermark watermark) {
     return watermark.isSameSource(
             plan.inventoryId(),
             plan.findingId(),
@@ -338,6 +373,7 @@ final class InventoryAssetOutcomeService {
             plan.finalPlanSha256(),
             plan.findingRevision(),
             plan.desiredStatus(),
+            plan.preserveOperationalState(),
             plan.passport().sha256(),
             plan.shipmentContentsSha256())
         || watermark.isLegacySameSource(
@@ -351,7 +387,7 @@ final class InventoryAssetOutcomeService {
             plan.desiredStatus());
   }
 
-  private OutcomePlan normalize(
+  private NormalizedOutcomePlan normalize(
       UUID inventoryId, UUID findingId, InventoryOutcomeRequest request) {
     if (inventoryId == null || findingId == null || request == null) {
       throw new IllegalArgumentException("Inventory outcome identity is required");
@@ -360,21 +396,87 @@ final class InventoryAssetOutcomeService {
         request.desiredStatus() == null
             ? null
             : RentalItemStatus.valueOf(request.desiredStatus().name());
+    boolean preserveOperationalState = Boolean.TRUE.equals(request.preserveOperationalState());
+    if (preserveOperationalState != (desiredStatus == null)) {
+      throw new IllegalArgumentException(
+          "desiredStatus must be null only when preserveOperationalState is true");
+    }
+    Long expectedAssetVersion = request.expectedAssetVersion();
+    if (expectedAssetVersion != null && expectedAssetVersion < 0) {
+      throw new IllegalArgumentException("expectedAssetVersion must not be negative");
+    }
+    if (preserveOperationalState && expectedAssetVersion != null) {
+      throw new IllegalArgumentException(
+          "expectedAssetVersion must be omitted when preserveOperationalState is true");
+    }
     PassportObservationPlan passport = normalizePassport(request);
-    List<Content> shipmentContents = normalizeShipmentContents(desiredStatus, request.shipmentContents());
-    return new OutcomePlan(
+    List<Content> shipmentContents =
+        normalizeShipmentContents(desiredStatus, request.shipmentContents());
+    UUID warehouseId = Objects.requireNonNull(request.warehouseId(), "warehouseId");
+    UUID assetId = Objects.requireNonNull(request.assetId(), "assetId");
+    OffsetDateTime completedAt = normalizedTime(request.inventoryCompletedAt());
+    long finalPlanVersion = requirePositive(request.finalPlanVersion(), "finalPlanVersion");
+    String finalPlanSha256 = requireSha256(request.finalPlanSha256());
+    long findingRevision = requirePositive(request.findingRevision(), "findingRevision");
+    String shipmentContentsSha256 =
+        shipmentContents == null ? null : codec.canonicalHash(shipmentContents);
+    Object requestFingerprint =
+        preserveOperationalState
+            ? new PreserveOutcomePlan(
+                inventoryId,
+                findingId,
+                warehouseId,
+                assetId,
+                completedAt,
+                finalPlanVersion,
+                finalPlanSha256,
+                findingRevision,
+                passport,
+                true)
+            : expectedAssetVersion == null
+                ? new OutcomePlan(
+                    inventoryId,
+                    findingId,
+                    warehouseId,
+                    assetId,
+                    completedAt,
+                    finalPlanVersion,
+                    finalPlanSha256,
+                    findingRevision,
+                    desiredStatus,
+                    passport,
+                    shipmentContents,
+                    shipmentContentsSha256)
+                : new GuardedOutcomePlan(
+                    inventoryId,
+                    findingId,
+                    warehouseId,
+                    assetId,
+                    completedAt,
+                    finalPlanVersion,
+                    finalPlanSha256,
+                    findingRevision,
+                    desiredStatus,
+                    passport,
+                    shipmentContents,
+                    shipmentContentsSha256,
+                    expectedAssetVersion);
+    return new NormalizedOutcomePlan(
         inventoryId,
         findingId,
-        java.util.Objects.requireNonNull(request.warehouseId(), "warehouseId"),
-        java.util.Objects.requireNonNull(request.assetId(), "assetId"),
-        normalizedTime(request.inventoryCompletedAt()),
-        requirePositive(request.finalPlanVersion(), "finalPlanVersion"),
-        requireSha256(request.finalPlanSha256()),
-        requirePositive(request.findingRevision(), "findingRevision"),
-        Objects.requireNonNull(desiredStatus, "desiredStatus"),
+        warehouseId,
+        assetId,
+        completedAt,
+        finalPlanVersion,
+        finalPlanSha256,
+        findingRevision,
+        desiredStatus,
         passport,
         shipmentContents,
-        shipmentContents == null ? null : codec.canonicalHash(shipmentContents));
+        shipmentContentsSha256,
+        expectedAssetVersion,
+        preserveOperationalState,
+        requestFingerprint);
   }
 
   private static List<Content> normalizeShipmentContents(
@@ -576,6 +678,53 @@ final class InventoryAssetOutcomeService {
       PassportObservationPlan passport,
       List<Content> shipmentContents,
       String shipmentContentsSha256) {}
+
+  /** New normal-outcome identity whose version fence cannot collide with a legacy request. */
+  private record GuardedOutcomePlan(
+      UUID inventoryId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime inventoryCompletedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      long findingRevision,
+      RentalItemStatus desiredStatus,
+      PassportObservationPlan passport,
+      List<Content> shipmentContents,
+      String shipmentContentsSha256,
+      long expectedAssetVersion) {}
+
+  /** Canonical request identity for a passport-only outcome; legacy fingerprints stay unchanged. */
+  private record PreserveOutcomePlan(
+      UUID inventoryId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime inventoryCompletedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      long findingRevision,
+      PassportObservationPlan passport,
+      boolean preserveOperationalState) {}
+
+  /** Validated runtime plan paired with its mode-specific durable request fingerprint. */
+  private record NormalizedOutcomePlan(
+      UUID inventoryId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime inventoryCompletedAt,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      long findingRevision,
+      RentalItemStatus desiredStatus,
+      PassportObservationPlan passport,
+      List<Content> shipmentContents,
+      String shipmentContentsSha256,
+      Long expectedAssetVersion,
+      boolean preserveOperationalState,
+      Object requestFingerprint) {}
 
   /** Frozen and validated inventory-side passport observation included in request identity. */
   private record PassportObservationPlan(

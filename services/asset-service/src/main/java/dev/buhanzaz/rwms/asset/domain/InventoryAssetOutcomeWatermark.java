@@ -66,10 +66,12 @@ public class InventoryAssetOutcomeWatermark {
   @Column(name = "finding_revision", nullable = false)
   private long findingRevision;
 
-  @NotNull
   @Enumerated(EnumType.STRING)
-  @Column(name = "desired_status", nullable = false, length = 32)
+  @Column(name = "desired_status", length = 32)
   private RentalItemStatus desiredStatus;
+
+  @Column(name = "preserve_operational_state", nullable = false)
+  private boolean preserveOperationalState;
 
   @Pattern(regexp = "^[0-9a-f]{64}$")
   @Column(name = "passport_observation_sha256", length = 64)
@@ -100,6 +102,7 @@ public class InventoryAssetOutcomeWatermark {
       String finalPlanSha256,
       long findingRevision,
       RentalItemStatus desiredStatus,
+      boolean preserveOperationalState,
       String passportObservationSha256,
       String shipmentContentsSha256) {
     InventoryAssetOutcomeWatermark value = new InventoryAssetOutcomeWatermark();
@@ -113,6 +116,7 @@ public class InventoryAssetOutcomeWatermark {
         finalPlanSha256,
         findingRevision,
         desiredStatus,
+        preserveOperationalState,
         passportObservationSha256,
         shipmentContentsSha256);
     value.createdAt = now();
@@ -133,6 +137,7 @@ public class InventoryAssetOutcomeWatermark {
       String finalPlanSha256,
       long findingRevision,
       RentalItemStatus desiredStatus,
+      boolean preserveOperationalState,
       String passportObservationSha256,
       String shipmentContentsSha256) {
     if (finalPlanVersion < 1 || findingRevision < 1) {
@@ -141,14 +146,15 @@ public class InventoryAssetOutcomeWatermark {
     if (finalPlanSha256 == null || !finalPlanSha256.matches("[0-9a-f]{64}")) {
       throw new IllegalArgumentException("Inventory final plan hash is invalid");
     }
-    if (!isOutcomeStatus(desiredStatus)) {
+    if (preserveOperationalState != (desiredStatus == null)
+        || (!preserveOperationalState && !isOutcomeStatus(desiredStatus))) {
       throw new IllegalArgumentException("Inventory outcome status is invalid");
     }
     if (passportObservationSha256 == null
         || !passportObservationSha256.matches("[0-9a-f]{64}")) {
       throw new IllegalArgumentException("Inventory passport observation hash is invalid");
     }
-    if ((desiredStatus == RentalItemStatus.RENTED)
+    if ((!preserveOperationalState && desiredStatus == RentalItemStatus.RENTED)
         != (shipmentContentsSha256 != null
             && shipmentContentsSha256.matches("[0-9a-f]{64}"))) {
       throw new IllegalArgumentException("Inventory shipment contents hash is invalid");
@@ -162,6 +168,7 @@ public class InventoryAssetOutcomeWatermark {
     this.finalPlanSha256 = finalPlanSha256;
     this.findingRevision = findingRevision;
     this.desiredStatus = desiredStatus;
+    this.preserveOperationalState = preserveOperationalState;
     this.passportObservationSha256 = passportObservationSha256;
     this.shipmentContentsSha256 = shipmentContentsSha256;
     this.updatedAt = now();
@@ -177,6 +184,7 @@ public class InventoryAssetOutcomeWatermark {
       String finalPlanSha256,
       long findingRevision,
       RentalItemStatus desiredStatus,
+      boolean preserveOperationalState,
       String passportObservationSha256,
       String shipmentContentsSha256) {
     return isSameBaseSource(
@@ -187,7 +195,8 @@ public class InventoryAssetOutcomeWatermark {
             finalPlanVersion,
             finalPlanSha256,
             findingRevision,
-            desiredStatus)
+            desiredStatus,
+            preserveOperationalState)
         && Objects.equals(this.passportObservationSha256, passportObservationSha256)
         && Objects.equals(this.shipmentContentsSha256, shipmentContentsSha256);
   }
@@ -208,6 +217,7 @@ public class InventoryAssetOutcomeWatermark {
       RentalItemStatus desiredStatus) {
     return passportObservationSha256 == null
         && shipmentContentsSha256 == null
+        && !preserveOperationalState
         && desiredStatus != RentalItemStatus.RENTED
         && isSameBaseSource(
             inventoryId,
@@ -217,7 +227,8 @@ public class InventoryAssetOutcomeWatermark {
             finalPlanVersion,
             finalPlanSha256,
             findingRevision,
-            desiredStatus);
+            desiredStatus,
+            false);
   }
 
   /**
@@ -246,7 +257,8 @@ public class InventoryAssetOutcomeWatermark {
       long finalPlanVersion,
       String finalPlanSha256,
       long findingRevision,
-      RentalItemStatus desiredStatus) {
+      RentalItemStatus desiredStatus,
+      boolean preserveOperationalState) {
     return Objects.equals(this.inventoryId, inventoryId)
         && Objects.equals(this.findingId, findingId)
         && Objects.equals(this.warehouseId, warehouseId)
@@ -254,7 +266,8 @@ public class InventoryAssetOutcomeWatermark {
         && this.finalPlanVersion == finalPlanVersion
         && Objects.equals(this.finalPlanSha256, finalPlanSha256)
         && this.findingRevision == findingRevision
-        && this.desiredStatus == desiredStatus;
+        && this.desiredStatus == desiredStatus
+        && this.preserveOperationalState == preserveOperationalState;
   }
 
   @PrePersist
@@ -279,6 +292,7 @@ public class InventoryAssetOutcomeWatermark {
   public String getFinalPlanSha256() { return finalPlanSha256; }
   public long getFindingRevision() { return findingRevision; }
   public RentalItemStatus getDesiredStatus() { return desiredStatus; }
+  public boolean isPreserveOperationalState() { return preserveOperationalState; }
   public String getPassportObservationSha256() { return passportObservationSha256; }
   public String getShipmentContentsSha256() { return shipmentContentsSha256; }
   public OffsetDateTime getCreatedAt() { return createdAt; }

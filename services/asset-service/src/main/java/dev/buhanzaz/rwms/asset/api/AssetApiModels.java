@@ -810,10 +810,67 @@ public final class AssetApiModels {
       @NotNull @Min(1) Long finalPlanVersion,
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
       @NotNull @Min(1) Long findingRevision,
-      @NotNull InventoryOutcomeStatus desiredStatus,
+      InventoryOutcomeStatus desiredStatus,
       @NotNull JsonNode passportObservation,
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String passportObservationSha256,
-      @Size(max = 100) List<@NotNull @Valid InventoryOutcomeShipmentContent> shipmentContents) {}
+      @Size(max = 100) List<@NotNull @Valid InventoryOutcomeShipmentContent> shipmentContents,
+      @Min(0) Long expectedAssetVersion,
+      Boolean preserveOperationalState) {
+    /** Retains the pre-preservation constructor for existing status-applying callers. */
+    public InventoryOutcomeRequest(
+        UUID warehouseId,
+        UUID assetId,
+        OffsetDateTime inventoryCompletedAt,
+        Long finalPlanVersion,
+        String finalPlanSha256,
+        Long findingRevision,
+        InventoryOutcomeStatus desiredStatus,
+        JsonNode passportObservation,
+        String passportObservationSha256,
+        List<InventoryOutcomeShipmentContent> shipmentContents) {
+      this(
+          warehouseId,
+          assetId,
+          inventoryCompletedAt,
+          finalPlanVersion,
+          finalPlanSha256,
+          findingRevision,
+          desiredStatus,
+          passportObservation,
+          passportObservationSha256,
+          shipmentContents,
+          null,
+          null);
+    }
+
+    /** Retains the passport-only constructor without imposing an asset-version fence. */
+    public InventoryOutcomeRequest(
+        UUID warehouseId,
+        UUID assetId,
+        OffsetDateTime inventoryCompletedAt,
+        Long finalPlanVersion,
+        String finalPlanSha256,
+        Long findingRevision,
+        InventoryOutcomeStatus desiredStatus,
+        JsonNode passportObservation,
+        String passportObservationSha256,
+        List<InventoryOutcomeShipmentContent> shipmentContents,
+        Boolean preserveOperationalState) {
+      this(
+          warehouseId,
+          assetId,
+          inventoryCompletedAt,
+          finalPlanVersion,
+          finalPlanSha256,
+          findingRevision,
+          desiredStatus,
+          passportObservation,
+          passportObservationSha256,
+          shipmentContents,
+          null,
+          preserveOperationalState);
+    }
+  }
 
   /** Durable result and operational bindings superseded by one completed-inventory command. */
   public record InventoryOutcomeResponse(

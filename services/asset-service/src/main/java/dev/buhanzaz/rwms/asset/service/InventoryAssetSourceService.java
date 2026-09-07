@@ -257,6 +257,10 @@ final class InventoryAssetSourceService {
           || byFinding.putIfAbsent(candidate.findingId(), candidate) != null) {
         throw new IllegalArgumentException("Inventory source outcomes must have unique findings");
       }
+      if (Boolean.TRUE.equals(candidate.outcome().preserveOperationalState())) {
+        throw new IllegalArgumentException(
+            "Inventory source outcomes cannot preserve operational state");
+      }
       if (candidate.outcome().desiredStatus() != InventoryOutcomeStatus.FREE
           && candidate.outcome().desiredStatus() != InventoryOutcomeStatus.REPAIR
           && candidate.outcome().desiredStatus() != InventoryOutcomeStatus.CAPITAL_REPAIR) {

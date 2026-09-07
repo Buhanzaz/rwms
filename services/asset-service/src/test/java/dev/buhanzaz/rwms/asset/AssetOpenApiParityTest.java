@@ -76,6 +76,26 @@ class AssetOpenApiParityTest {
   }
 
   @Test
+  void inventoryOutcomeSupportsPassportOnlyOperationalStatePreservation() throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> request = child(schemas, "InventoryOutcomeRequest");
+    assertThat(list(request.get("oneOf"))).hasSize(2);
+    assertThat(child(child(request, "properties"), "preserveOperationalState"))
+        .containsEntry("type", "boolean")
+        .containsEntry("default", false);
+    assertThat(child(child(request, "properties"), "expectedAssetVersion"))
+        .containsEntry("$ref", "#/components/schemas/ExpectedVersion");
+    assertThat(map(list(request.get("oneOf")).get(0)).toString())
+        .contains("expectedAssetVersion", "preserveOperationalState", "true");
+    assertThat(child(child(request, "properties"), "desiredStatus").toString())
+        .contains("InventoryOutcomeStatus", "type=null");
+    assertThat(
+            child(child(child(schemas, "InventoryOutcomeResponse"), "properties"), "status")
+                .get("$ref"))
+        .isEqualTo("#/components/schemas/RentalItemStatus");
+  }
+
+  @Test
   void openApiInventoryExactlyMatchesAssetControllers() throws Exception {
     assertThat(openApiEndpoints(openApi()))
         .containsExactlyInAnyOrderElementsOf(controllerEndpoints());

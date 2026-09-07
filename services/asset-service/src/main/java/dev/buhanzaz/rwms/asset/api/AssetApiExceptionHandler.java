@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset.api;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetDependencyException;
 import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
+import dev.buhanzaz.rwms.asset.service.InventoryOperationalStateChangedException;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
 import dev.buhanzaz.rwms.platform.contracts.CorrelationContext;
@@ -46,6 +47,12 @@ public class AssetApiExceptionHandler {
   @ExceptionHandler(AssetConflictException.class)
   ResponseEntity<ApiProblem> conflict(AssetConflictException exception, HttpServletRequest request) {
     return problem(HttpStatus.CONFLICT, "ASSET_CONFLICT", exception.getMessage(), request);
+  }
+
+  @ExceptionHandler(InventoryOperationalStateChangedException.class)
+  ResponseEntity<ApiProblem> inventoryOperationalStateChanged(
+      InventoryOperationalStateChangedException exception, HttpServletRequest request) {
+    return problem(HttpStatus.CONFLICT, exception.code(), exception.getMessage(), request);
   }
 
   @ExceptionHandler(OrderUnitReservationConflictException.class)

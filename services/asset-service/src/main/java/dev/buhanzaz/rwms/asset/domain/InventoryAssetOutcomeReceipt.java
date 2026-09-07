@@ -67,10 +67,12 @@ public class InventoryAssetOutcomeReceipt {
   @Column(name = "finding_revision", nullable = false)
   private long findingRevision;
 
-  @NotNull
   @Enumerated(EnumType.STRING)
-  @Column(name = "desired_status", nullable = false, length = 32)
+  @Column(name = "desired_status", length = 32)
   private RentalItemStatus desiredStatus;
+
+  @Column(name = "preserve_operational_state", nullable = false)
+  private boolean preserveOperationalState;
 
   @Min(0)
   @Column(name = "response_asset_version", nullable = false)
@@ -118,6 +120,7 @@ public class InventoryAssetOutcomeReceipt {
       String finalPlanSha256,
       long findingRevision,
       RentalItemStatus desiredStatus,
+      boolean preserveOperationalState,
       long responseAssetVersion,
       RentalItemStatus responseStatus,
       List<UUID> releasedOperationLeaseIds,
@@ -139,7 +142,12 @@ public class InventoryAssetOutcomeReceipt {
     value.finalPlanVersion = finalPlanVersion;
     value.finalPlanSha256 = Objects.requireNonNull(finalPlanSha256, "finalPlanSha256");
     value.findingRevision = findingRevision;
-    value.desiredStatus = Objects.requireNonNull(desiredStatus, "desiredStatus");
+    if (preserveOperationalState != (desiredStatus == null)) {
+      throw new IllegalArgumentException(
+          "Inventory outcome status must be null only when operational state is preserved");
+    }
+    value.desiredStatus = desiredStatus;
+    value.preserveOperationalState = preserveOperationalState;
     value.responseAssetVersion = responseAssetVersion;
     value.responseStatus = Objects.requireNonNull(responseStatus, "responseStatus");
     value.releasedOperationLeaseIds = encode(releasedOperationLeaseIds);
@@ -161,6 +169,7 @@ public class InventoryAssetOutcomeReceipt {
   public String getFinalPlanSha256() { return finalPlanSha256; }
   public long getFindingRevision() { return findingRevision; }
   public RentalItemStatus getDesiredStatus() { return desiredStatus; }
+  public boolean isPreserveOperationalState() { return preserveOperationalState; }
   public long getResponseAssetVersion() { return responseAssetVersion; }
   public RentalItemStatus getResponseStatus() { return responseStatus; }
   public List<UUID> getReleasedOperationLeaseIds() { return decode(releasedOperationLeaseIds); }

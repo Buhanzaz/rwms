@@ -212,6 +212,25 @@ nullable-значение. Catalog resolution выполняется до осв
 [`InventoryOutcomeRequest`](../../contracts/openapi/asset-service.yaml) и
 [`InventoryAssetOutcomeService`](src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetOutcomeService.java).
 
+Outcome с `preserveOperationalState=true` — это режим публикации только паспорта.
+`desiredStatus` и `shipmentContents` должны быть `null`. Под теми же cabin lock и
+completed-at/final-plan watermark наблюдение `PRESENT` может обновить паспорт и характеристики,
+но команда никогда не меняет warehouse бытовки, текущий статус, transfer state, equipment
+contents, operation leases, order reservations или presentation holds. Поэтому историческое
+evidence осмотра остаётся применимым после перемещения бытовки на другой склад; response возвращает
+её фактический полный `RentalItemStatus`. `LOST` и `WRITTEN_OFF` остаются terminal. Для inventory
+source proposals этот режим запрещён: им по-прежнему нужен явный локальный status-applying outcome.
+Отсутствующее или false-значение `preserveOperationalState` сохраняет прежние fingerprint и
+поведение до V51.
+
+Новые status-applying outcomes могут передавать замороженный в final plan
+`expectedAssetVersion`. Под тем же cabin lock asset-service до любых мутаций отвечает
+`INVENTORY_OPERATIONAL_STATE_CHANGED`, если другая текущая версия уже имеет статус `RENTED` или
+`IN_TRANSFER`, а запрошенный статус не равен `RENTED`. Так поздняя публикация repair/free из
+инвентаризации не заменит новую отправку, но historical rented return с той же версией остаётся
+разрешённым. Passport-only outcomes обязаны не передавать это поле и намеренно остаются
+нестрогими. Legacy requests без поля сохраняют точные прежние fingerprint и поведение.
+
 Flyway V38 добавляет permanent successful idempotency receipt и per-cabin completed-at watermark.
 Тот же key и request возвращают замороженный результат. Новый key для того же latest final-plan
 finding повторно применяет статус, reservations, holds и transfer state. При том же completion time
@@ -220,8 +239,10 @@ finding повторно применяет статус, reservations, holds и
 Повторное применение или исправление плана освобождает любую active operation lease для `FREE`. Для
 `REPAIR` и `CAPITAL_REPAIR` сохраняется только `MAINTENANCE_REPAIR`, которая уже может принадлежать
 ремонту, созданному из этого finding; устаревшие logistics или rental leases освобождаются. Строго
-более старая завершённая инвентаризация, другой equal-time source, `LOST`, `WRITTEN_OFF` и неверный
-warehouse всегда отклоняются без частичного статуса или receipt.
+более старая завершённая инвентаризация, другой equal-time source, `LOST` и `WRITTEN_OFF` всегда
+отклоняются без частичного статуса или receipt. Неверный warehouse также отклоняет status-applying
+outcome; только явный passport-only режим принимает историческое cross-warehouse evidence, не
+перемещая бытовку.
 
 Flyway
 [`V39__inventory_outcome_passport_watermark.sql`](src/main/resources/db/migration/V39__inventory_outcome_passport_watermark.sql)

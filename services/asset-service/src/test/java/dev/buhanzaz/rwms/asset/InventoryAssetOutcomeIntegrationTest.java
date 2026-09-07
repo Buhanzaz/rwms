@@ -17,6 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
@@ -30,6 +31,9 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureSnapshotRequ
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceAssetRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceAssetResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceOutcomeCandidate;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsFencedEffectRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemAction;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
@@ -45,6 +49,7 @@ import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetChecksum;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.InventoryAssetService;
+import dev.buhanzaz.rwms.asset.service.InventoryOperationalStateChangedException;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -415,6 +420,24 @@ class InventoryAssetOutcomeIntegrationTest {
             UUID.randomUUID(), inventoryId, findingId, idempotencyKey, request);
     assertThat(replay.replayed()).isTrue();
     assertThat(replay.response()).isEqualTo(applied.response());
+    InventoryOutcomeRequest explicitFalse =
+        new InventoryOutcomeRequest(
+            request.warehouseId(),
+            request.assetId(),
+            request.inventoryCompletedAt(),
+            request.finalPlanVersion(),
+            request.finalPlanSha256(),
+            request.findingRevision(),
+            request.desiredStatus(),
+            request.passportObservation(),
+            request.passportObservationSha256(),
+            request.shipmentContents(),
+            false);
+    InventoryAssetService.OutcomeResult explicitFalseReplay =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, idempotencyKey, explicitFalse);
+    assertThat(explicitFalseReplay.replayed()).isTrue();
+    assertThat(explicitFalseReplay.response()).isEqualTo(applied.response());
     InventoryOutcomeRequest changedReplay =
         request(
             warehouseId,
@@ -1089,6 +1112,414 @@ class InventoryAssetOutcomeIntegrationTest {
     assertThat(passportEventCount(cabin.id())).isZero();
   }
 
+  @Test
+  void passportOnlyOutcomePreservesRentedStateBindingsContentsAndWarehouse() {
+    UUID assetWarehouseId = UUID.randomUUID();
+    UUID historicalWarehouseId = UUID.randomUUID();
+    RentalItemResponse cabin = rentalItem(assetWarehouseId, "OUTCOME-PASSPORT-ONLY-");
+    setStatus(cabin.id(), RentalItemStatus.RENTED, null);
+    var lease =
+        assets
+            .acquireLease(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new AcquireOperationLeaseRequest(
+                    cabin.id(), "LOGISTICS_RENTAL", UUID.randomUUID().toString(), cabin.version()))
+            .response();
+    OrderUnitReservation reservation =
+        orderReservations.saveAndFlush(
+            OrderUnitReservation.create(
+                UUID.randomUUID(),
+                cabin.id(),
+                assetWarehouseId,
+                UUID.randomUUID(),
+                "WMS_ADMIN"));
+    OffsetDateTime currentTime = now();
+    PresentationUnitHold hold =
+        presentationHolds.saveAndFlush(
+            PresentationUnitHold.create(
+                UUID.randomUUID(),
+                cabin.id(),
+                assetWarehouseId,
+                currentTime.plusMinutes(30),
+                UUID.randomUUID(),
+                "WMS_ADMIN",
+                currentTime));
+    EquipmentResponse equipment = equipment("Passport-only contents ");
+    seedBalance(
+        equipment.id(),
+        assetWarehouseId,
+        cabin.id(),
+        BalanceLocationKind.CABIN_RENTED,
+        7L);
+
+    ObjectNode observed = objectMapper.createObjectNode();
+    observed.put("presence", "PRESENT");
+    ObjectNode value = observed.putObject("value");
+    value.put("rentalType", "БК-2");
+    value.put("dimensions", "2.4x6");
+    value.put("finishing", "ЛДСП");
+    value.put("category", CATEGORY_ORDINARY);
+    value.putArray("characteristics").add("Электрика КК");
+    value.put("linoleum", false);
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    InventoryOutcomeRequest request =
+        preserveRequest(historicalWarehouseId, cabin.id(), currentTime, observed);
+
+    InventoryAssetService.OutcomeResult applied =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, idempotencyKey, request);
+
+    assertThat(applied.replayed()).isFalse();
+    assertThat(applied.response().status()).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(applied.response().assetVersion()).isEqualTo(cabin.version() + 1);
+    assertThat(applied.response().releasedOperationLeaseIds()).isEmpty();
+    assertThat(applied.response().releasedOrderUnitReservationIds()).isEmpty();
+    assertThat(applied.response().releasedPresentationHoldIds()).isEmpty();
+    assertThat(applied.response().transferSuperseded()).isFalse();
+    assertThat(currentStatus(cabin.id())).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(currentWarehouse(cabin.id())).isEqualTo(assetWarehouseId);
+    assertThat(state("operation_lease", lease.id())).isEqualTo("ACTIVE");
+    assertThat(state("order_unit_reservation", reservation.getId())).isEqualTo("ACTIVE");
+    assertThat(state("presentation_unit_hold", hold.getId())).isEqualTo("ACTIVE");
+    assertThat(
+            cabinQuantity(
+                equipment.id(),
+                assetWarehouseId,
+                cabin.id(),
+                BalanceLocationKind.CABIN_RENTED))
+        .isEqualTo(7L);
+    assertThat(composition(cabin.id()).get("cabin_type_id")).isEqualTo(TYPE_BK_2);
+    assertThat(composition(cabin.id()).get("cabin_finishing_id")).isEqualTo(FINISHING_LDSP);
+    assertThat(characteristics(cabin.id())).containsExactly(CHARACTERISTIC_ELECTRICS_KK);
+    assertThat(
+            jdbc.queryForObject(
+                "select preserve_operational_state from inventory_asset_outcome_receipt where idempotency_key=?",
+                Boolean.class,
+                idempotencyKey))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select desired_status from inventory_asset_outcome_receipt where idempotency_key=?",
+                String.class,
+                idempotencyKey))
+        .isNull();
+
+    InventoryAssetService.OutcomeResult replay =
+        inventory.applyOutcome(
+            UUID.randomUUID(), inventoryId, findingId, idempotencyKey, request);
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response()).isEqualTo(applied.response());
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_asset_outcome_receipt set preserve_operational_state=false where idempotency_key=?",
+                    idempotencyKey))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_asset_outcome_watermark set preserve_operational_state=false where asset_id=?",
+                    cabin.id()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_asset_outcome_watermark set preserve_operational_state=false,desired_status='RENTED' where asset_id=?",
+                    cabin.id()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+    setStatus(cabin.id(), RentalItemStatus.WAITING_ESTIMATE_CONFIRMATION, null);
+    ObjectNode absent = objectMapper.createObjectNode();
+    absent.put("presence", "ABSENT");
+    absent.putNull("value");
+    InventoryAssetService.OutcomeResult waiting =
+        inventory.applyOutcome(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            preserveRequest(
+                historicalWarehouseId, cabin.id(), currentTime.plusSeconds(1), absent));
+    assertThat(waiting.response().status())
+        .isEqualTo(RentalItemStatus.WAITING_ESTIMATE_CONFIRMATION);
+    assertThat(state("operation_lease", lease.id())).isEqualTo("ACTIVE");
+    assertThat(state("order_unit_reservation", reservation.getId())).isEqualTo("ACTIVE");
+    assertThat(state("presentation_unit_hold", hold.getId())).isEqualTo("ACTIVE");
+  }
+
+  @Test
+  void preservationModeRequiresNullStatusAndContentsAndCannotMaterializeSources() {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse cabin = rentalItem(warehouseId, "OUTCOME-PRESERVE-VALIDATION-");
+    ObjectNode absent = objectMapper.createObjectNode();
+    absent.put("presence", "ABSENT");
+    absent.putNull("value");
+    OffsetDateTime completedAt = now();
+
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new InventoryOutcomeRequest(
+                        warehouseId,
+                        cabin.id(),
+                        completedAt,
+                        2L,
+                        "a".repeat(64),
+                        3L,
+                        InventoryOutcomeStatus.FREE,
+                        absent,
+                        passportObservationHash(absent),
+                        null,
+                        true)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("desiredStatus must be null only");
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new InventoryOutcomeRequest(
+                        warehouseId,
+                        cabin.id(),
+                        completedAt,
+                        2L,
+                        "a".repeat(64),
+                        3L,
+                        null,
+                        absent,
+                        passportObservationHash(absent),
+                        null,
+                        false)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("desiredStatus must be null only");
+    InventoryOutcomeRequest preserveWithContents =
+        new InventoryOutcomeRequest(
+            warehouseId,
+            cabin.id(),
+            completedAt,
+            2L,
+            "a".repeat(64),
+            3L,
+            null,
+            absent,
+            passportObservationHash(absent),
+            List.of(new InventoryOutcomeShipmentContent(UUID.randomUUID(), 0L, 1L)),
+            true);
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    preserveWithContents))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("shipmentContents must be null");
+    InventoryOutcomeRequest preserveWithVersion =
+        new InventoryOutcomeRequest(
+            warehouseId,
+            cabin.id(),
+            completedAt,
+            2L,
+            "a".repeat(64),
+            3L,
+            null,
+            absent,
+            passportObservationHash(absent),
+            null,
+            0L,
+            true);
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    preserveWithVersion))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("expectedAssetVersion must be omitted");
+
+    InventoryOutcomeRequest sourcePreserve =
+        preserveRequest(warehouseId, UUID.randomUUID(), completedAt, absent);
+    assertThatThrownBy(
+            () ->
+                inventory.reconcileFurniture(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new InventoryFurnitureReconciliationRequest(
+                        warehouseId,
+                        "b".repeat(64),
+                        "c".repeat(64),
+                        List.of(),
+                        List.of(
+                            new InventorySourceOutcomeCandidate(
+                                UUID.randomUUID(), sourcePreserve)))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot preserve operational state");
+
+    for (RentalItemStatus terminalStatus :
+        List.of(RentalItemStatus.LOST, RentalItemStatus.WRITTEN_OFF)) {
+      setStatus(cabin.id(), terminalStatus, null);
+      assertThatThrownBy(
+              () ->
+                  inventory.applyOutcome(
+                      UUID.randomUUID(),
+                      UUID.randomUUID(),
+                      UUID.randomUUID(),
+                      UUID.randomUUID(),
+                      preserveRequest(
+                          UUID.randomUUID(), cabin.id(), completedAt.plusSeconds(1), absent)))
+          .isInstanceOf(AssetConflictException.class)
+          .hasMessageContaining("Lost or written-off");
+    }
+  }
+
+  @Test
+  void expectedAssetVersionFencesNewRentalButAllowsObservedHistoricalRental() throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse cabin = rentalItem(warehouseId, "OUTCOME-OPERATIONAL-FENCE-");
+    long observedVersion = cabin.version();
+    UUID logisticsSubject = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    var lease =
+        assets
+            .acquireLogisticsLease(
+                logisticsSubject,
+                UUID.randomUUID(),
+                new AcquireLogisticsOperationLeaseRequest(
+                    cabin.id(),
+                    LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT,
+                    documentId,
+                    lineId,
+                    observedVersion))
+            .response();
+    var shipped =
+        assets
+            .applyLogisticsEffect(
+                logisticsSubject,
+                UUID.randomUUID(),
+                cabin.id(),
+                new LogisticsFencedEffectRequest(
+                    observedVersion,
+                    LogisticsRentalItemAction.SHIPMENT_CONFIRM,
+                    lease.leaseId(),
+                    lease.fencingToken(),
+                    LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT,
+                    documentId,
+                    lineId,
+                    null,
+                    null))
+            .response();
+    assertThat(shipped.status()).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(shipped.version()).isGreaterThan(observedVersion);
+
+    UUID freeInventoryId = UUID.randomUUID();
+    UUID freeFindingId = UUID.randomUUID();
+    UUID freeKey = UUID.randomUUID();
+    InventoryOutcomeRequest staleFree =
+        guardedRequest(
+            warehouseId,
+            cabin.id(),
+            now(),
+            InventoryOutcomeStatus.FREE,
+            observedVersion);
+    mvc.perform(
+            put(
+                    "/api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}",
+                    freeInventoryId,
+                    freeFindingId)
+                .with(inventoryJwt())
+                .header("Idempotency-Key", freeKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(staleFree)))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("INVENTORY_OPERATIONAL_STATE_CHANGED"));
+
+    UUID repairKey = UUID.randomUUID();
+    InventoryOutcomeRequest staleRepair =
+        guardedRequest(
+            warehouseId,
+            cabin.id(),
+            staleFree.inventoryCompletedAt(),
+            InventoryOutcomeStatus.REPAIR,
+            observedVersion);
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    repairKey,
+                    staleRepair))
+        .isInstanceOf(InventoryOperationalStateChangedException.class)
+        .extracting(
+            error -> ((InventoryOperationalStateChangedException) error).code())
+        .isEqualTo("INVENTORY_OPERATIONAL_STATE_CHANGED");
+    assertThat(currentStatus(cabin.id())).isEqualTo(RentalItemStatus.RENTED);
+    assertThat(currentVersion(cabin.id())).isEqualTo(shipped.version());
+    assertThat(state("operation_lease", lease.leaseId())).isEqualTo("ACTIVE");
+    assertThat(receiptCount(freeKey)).isZero();
+    assertThat(receiptCount(repairKey)).isZero();
+    assertThat(watermarkCount(cabin.id())).isZero();
+
+    UUID acceptedInventoryId = UUID.randomUUID();
+    UUID acceptedFindingId = UUID.randomUUID();
+    UUID acceptedKey = UUID.randomUUID();
+    InventoryOutcomeRequest observedHistoricalReturn =
+        guardedRequest(
+            warehouseId,
+            cabin.id(),
+            staleFree.inventoryCompletedAt().plusSeconds(1),
+            InventoryOutcomeStatus.FREE,
+            shipped.version());
+    InventoryAssetService.OutcomeResult accepted =
+        inventory.applyOutcome(
+            UUID.randomUUID(),
+            acceptedInventoryId,
+            acceptedFindingId,
+            acceptedKey,
+            observedHistoricalReturn);
+    assertThat(accepted.response().status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(state("operation_lease", lease.leaseId())).isEqualTo("RELEASED");
+    InventoryAssetService.OutcomeResult replay =
+        inventory.applyOutcome(
+            UUID.randomUUID(),
+            acceptedInventoryId,
+            acceptedFindingId,
+            acceptedKey,
+            observedHistoricalReturn);
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response()).isEqualTo(accepted.response());
+
+    InventoryOutcomeRequest omittedFence =
+        request(
+            warehouseId,
+            cabin.id(),
+            observedHistoricalReturn.inventoryCompletedAt(),
+            InventoryOutcomeStatus.FREE);
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(),
+                    acceptedInventoryId,
+                    acceptedFindingId,
+                    acceptedKey,
+                    omittedFence))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("bound to another request");
+  }
+
   private RentalItemResponse rentalItem(UUID warehouseId, String prefix) {
     return assets
         .createRentalItem(
@@ -1276,6 +1707,11 @@ class InventoryAssetOutcomeIntegrationTest {
         jdbc.queryForObject("select status from rental_item where id=?", String.class, assetId));
   }
 
+  private UUID currentWarehouse(UUID assetId) {
+    return jdbc.queryForObject(
+        "select warehouse_id from rental_item where id=?", UUID.class, assetId);
+  }
+
   private String state(String table, UUID id) {
     if (!List.of("operation_lease", "order_unit_reservation", "presentation_unit_hold")
         .contains(table)) {
@@ -1300,6 +1736,49 @@ class InventoryAssetOutcomeIntegrationTest {
     absent.put("presence", "ABSENT");
     absent.putNull("value");
     return request(warehouseId, assetId, completedAt, desiredStatus, absent);
+  }
+
+  private InventoryOutcomeRequest preserveRequest(
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime completedAt,
+      JsonNode passportObservation) {
+    return new InventoryOutcomeRequest(
+        warehouseId,
+        assetId,
+        completedAt,
+        2L,
+        "a".repeat(64),
+        3L,
+        null,
+        passportObservation,
+        passportObservationHash(passportObservation),
+        null,
+        true);
+  }
+
+  private InventoryOutcomeRequest guardedRequest(
+      UUID warehouseId,
+      UUID assetId,
+      OffsetDateTime completedAt,
+      InventoryOutcomeStatus desiredStatus,
+      long expectedAssetVersion) {
+    ObjectNode absent = objectMapper.createObjectNode();
+    absent.put("presence", "ABSENT");
+    absent.putNull("value");
+    return new InventoryOutcomeRequest(
+        warehouseId,
+        assetId,
+        completedAt,
+        2L,
+        "a".repeat(64),
+        3L,
+        desiredStatus,
+        absent,
+        passportObservationHash(absent),
+        desiredStatus == InventoryOutcomeStatus.RENTED ? List.of() : null,
+        expectedAssetVersion,
+        false);
   }
 
   private InventoryOutcomeRequest request(
