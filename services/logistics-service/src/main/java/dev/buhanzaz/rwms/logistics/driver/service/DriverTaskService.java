@@ -86,7 +86,7 @@ public class DriverTaskService {
   /** Operational trip facts only; this feed grants no access to another manager's order. */
   public List<ExpiredTripNoticeResponse> expiredTripsForManager(
       dev.buhanzaz.rwms.logistics.order.security.OrderActor actor) {
-    if (!actor.rentalAccess() || !"RENTAL_MANAGER".equals(actor.role())) {
+    if (!actor.rentalAccess()) {
       throw new org.springframework.security.access.AccessDeniedException(
           "Rental manager access required");
     }

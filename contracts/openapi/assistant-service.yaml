@@ -235,9 +235,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT issued only to rwms-rental-manager-web or rwms-rental-manager-android with
-        principal_type USER, global_role RENTAL_MANAGER, rentalAccess true, rental.manage
-        scope. RWMS/admin scopes are rejected.
+        JWT issued only to rwms-rental-manager-web or rwms-rental-manager-android for a
+        recognized non-customer USER role with rentalAccess true and rental.manage scope.
+        RWMS/admin scopes are rejected.
   parameters:
     ConversationId:
       name: conversationId

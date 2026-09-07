@@ -192,8 +192,8 @@ acceptance-started/estimate-started event identifies the actual submitting opera
 has no occurrence time and must not be presented as a new physical action.
 
 The rental client, inquiry, presentation and order subset also accepts only the dedicated
-`rwms-rental-manager-web` or `rwms-rental-manager-android` credential with `RENTAL_MANAGER`,
-`rentalAccess=true` and exactly `rental.manage` as its application scope. Cabin
+`rwms-rental-manager-web` or `rwms-rental-manager-android` credential for a recognized
+non-customer USER role with `rentalAccess=true` and exactly `rental.manage` as its application scope. Cabin
 search and warehouse selection retain the existing explicit `EDIT` grants. Mixed application
 scopes fail closed, and returns, shipments, transfers and other operational APIs still require
 their ordinary RWMS scopes.

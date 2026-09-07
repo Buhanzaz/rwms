@@ -13,17 +13,20 @@ import org.springframework.stereotype.Component;
 public class AssistantAuthorizer {
   private static final Set<String> MANAGER_CLIENT_IDS =
       Set.of("rwms-rental-manager-web", "rwms-rental-manager-android");
+  private static final Set<String> RENTAL_STAFF_ROLES =
+      Set.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER");
   private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
       Set.of("openid", "profile", "offline_access");
 
   /**
-   * Accepts only the dedicated rental-manager applications. Panel, admin, customer, service and
-   * mixed-scope tokens fail closed even when they carry a rentalAccess claim.
+   * Accepts staff users with rental access only from the dedicated rental-manager applications.
+   * Panel, admin, customer, service and mixed-scope tokens fail closed even when they carry a
+   * rentalAccess claim.
    */
   public UUID requireRentalManager(Jwt jwt) {
     if (jwt == null
         || !"USER".equals(jwt.getClaimAsString("principal_type"))
-        || !"RENTAL_MANAGER".equals(jwt.getClaimAsString("global_role"))
+        || !RENTAL_STAFF_ROLES.contains(jwt.getClaimAsString("global_role"))
         || !MANAGER_CLIENT_IDS.contains(jwt.getClaimAsString("client_id"))
         || !rentalAccess(jwt)) {
       throw new AccessDeniedException("Dedicated rental manager access is required");

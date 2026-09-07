@@ -48,7 +48,6 @@ export function ManagerBookingAlertDialog() {
       accessToken={accessToken}
       subjectId={currentUser?.id}
       rentalAccess={currentUser?.rentalAccess ?? false}
-      role={currentUser?.globalRole}
     />
   )
 }
@@ -57,12 +56,10 @@ function ManagerBookingAlertContent({
   accessToken,
   subjectId,
   rentalAccess,
-  role,
 }: {
   accessToken: string | null
   subjectId: string | undefined
   rentalAccess: boolean
-  role: string | undefined
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -79,7 +76,6 @@ function ManagerBookingAlertContent({
     subjectId ?? "unknown-user",
   ] as const
   const enabled = Boolean(accessToken && rentalAccess)
-  const changesEnabled = enabled && role === "RENTAL_MANAGER"
   const alertsQuery = useQuery({
     queryKey,
     queryFn: () => getRentalBookingAlerts(accessToken!),
@@ -91,12 +87,12 @@ function ManagerBookingAlertContent({
   const changesQuery = useQuery({
     queryKey: changeQueryKey,
     queryFn: () => getRentalBookingChangeAlerts(accessToken!),
-    enabled: changesEnabled,
-    refetchInterval: changesEnabled
+    enabled,
+    refetchInterval: enabled
       ? RENTAL_BOOKING_ALERTS_REFETCH_INTERVAL_MS
       : false,
   })
-  const changes = (changesEnabled ? (changesQuery.data ?? []) : []).filter(
+  const changes = (enabled ? (changesQuery.data ?? []) : []).filter(
     (candidate) => !handledMutationIds.has(candidate.mutationId)
   )
   const alerts = (alertsQuery.data ?? []).filter(

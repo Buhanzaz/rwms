@@ -243,15 +243,14 @@ public class OrderAuthorizer {
         clientId != null && RENTAL_MANAGER_CLIENT_IDS.contains(clientId);
     boolean rentalManager = RENTAL_MANAGER_ROLE.equals(role);
     boolean administrationClient = isAdministrationClient(clientId, role, scopes);
-    if (rentalManagerClient && !rentalManager) {
-      throw new AccessDeniedException("Dedicated rental manager client requires RENTAL_MANAGER role");
-    }
-    if (rentalManager) {
+    if (rentalManagerClient) {
       Set<String> applicationScopes = new HashSet<>(scopes);
       applicationScopes.removeAll(INTERACTIVE_PROTOCOL_SCOPES);
-      if (!rentalManagerClient || !applicationScopes.equals(Set.of(RENTAL_MANAGER_SCOPE))) {
+      if (!applicationScopes.equals(Set.of(RENTAL_MANAGER_SCOPE))) {
         throw new AccessDeniedException("Dedicated rental manager client and scope are required");
       }
+    } else if (rentalManager) {
+      throw new AccessDeniedException("Dedicated rental manager client and scope are required");
     } else if (!administrationClient) {
       String requiredScope = requireWrite ? "rwms.write" : "rwms.read";
       if (!scopes.contains(requiredScope)) {
@@ -280,7 +279,7 @@ public class OrderAuthorizer {
         Set.copyOf(grants.editable()),
         global,
         local,
-        rentalManager
+        rentalManagerClient
             ? scopes.contains(RENTAL_MANAGER_SCOPE)
             : administrationClient || scopes.contains("rwms.write"),
         true);

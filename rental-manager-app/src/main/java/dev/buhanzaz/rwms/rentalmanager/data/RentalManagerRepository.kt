@@ -26,6 +26,9 @@ data class RentalManagerSession(
 
 class RentalManagerAccessException(message: String) : IllegalStateException(message)
 
+private val RENTAL_STAFF_ROLES =
+    setOf("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER")
+
 /** Uses only server-owned manager APIs; cached values in the UI are never authorization facts. */
 class RentalManagerRepository(
     private val api: RentalManagerApi,
@@ -42,11 +45,11 @@ class RentalManagerRepository(
         val user = api.currentUser()
         requireUuid(user.id, "user id")
         if (user.principalType != "USER" ||
-            user.globalRole != "RENTAL_MANAGER" ||
+            user.globalRole !in RENTAL_STAFF_ROLES ||
             !user.rentalAccess
         ) {
-            invalidateSession("Приложение доступно только менеджерам аренды.")
-            throw RentalManagerAccessException("Приложение доступно только менеджерам аренды.")
+            invalidateSession("Для приложения должен быть включён доступ к аренде.")
+            throw RentalManagerAccessException("Для приложения должен быть включён доступ к аренде.")
         }
         val grantedWarehouseIds = user.warehouseAccesses
             .filter { it.level == "EDIT" || it.level == "MANAGE" }

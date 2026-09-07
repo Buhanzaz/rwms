@@ -151,7 +151,7 @@ public class CustomerBookingChangeAlertService {
   }
 
   private static void requireManager(OrderActor actor) {
-    if (!"RENTAL_MANAGER".equals(actor.role()) || !actor.rentalAccess()) {
+    if (!actor.rentalAccess()) {
       throw new AccessDeniedException("Rental manager access is required");
     }
   }

@@ -16,25 +16,28 @@ class AssistantAuthorizerTest {
   private final AssistantAuthorizer authorizer = new AssistantAuthorizer();
 
   @Test
-  void acceptsOnlyDedicatedWebAndAndroidManagerApplications() {
-    for (String clientId :
-        List.of("rwms-rental-manager-web", "rwms-rental-manager-android")) {
-      UUID subject =
-          authorizer.requireRentalManager(
-              jwt(
-                  SUBJECT.toString(),
-                  clientId,
-                  "RENTAL_MANAGER",
-                  "USER",
-                  "openid profile rental.manage",
-                  true));
+  void acceptsRentalEntitledStaffFromDedicatedWebAndAndroidApplications() {
+    for (String role :
+        List.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER")) {
+      for (String clientId :
+          List.of("rwms-rental-manager-web", "rwms-rental-manager-android")) {
+        UUID subject =
+            authorizer.requireRentalManager(
+                jwt(
+                    SUBJECT.toString(),
+                    clientId,
+                    role,
+                    "USER",
+                    "openid profile rental.manage",
+                    true));
 
-      assertThat(subject).isEqualTo(SUBJECT);
+        assertThat(subject).isEqualTo(SUBJECT);
+      }
     }
   }
 
   @Test
-  void rejectsPanelUnknownMixedScopeAndWrongRoleTokens() {
+  void rejectsPanelUnknownMixedScopeAndCustomerTokens() {
     assertDenied(
         jwt(
             SUBJECT.toString(),
@@ -63,7 +66,15 @@ class AssistantAuthorizerTest {
         jwt(
             SUBJECT.toString(),
             "rwms-rental-manager-web",
-            "SYSTEM_ADMIN",
+            "CUSTOMER",
+            "USER",
+            "rental.manage",
+            true));
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "rwms-rental-manager-web",
+            "UNKNOWN",
             "USER",
             "rental.manage",
             true));

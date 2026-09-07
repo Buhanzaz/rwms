@@ -30,6 +30,8 @@ public class WarehouseAuthorizer {
   private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
   private static final Set<String> RENTAL_MANAGER_CLIENT_IDS =
       Set.of("rwms-rental-manager-web", "rwms-rental-manager-android");
+  private static final Set<String> RENTAL_STAFF_ROLES =
+      Set.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER");
   private final boolean developmentPublicBypass;
 
   /**
@@ -384,8 +386,8 @@ public class WarehouseAuthorizer {
     if (!isRentalManagerClient(jwt)) {
       throw new AccessDeniedException("Dedicated rental-manager client is required");
     }
-    if (!"RENTAL_MANAGER".equals(jwt.getClaimAsString("global_role"))) {
-      throw new AccessDeniedException("RENTAL_MANAGER role is required");
+    if (!RENTAL_STAFF_ROLES.contains(jwt.getClaimAsString("global_role"))) {
+      throw new AccessDeniedException("Recognized staff role is required");
     }
     if (!rentalAccess(jwt)) {
       throw new AccessDeniedException("Rental access is required");

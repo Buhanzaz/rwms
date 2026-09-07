@@ -189,7 +189,8 @@ checksum и schema валидны, прежде чем тот же relay пов�
 
 - Сервис является JWT resource server и валидирует issuer и audience.
 - Installation directory принимает обычный `warehouse.read`, exact `admin.manage` администратора
-  либо точный credential менеджера аренды с `rentalAccess=true` и только
+  либо точный credential менеджера аренды для распознанной не-клиентской роли USER с
+  `rentalAccess=true` и только
   `rental.manage`. Этот manager credential не может читать склад напрямую по UUID, включать
   неактивные склады, изменять данные, использовать support-links или private routes.
 - Public writes требуют exact user, scope и global administrator rules из

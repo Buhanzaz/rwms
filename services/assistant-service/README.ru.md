@@ -154,9 +154,9 @@ logistics-service решает, находится ли этот current order �
 Responsible manager остаётся во владении logistics и не может
 быть выбран этим request.
 
-Сервис принимает только USER tokens клиентов `rwms-rental-manager-web` и
-`rwms-rental-manager-android` с ролью `RENTAL_MANAGER`, `rentalAccess`, точным
-application scope `rental.manage` и подписанным UUID manager subject.
+Сервис принимает только tokens клиентов `rwms-rental-manager-web` и
+`rwms-rental-manager-android` для распознанной не-клиентской роли `USER` с
+`rentalAccess`, точным application scope `rental.manage` и подписанным UUID manager subject.
 Manager identity не принимается как request parameter. Lists, direct reads и
 mutations требуют этого owner; foreign ID выглядит
 отсутствующим. Private logistics request пересылает current Bearer token,

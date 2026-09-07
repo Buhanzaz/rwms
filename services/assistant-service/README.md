@@ -163,9 +163,9 @@ responsible manager remains logistics-owned and cannot be
 chosen through this request.
 
 The service accepts only `rwms-rental-manager-web` and
-`rwms-rental-manager-android` USER tokens with `RENTAL_MANAGER`, `rentalAccess`,
-the exact `rental.manage` application scope, a UUID subject and a signed UUID
-manager identity. Manager identity is never read from a request parameter. Lists,
+`rwms-rental-manager-android` tokens for a recognized non-customer `USER` role with
+`rentalAccess`, the exact `rental.manage` application scope, a UUID subject and a
+signed UUID manager identity. Manager identity is never read from a request parameter. Lists,
 direct reads and mutations require that owner; a foreign ID is
 reported as absent. A private logistics request forwards the current Bearer
 token so logistics retains its own user and warehouse authorization decision.

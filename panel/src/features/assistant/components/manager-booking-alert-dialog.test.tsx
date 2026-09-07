@@ -33,7 +33,7 @@ vi.mock("@/features/auth/use-auth", () => ({
     currentUser: {
       id: "11111111-1111-4111-8111-111111111111",
       rentalAccess: true,
-      globalRole: "RENTAL_MANAGER",
+      globalRole: "SYSTEM_ADMIN",
     },
   }),
 }))

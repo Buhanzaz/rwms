@@ -26,10 +26,12 @@ Russian version: [README.ru.md](README.ru.md).
   [auth model](src/features/auth/auth-model.ts), [user model](src/features/settings/users/model/users.ts)
   and [order permissions](src/features/orders/permissions/orders-permissions.ts).
 - `/manager/` is the separate rental-manager web surface. It accepts only the
-  dedicated `rwms-rental-manager-web` session of an authenticated `RENTAL_MANAGER`
-  user with `rentalAccess=true` and exactly `rental.manage`. Its shared warehouse
-  provider keeps only explicitly granted warehouses; an empty grant set is
-  explained without blocking chat or client lookup.
+  dedicated `rwms-rental-manager-web` session of a recognized non-customer `USER`
+  with `rentalAccess=true` and exactly `rental.manage`. The rental entitlement can
+  be combined with any staff global role; that role still controls read-only,
+  administration and warehouse-specific permissions. Its shared warehouse provider
+  keeps only explicitly granted warehouses; an empty grant set is explained without
+  blocking chat or client lookup.
 - Rental-manager notification dialogs also consume the logistics-owned
   `/api/logistics/v1/rental-booking-change-alerts` feed. Completed cancellations
   and reschedules use distinct mutation IDs, server calendar dates and exact

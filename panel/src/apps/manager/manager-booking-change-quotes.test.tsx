@@ -75,7 +75,7 @@ beforeEach(() => {
     lastName: null,
     email: null,
     principalType: "USER",
-    globalRole: "RENTAL_MANAGER",
+    globalRole: "SYSTEM_ADMIN",
     rentalAccess: true,
     warehouseAccessAll: false,
     warehouseAccesses: [{ warehouseId: item.warehouseId, level: "EDIT" }],

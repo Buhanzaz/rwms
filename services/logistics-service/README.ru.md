@@ -195,8 +195,8 @@ nullable `nextAfterVersion` продолжает чтение. Каждая repe
 У baseline нет времени совершения; его нельзя выдавать за новое физическое действие.
 
 Подмножество clients, inquiries, presentations и orders аренды также принимает только выделенный
-credential `rwms-rental-manager-web` или `rwms-rental-manager-android` с `RENTAL_MANAGER`,
-`rentalAccess=true` и ровно `rental.manage` как application scope. Поиск
+credential `rwms-rental-manager-web` или `rwms-rental-manager-android` для распознанной
+не-клиентской роли USER с `rentalAccess=true` и ровно `rental.manage` как application scope. Поиск
 бытовок и выбор склада сохраняют существующие явные grants уровня `EDIT`. Смешанные application
 scopes запрещены, а возвраты, отгрузки, перемещения и остальные операционные API по-прежнему
 требуют обычные RWMS scopes.

@@ -872,7 +872,7 @@ class CustomerBookingChangeIntegrationTest {
   }
 
   @Test
-  void everyWarehouseManagerHasIndependentReadReceiptWithoutOrderAccess() throws Exception {
+  void rentalStaffHaveIndependentReadReceiptsWithRoleBasedOrderVisibility() throws Exception {
     var replacement = offer(LocalDate.of(2026, 9, 8));
     var change =
         mutations.saveAndFlush(
@@ -894,10 +894,11 @@ class CustomerBookingChangeIntegrationTest {
                 now()));
     UUID first = UUID.randomUUID(), second = UUID.randomUUID(), key = UUID.randomUUID();
     for (UUID manager : List.of(first, second)) {
-      mvc.perform(get(ALERTS).with(manager(manager, warehouse, "VIEW")))
+      String role = manager.equals(first) ? "RENTAL_MANAGER" : "SYSTEM_ADMIN";
+      mvc.perform(get(ALERTS).with(manager(manager, warehouse, "VIEW", role)))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.length()").value(1))
-          .andExpect(jsonPath("$[0].canOpenOrder").value(false));
+          .andExpect(jsonPath("$[0].canOpenOrder").value(role.equals("SYSTEM_ADMIN")));
     }
     String ack = ALERTS + "/" + change.getId() + "/acknowledgement";
     for (int retry = 0; retry < 2; retry++) {
@@ -911,13 +912,15 @@ class CustomerBookingChangeIntegrationTest {
     }
     mvc.perform(get(ALERTS).with(manager(first, warehouse, "VIEW")))
         .andExpect(jsonPath("$.length()").value(0));
-    mvc.perform(get(ALERTS).with(manager(second, warehouse, "VIEW")))
+    mvc.perform(get(ALERTS).with(manager(second, warehouse, "VIEW", "SYSTEM_ADMIN")))
         .andExpect(jsonPath("$.length()").value(1));
-    mvc.perform(get(ALERTS).with(manager(second, UUID.randomUUID(), "VIEW")))
+    mvc.perform(
+            get(ALERTS)
+                .with(manager(second, UUID.randomUUID(), "VIEW", "SYSTEM_ADMIN")))
         .andExpect(jsonPath("$.length()").value(0));
     mvc.perform(
             post(ack)
-                .with(manager(second, UUID.randomUUID(), "VIEW"))
+                .with(manager(second, UUID.randomUUID(), "VIEW", "SYSTEM_ADMIN"))
                 .header("Idempotency-Key", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"expectedVersion\":0}"))
@@ -1099,13 +1102,18 @@ class CustomerBookingChangeIntegrationTest {
   }
 
   private JwtRequestPostProcessor manager(UUID id, UUID warehouseId, String level) {
+    return manager(id, warehouseId, level, "RENTAL_MANAGER");
+  }
+
+  private JwtRequestPostProcessor manager(
+      UUID id, UUID warehouseId, String level, String role) {
     return jwt()
         .jwt(
             token ->
                 token
                     .subject(id.toString())
                     .claim("principal_type", "USER")
-                    .claim("global_role", "RENTAL_MANAGER")
+                    .claim("global_role", role)
                     .claim("client_id", "rwms-rental-manager-web")
                     .claim("scope", "rental.manage")
                     .claim("rentalAccess", true)

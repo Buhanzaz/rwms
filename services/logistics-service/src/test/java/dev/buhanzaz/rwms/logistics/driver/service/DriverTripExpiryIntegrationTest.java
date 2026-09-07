@@ -89,11 +89,11 @@ class DriverTripExpiryIntegrationTest {
     var manager =
         new OrderActor(
             UUID.randomUUID(),
-            "RENTAL_MANAGER",
-            "Manager",
+            "SYSTEM_ADMIN",
+            "System administrator",
             java.util.Set.of(warehouse),
             java.util.Set.of(),
-            false,
+            true,
             false,
             false,
             true);

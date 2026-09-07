@@ -16,13 +16,20 @@ import {
 } from "@/features/orders/api/order-booking-change-quotes-api"
 import { BookingChangeQuotes } from "@/features/orders/components/order-booking-change-quotes-card"
 
+const RENTAL_WRITE_ROLES = new Set([
+  "SYSTEM_ADMIN",
+  "WMS_ADMIN",
+  "WAREHOUSE_MANAGER",
+  "RENTAL_MANAGER",
+])
+
 /** Dedicated fee intent, intentionally independent of full-order visibility. */
 export function ManagerBookingChangeQuotes() {
   const { accessToken, currentUser } = useAuth()
   if (
     !accessToken ||
     !currentUser?.rentalAccess ||
-    currentUser.globalRole !== "RENTAL_MANAGER" ||
+    !RENTAL_WRITE_ROLES.has(currentUser.globalRole) ||
     !(
       currentUser.warehouseAccessAll ||
       currentUser.warehouseAccesses.some((grant) =>

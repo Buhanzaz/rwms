@@ -19,17 +19,20 @@ class WarehouseAuthorizerTest {
   void dedicatedRentalManagerClientsMayReadTheWarehouseDirectory() {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
 
-    for (String clientId :
-        List.of("rwms-rental-manager-web", "rwms-rental-manager-android")) {
-      Jwt manager =
-          jwt(
-              "USER",
-              "openid profile offline_access rental.manage",
-              "RENTAL_MANAGER",
-              clientId);
-      authorizer.requireWarehouseDirectoryRead(manager);
-      assertThatThrownBy(() -> authorizer.requireWarehouseRead(manager))
-          .isInstanceOf(AccessDeniedException.class);
+    for (String role :
+        List.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER")) {
+      for (String clientId :
+          List.of("rwms-rental-manager-web", "rwms-rental-manager-android")) {
+        Jwt manager =
+            jwt(
+                "USER",
+                "openid profile offline_access rental.manage",
+                role,
+                clientId);
+        authorizer.requireWarehouseDirectoryRead(manager);
+        assertThatThrownBy(() -> authorizer.requireWarehouseRead(manager))
+            .isInstanceOf(AccessDeniedException.class);
+      }
     }
   }
 
@@ -40,7 +43,8 @@ class WarehouseAuthorizerTest {
     for (Jwt invalid :
         new Jwt[] {
           jwt("USER", "rental.manage", "RENTAL_MANAGER", "other-client"),
-          jwt("USER", "rental.manage", "VIEWER", "rwms-rental-manager-web"),
+          jwt("USER", "rental.manage", "CUSTOMER", "rwms-rental-manager-web"),
+          jwt("USER", "rental.manage", "UNKNOWN", "rwms-rental-manager-web"),
           jwt("USER", "warehouse.read", "RENTAL_MANAGER", "rwms-rental-manager-web"),
           jwt(
               "USER",

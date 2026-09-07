@@ -142,7 +142,7 @@ function ManagerLayout() {
             </Alert>
           ) : null}
           <ManagerBookingChangeQuotes />
-          {accessToken && currentUser?.rentalAccess && currentUser.globalRole === "RENTAL_MANAGER" ? (
+          {accessToken && currentUser?.rentalAccess ? (
             <ExpiredTripAlert
               accessToken={accessToken}
               subjectId={currentUser.id}

@@ -5,8 +5,21 @@ import { AuthCallbackPage } from "@/features/auth/auth-callback-page"
 import { RENTAL_MANAGER_AUTH_CONFIG } from "@/features/auth/auth-config"
 import { AuthProvider } from "@/features/auth/auth-provider"
 import { AuthenticatedApplication } from "@/features/auth/authenticated-application"
+import type { CurrentUser } from "@/features/auth/auth-model"
 
 const MANAGER_APPLICATION_BASE_PATH = "/manager"
+
+const RENTAL_STAFF_ROLES = new Set<CurrentUser["globalRole"]>([
+  "SYSTEM_ADMIN",
+  "WMS_ADMIN",
+  "WAREHOUSE_MANAGER",
+  "RENTAL_MANAGER",
+  "VIEWER",
+])
+
+export function canUseManagerApplication(user: CurrentUser) {
+  return user.rentalAccess && RENTAL_STAFF_ROLES.has(user.globalRole)
+}
 
 export function ManagerRoot() {
   return (
@@ -25,8 +38,8 @@ export function ManagerRoot() {
           element={
             <AuthenticatedApplication
               applicationBasePath={MANAGER_APPLICATION_BASE_PATH}
-              isAllowed={(user) => user.globalRole === "RENTAL_MANAGER"}
-              accessDeniedMessage="Приложение менеджеров доступно только менеджерам аренды."
+              isAllowed={canUseManagerApplication}
+              accessDeniedMessage="Для приложения менеджеров должен быть включён доступ к аренде."
             >
               <ManagerApp />
             </AuthenticatedApplication>

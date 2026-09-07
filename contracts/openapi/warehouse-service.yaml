@@ -7,7 +7,7 @@ info:
     JWT with either warehouse.read, or SYSTEM_ADMIN/WMS_ADMIN
     with exactly one application scope admin.manage after protocol scopes, or the exact
     dedicated rental-manager credential
-    (rwms-rental-manager-web/android, RENTAL_MANAGER, rentalAccess=true,
+    (rwms-rental-manager-web/android, recognized non-customer USER role, rentalAccess=true,
     rental.manage only). The listing is independent of warehouse_access grants.
     This approved warehouse directory includes name, city and address.
     An object can independently be production and/or a primary RWMS warehouse. A
@@ -32,7 +32,7 @@ paths:
         Requires USER. Authority is either warehouse.read,
         SYSTEM_ADMIN/WMS_ADMIN with exactly one application scope admin.manage after
         protocol scopes, or the exact dedicated rental-manager credential
-        (rwms-rental-manager-web/android, RENTAL_MANAGER, rentalAccess=true,
+        (rwms-rental-manager-web/android, recognized non-customer USER role, rentalAccess=true,
         rental.manage only). This is the approved installation directory:
         warehouse_access grants do not filter it. The default includes ACTIVE and DRAINING warehouses; includeInactive
         is SYSTEM_ADMIN-only.

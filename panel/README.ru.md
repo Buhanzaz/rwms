@@ -27,10 +27,11 @@ English version: [README.md](README.md).
   [user model](src/features/settings/users/model/users.ts) и
   [order permissions](src/features/orders/permissions/orders-permissions.ts).
 - `/manager/` — отдельная web-поверхность менеджера аренды. Она принимает только
-  выделенную сессию `rwms-rental-manager-web` аутентифицированного пользователя
-  `RENTAL_MANAGER` с `rentalAccess=true` и ровно `rental.manage`. Общий warehouse provider
-  оставляет только явно назначенные склады; пустой набор объясняется, не блокируя
-  чат и поиск клиентов.
+  выделенную сессию `rwms-rental-manager-web` распознанного не-клиентского `USER`
+  с `rentalAccess=true` и ровно `rental.manage`. Доступ к аренде можно совмещать с
+  любой глобальной ролью сотрудника; эта роль по-прежнему определяет read-only,
+  административные и складские полномочия. Общий warehouse provider оставляет только
+  явно назначенные склады; пустой набор объясняется, не блокируя чат и поиск клиентов.
 - Диалог уведомлений менеджера аренды также читает принадлежащую логистике ленту
   `/api/logistics/v1/rental-booking-change-alerts`. Завершённые отмены и переносы
   различаются по mutation ID, показывают календарные даты сервера и точные строки

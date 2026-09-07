@@ -189,8 +189,8 @@ production profile is combined with a local profile, production safety wins.
 
 - The service is a JWT resource server and validates issuer and audience.
 - The installation directory list accepts ordinary `warehouse.read`, exact administrator
-  `admin.manage`, or the exact dedicated rental-manager credential with `rentalAccess=true` and
-  only `rental.manage`. That manager credential cannot read a warehouse UUID directly, include
+  `admin.manage`, or the exact dedicated rental-manager credential for a recognized non-customer
+  USER role with `rentalAccess=true` and only `rental.manage`. That manager credential cannot read a warehouse UUID directly, include
   inactive warehouses, mutate, use support links, or enter private routes.
 - Public writes require the exact user, scope, and global administrator rules
   implemented by `WarehouseAuthorizer`.

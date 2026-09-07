@@ -48,9 +48,23 @@ class RentalManagerRepositoryTest {
     }
 
     @Test
-    fun `wrong role invalidates local session before data access`() = runTest {
+    fun `rental entitled system administrator can load the manager session`() = runTest {
         val api = FakeRentalManagerApi(
-            user = managerUser(emptyList()).copy(globalRole = "WMS_MANAGER"),
+            user = managerUser(emptyList()).copy(globalRole = "SYSTEM_ADMIN"),
+            warehouseItems = emptyList(),
+        )
+        val invalidations = mutableListOf<String>()
+
+        val session = repository(api, invalidations).loadSession()
+
+        assertThat(session.user.globalRole).isEqualTo("SYSTEM_ADMIN")
+        assertThat(invalidations).isEmpty()
+    }
+
+    @Test
+    fun `non staff role invalidates local session before data access`() = runTest {
+        val api = FakeRentalManagerApi(
+            user = managerUser(emptyList()).copy(globalRole = "CUSTOMER"),
             warehouseItems = emptyList(),
         )
         val invalidations = mutableListOf<String>()
@@ -58,7 +72,8 @@ class RentalManagerRepositoryTest {
         val failure = runCatching { repository(api, invalidations).loadSession() }.exceptionOrNull()
 
         assertThat(failure).isInstanceOf(RentalManagerAccessException::class.java)
-        assertThat(invalidations).containsExactly("Приложение доступно только менеджерам аренды.")
+        assertThat(invalidations)
+            .containsExactly("Для приложения должен быть включён доступ к аренде.")
         assertThat(api.warehouseCalls).isEqualTo(0)
     }
 

@@ -392,7 +392,7 @@ Evidence:
 `rental-manager-app/` is the native Android consumer for the dedicated
 `rwms-rental-manager-android` OAuth client. It uses only the public gateway and
 the exact `rental.manage` application scope. Before exposing client or order
-data it validates the authoritative `USER`/`RENTAL_MANAGER` subject,
+data it validates an authoritative recognized non-customer `USER` subject,
 `rentalAccess=true` and live warehouses present in explicit active
 `EDIT`/`MANAGE` grants. Server
 `permissions.canEdit`, document versions and idempotency receipts remain

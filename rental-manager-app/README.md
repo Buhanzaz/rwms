@@ -9,8 +9,8 @@ Russian version: [README.ru.md](README.ru.md).
 ## Current working slice
 
 - Native login through the public gateway with OAuth Authorization Code + PKCE S256.
-- Server verification of `USER`, `RENTAL_MANAGER`, `rentalAccess=true`, and explicit warehouse
-  grants.
+- Server verification of a recognized non-customer `USER` role, `rentalAccess=true`, and explicit
+  warehouse grants. The rental entitlement can be combined with any staff global role.
 - Warehouse directory for the single RWMS installation with a visible empty-assignment state.
 - Real logistics-service client search, pagination, detail, and idempotent creation.
 - Real order search, pagination, detail, draft creation, and version-fenced editable fields.
