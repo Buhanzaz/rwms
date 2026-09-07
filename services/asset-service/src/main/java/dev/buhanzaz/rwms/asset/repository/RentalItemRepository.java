@@ -14,6 +14,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -21,6 +22,39 @@ import org.springframework.data.repository.query.Param;
  * Spring Data repository for service-local rental item persistence.
  */
 public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
+  /** Inserts an inventory-reserved UUID exactly instead of invoking the entity UUID generator. */
+  @Modifying
+  @Query(
+      value =
+          """
+          insert into rental_item (
+            id, version, warehouse_id, display_canonical_number, identity_match_key, status,
+            transfer_origin_status, cabin_type_id, cabin_dimension_id, cabin_finishing_id,
+            cabin_category_id, category, linoleum, general_comment, passport_json, tags_json,
+            created_at, updated_at
+          ) values (
+            :id, 0, :warehouseId, :number, :identityMatchKey, :status,
+            null, :rentalTypeId, :dimensionId, :finishingId,
+            :categoryId, :category, :linoleum, null, :passportJson, :tagsJson,
+            current_timestamp, current_timestamp
+          )
+          """,
+      nativeQuery = true)
+  int insertInventorySource(
+      @Param("id") UUID id,
+      @Param("warehouseId") UUID warehouseId,
+      @Param("number") String number,
+      @Param("identityMatchKey") String identityMatchKey,
+      @Param("status") String status,
+      @Param("rentalTypeId") UUID rentalTypeId,
+      @Param("dimensionId") UUID dimensionId,
+      @Param("finishingId") UUID finishingId,
+      @Param("categoryId") UUID categoryId,
+      @Param("category") String category,
+      @Param("linoleum") Boolean linoleum,
+      @Param("passportJson") String passportJson,
+      @Param("tagsJson") String tagsJson);
+
   boolean existsByRentalTypeId(UUID rentalTypeId);
 
   boolean existsByDimensionId(UUID dimensionId);

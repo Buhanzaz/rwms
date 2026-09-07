@@ -284,6 +284,17 @@ remains `NOT_INSPECTED` and in an idle/save-ready source state. One `409
 INVENTORY_VERSION_CONFLICT` with detail `Inventory revision is stale` triggers
 a new read/rebase/save cycle; a saved/repeated or departed finding is not rebased over server data.
 
+Inventory source creation registers an isolated proposal with a permanent `inventoryId:findingId`
+identity and reserved asset UUID. No real cabin, balance or created event exists until completed
+publication, so warehouse operations and customer availability do not include the proposal.
+Private inventory reads can address it explicitly. An added proposal must be inspected before
+disposition review; it cannot become an automatic missing-cabin write-off. In the completion
+transaction, inventory freezes its exact final-plan asset outcome into the furniture reconciliation
+intent, even for an empty furniture catalog. Asset-service atomically materializes the final status,
+passport and contents before per-finding publication continues. A conflicting real cabin number
+blocks that transaction without overwriting warehouse data. Cancelled proposals remain isolated;
+real cabins created by earlier versions are not automatically removed or hidden.
+
 When a MANAGE user selects **Recalculate session changes** on the panel finish surface, the panel
 first refuses to run beside a dirty furniture/final-plan draft or another finish command. It sends
 the displayed session revision and a new idempotency key to inventory-service. The owner checks that

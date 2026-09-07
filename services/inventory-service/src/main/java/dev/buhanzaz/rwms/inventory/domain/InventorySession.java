@@ -14,6 +14,7 @@ import jakarta.persistence.Version;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -217,6 +218,9 @@ public class InventorySession {
     completedByActorRef = requireActor(actorRef);
     completedAt = now();
     if (completedAt.isBefore(validatedAt)) completedAt = validatedAt;
+    // PostgreSQL stores microseconds. Freeze that exact fence before building recovery requests;
+    // rounding up keeps completion at or after validation, including higher-precision callers.
+    completedAt = completedAt.plusNanos(999).truncatedTo(ChronoUnit.MICROS);
     lifecycle = SessionLifecycle.COMPLETED;
   }
 

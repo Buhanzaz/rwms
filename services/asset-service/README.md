@@ -171,6 +171,17 @@ order-wide and is not released during replacement.
 
 ## Completed inventory authority
 
+`POST /api/internal/asset/v1/inventory/source-assets` registers a permanent isolated proposal
+and stable asset UUID. It does not persist a `RentalItem`, characteristics, balances or created
+event. Only caller-addressed private inventory snapshots/validation/furniture reads can expose
+the proposal; ordinary warehouse, rental and customer reads cannot see it. Completed furniture
+reconciliation accepts optional `sourceOutcomes`, each carrying the exact final-plan asset outcome.
+It materializes matching proposals with their final `FREE`, `REPAIR` or `CAPITAL_REPAIR` status,
+passport and reviewed furniture atomically. A number taken by normal warehouse operations causes
+a conflict without overwriting that cabin. Permanent source replay keeps the original registration
+response, and requests without source outcomes retain the previous reconciliation fingerprint.
+Previously materialized source cabins remain real cabins; no live-data conversion is automatic.
+
 `PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` accepts only the
 exact `inventory-service` credential and immutable completed-plan evidence. For a found,
 non-terminal cabin, the latest completed inventory is authoritative: a first or newer `FREE`,

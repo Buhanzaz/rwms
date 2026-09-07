@@ -50,6 +50,22 @@ public class InventoryAssetBoundaryRegistrar {
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void registerSourceOperation(
+      InventoryAssetSourceId id,
+      String requestFingerprint,
+      UUID reservedRentalItemId,
+      String sourcePlan,
+      String proposalResponse) {
+    sourceOperations.insertProposal(
+        id.getInventoryId(),
+        id.getFindingId(),
+        requestFingerprint,
+        reservedRentalItemId,
+        sourcePlan,
+        proposalResponse);
+  }
+
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void claimNumber(
       UUID warehouseId, String identityMatchKey, InventoryAssetSourceId sourceId) {
     if (numberClaims.existsByWarehouseIdAndIdentityMatchKey(warehouseId, identityMatchKey)) {

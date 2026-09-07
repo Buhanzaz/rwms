@@ -30,6 +30,21 @@ class InventoryDomainStateMachineTest {
   }
 
   @Test
+  void completionUsesOneDatabasePrecisionFenceWithoutPrecedingValidation() {
+    InventorySession current = session();
+    OffsetDateTime validation = OffsetDateTime.now(ZoneOffset.UTC);
+    current.complete("1".repeat(64), "2".repeat(64), validation, ACTOR);
+    assertThat(current.getCompletedAt().getNano() % 1_000).isZero();
+    assertThat(current.getCompletedAt()).isAfterOrEqualTo(validation);
+
+    InventorySession future = session();
+    OffsetDateTime preciseValidation =
+        OffsetDateTime.now(ZoneOffset.UTC).plusDays(1).withNano(123_456_789);
+    future.complete("1".repeat(64), "2".repeat(64), preciseValidation, ACTOR);
+    assertThat(future.getCompletedAt()).isEqualTo(preciseValidation.withNano(123_457_000));
+  }
+
+  @Test
   void registryConflictResolutionCanInvalidateFurnitureReviewWithoutChangingLifecycle() {
     InventorySession session = session();
 

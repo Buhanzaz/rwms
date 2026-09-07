@@ -263,9 +263,9 @@ class AssetJpaValidationIntegrationTest {
   }
 
   @Test
-  void inventorySourceNumberClaimsAreIndependentAcrossWarehouses() {
+  void isolatedInventorySourceProposalsDoNotClaimNumbersAcrossSessions() {
     UUID firstWarehouseId = UUID.randomUUID();
-    UUID secondWarehouseId = UUID.randomUUID();
+    UUID secondWarehouseId = firstWarehouseId;
     String number = "INVLOCAL-" + UUID.randomUUID();
     InventorySourceAssetRequest firstRequest = new InventorySourceAssetRequest(
         UUID.randomUUID(), UUID.randomUUID(), firstWarehouseId, number,
@@ -283,18 +283,16 @@ class AssetJpaValidationIntegrationTest {
         select count(*) from inventory_asset_number_claim
         where identity_match_key=? and warehouse_id in (?, ?)
         """, Integer.class, RentalItem.identityMatchKey(number),
-        firstWarehouseId, secondWarehouseId)).isEqualTo(2);
+        firstWarehouseId, secondWarehouseId)).isZero();
     assertThat(inventoryAssetService.resolveNumber(
-        new InventoryNumberResolutionRequest(firstWarehouseId, number)).asset().assetId())
-        .isEqualTo(first.response().asset().assetId());
+        new InventoryNumberResolutionRequest(firstWarehouseId, number)).found()).isFalse();
     assertThat(inventoryAssetService.resolveNumber(
-        new InventoryNumberResolutionRequest(secondWarehouseId, number)).asset().assetId())
-        .isEqualTo(second.response().asset().assetId());
+        new InventoryNumberResolutionRequest(secondWarehouseId, number)).found()).isFalse();
   }
 
   @Test
   @Transactional
-  void inventorySourceIdentityReplaysPermanentlyAndCreatesFreeNormalAssetFact() {
+  void inventorySourceIdentityReplaysPermanentlyWithoutCreatingWarehouseState() {
     int ordinaryIdempotencyBefore = jdbc.queryForObject(
         "select count(*) from asset_idempotency_record", Integer.class);
     UUID inventoryId = UUID.randomUUID();
@@ -324,10 +322,15 @@ class AssetJpaValidationIntegrationTest {
     assertThat(created.response().asset().identityMatchKey()).isEqualTo("ИНВ901");
     assertThat(jdbc.queryForObject(
         "select count(*) from inventory_asset_source where inventory_id=? and finding_id=?",
-        Integer.class, inventoryId, findingId)).isEqualTo(1);
+        Integer.class, inventoryId, findingId)).isZero();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from rental_item where id=?",
+        Integer.class, created.response().asset().assetId())).isZero();
     assertThat(jdbc.queryForObject(
         "select count(*) from domain_event where aggregate_id=? and event_type='asset.rental-item.created.v1'",
-        Integer.class, created.response().asset().assetId().toString())).isEqualTo(1);
+        Integer.class, created.response().asset().assetId().toString())).isZero();
+    assertThat(inventoryAssetService.currentAssetSnapshot(created.response().asset().assetId()).assetId())
+        .isEqualTo(created.response().asset().assetId());
     assertThat(jdbc.queryForObject("select count(*) from asset_idempotency_record", Integer.class))
         .isEqualTo(ordinaryIdempotencyBefore);
 
@@ -374,22 +377,16 @@ class AssetJpaValidationIntegrationTest {
         "Пластиковое окно, Электрика КК");
 
     var created = inventoryAssetService.createSourceAsset(legacy);
-    RentalItem saved = rentalItems.findById(created.response().asset().assetId()).orElseThrow();
+    var proposal = inventoryAssetService.currentAssetSnapshot(created.response().asset().assetId());
 
     assertThat(created.replayed()).isFalse();
-    assertThat(saved.getRentalTypeId()).isEqualTo(TYPE_BK_1);
-    assertThat(saved.getDimensionId()).isEqualTo(DIMENSION_24_X_6);
-    assertThat(saved.getFinishingId()).isEqualTo(FINISHING_DVP);
-    assertThat(saved.getCategory()).isEqualTo(CATEGORY_NEW);
-    assertThat(
-            jdbc.query(
-                """
-                select characteristic_id from rental_item_characteristic
-                where rental_item_id=? order by sort_order
-                """,
-                (resultSet, rowNumber) -> resultSet.getObject("characteristic_id", UUID.class),
-                saved.getId()))
-        .containsExactly(plasticWindow().getFirst(), CHARACTERISTIC_ELECTRICS_KK);
+    assertThat(proposal.passportSnapshot())
+        .containsEntry("rentalType", "БК-1")
+        .containsEntry("dimensions", "2.4x6")
+        .containsEntry("finishing", "ДВП")
+        .containsEntry("category", CATEGORY_NEW)
+        .containsEntry("characteristics", List.of("Пластиковое окно", "Электрика КК"));
+    assertThat(rentalItems.findById(created.response().asset().assetId())).isEmpty();
 
     InventorySourceAssetRequest canonical = new InventorySourceAssetRequest(
         inventoryId,
@@ -412,7 +409,7 @@ class AssetJpaValidationIntegrationTest {
         "select count(*) from inventory_asset_source where inventory_id=? and finding_id=?",
         Integer.class,
         inventoryId,
-        findingId)).isEqualTo(1);
+        findingId)).isZero();
   }
 
   @Test
@@ -437,15 +434,17 @@ class AssetJpaValidationIntegrationTest {
         " ,   , ");
 
     var created = inventoryAssetService.createSourceAsset(request);
-    RentalItem saved = rentalItems.findById(created.response().asset().assetId()).orElseThrow();
+    var proposal = inventoryAssetService.currentAssetSnapshot(created.response().asset().assetId());
 
-    assertThat(saved.getRentalTypeId()).isEqualTo(TYPE_BK_1);
-    assertThat(saved.getDimensionId()).isEqualTo(DIMENSION_24_X_6);
-    assertThat(saved.getFinishingId()).isEqualTo(FINISHING_DVP);
+    assertThat(proposal.passportSnapshot())
+        .containsEntry("rentalType", "БК-1")
+        .containsEntry("dimensions", "2.4x6")
+        .containsEntry("finishing", "ДВП")
+        .containsEntry("characteristics", List.of());
     assertThat(jdbc.queryForObject(
         "select count(*) from rental_item_characteristic where rental_item_id=?",
         Integer.class,
-        saved.getId())).isZero();
+        created.response().asset().assetId())).isZero();
   }
 
   @Test
@@ -618,7 +617,7 @@ class AssetJpaValidationIntegrationTest {
   }
 
   @Test
-  void concurrentDifferentSourcesWithOneNumberProduceOneAssetAndOneDomainConflict()
+  void differentInventorySessionsCanReserveTheSameUnmaterializedNumber()
       throws Exception {
     UUID warehouseId = UUID.randomUUID();
     String number = "RACE-" + UUID.randomUUID();
@@ -633,27 +632,24 @@ class AssetJpaValidationIntegrationTest {
       var first = executor.submit(() -> inventoryAssetService.createSourceAsset(firstRequest));
       var second = executor.submit(() -> inventoryAssetService.createSourceAsset(secondRequest));
       int successes = 0;
-      int conflicts = 0;
       for (var future : List.of(first, second)) {
         try {
           future.get(30, TimeUnit.SECONDS);
           successes++;
         } catch (ExecutionException exception) {
-          assertThat(exception.getCause()).isInstanceOf(AssetConflictException.class);
-          conflicts++;
+          throw new AssertionError(exception.getCause());
         }
       }
 
-      assertThat(successes).isEqualTo(1);
-      assertThat(conflicts).isEqualTo(1);
+      assertThat(successes).isEqualTo(2);
       assertThat(jdbc.queryForObject(
           "select count(*) from rental_item where identity_match_key=?", Integer.class,
-          RentalItem.identityMatchKey(number))).isEqualTo(1);
+          RentalItem.identityMatchKey(number))).isZero();
       assertThat(jdbc.queryForObject("""
           select count(*) from inventory_asset_source
           where (inventory_id=? and finding_id=?) or (inventory_id=? and finding_id=?)
           """, Integer.class, firstRequest.inventoryId(), firstRequest.findingId(),
-          secondRequest.inventoryId(), secondRequest.findingId())).isEqualTo(1);
+          secondRequest.inventoryId(), secondRequest.findingId())).isZero();
     } finally {
       executor.shutdownNow();
     }

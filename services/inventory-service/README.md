@@ -77,6 +77,16 @@ malformed-response failures remain fail-closed and are not retried.
 
 ## Authoritative completed outcome and history recovery
 
+New inventory cabins are isolated proposals until completion. The permanent
+`inventoryId:findingId` source registration reserves a stable asset UUID but creates no warehouse
+cabin, equipment balance or rental availability. Inspection status belongs to the session. Before
+completion review, every `ADDED_NEW`/`ADDED_USED` proposal must be inspected; it cannot be inferred
+missing and automatically written off. Completion freezes each local added finding's exact asset
+outcome into the durable furniture reconciliation request, including when there is no furniture.
+Asset-service materializes the final status, passport and reviewed contents in one transaction;
+ordinary per-finding publication then delivers the remaining outcomes. Cancellation never
+materializes the proposal. Existing cabins created by earlier versions are not deleted or hidden.
+
 Every completed final-plan finding has one durable publication intent, including findings without
 maintenance work. After furniture reconciliation succeeds, the recovery scheduler first applies
 the exact completed finding through asset-service: no work means `FREE`, ordinary work means

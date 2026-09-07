@@ -572,9 +572,14 @@ class InventoryInspectionApiContractIntegrationTest {
         .isEqualTo("CABINS");
   }
 
-  @Test
-  void emptyConfirmedFurnitureReviewCompletesWithoutReconciliationIntent() throws Exception {
+  @ParameterizedTest(name = "empty furniture review for {0} materializes only added sources")
+  @EnumSource(
+      value = FindingOrigin.class,
+      names = {"UNEXPECTED_EXISTING", "ADDED_NEW", "ADDED_USED"})
+  void emptyConfirmedFurnitureReviewMaterializesOnlyAddedSources(FindingOrigin origin)
+      throws Exception {
     Fixture fixture = fixture("READY");
+    jdbc.update("update inventory_finding set origin=? where id=?", origin.name(), fixture.findingId());
     ReviewFixture review = confirmEmptyFurnitureReview(fixture, "6".repeat(64));
     FinalPlanFixture finalPlan = prepareFinalPlan(fixture, review.sessionRevision());
     ObjectNode previewRequest = mapper.createObjectNode();
@@ -612,19 +617,59 @@ class InventoryInspectionApiContractIntegrationTest {
             completeRequest.toString());
 
     assertThat(completed.statusCode()).withFailMessage(completed.body()).isEqualTo(200);
+    boolean sourceRequired = origin != FindingOrigin.UNEXPECTED_EXISTING;
     assertThat(
             mapper
                 .readTree(completed.body())
                 .required("furnitureReconciliationState")
                 .asText())
-        .isEqualTo("NOT_REQUIRED");
+        .isEqualTo(sourceRequired ? "PENDING" : "NOT_REQUIRED");
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from inventory_furniture_reconciliation_intent where inventory_id=?",
                 Integer.class,
                 fixture.inventoryId()))
-        .isZero();
+        .isEqualTo(sourceRequired ? 1 : 0);
     verify(dependencies, never()).reconcileFurniture(any(), any(), any());
+    if (sourceRequired) {
+      JsonNode frozenRequest =
+          mapper.readTree(
+              jdbc.queryForObject(
+                  "select request_body::text from inventory_furniture_reconciliation_intent where inventory_id=?",
+                  String.class,
+                  fixture.inventoryId()));
+      assertThat(frozenRequest.required("items")).isEmpty();
+      assertThat(frozenRequest.required("sourceOutcomes")).hasSize(1);
+      JsonNode source = frozenRequest.required("sourceOutcomes").get(0);
+      assertThat(source.required("findingId").asText()).isEqualTo(fixture.findingId().toString());
+      JsonNode outcome = source.required("outcome");
+      assertThat(outcome.required("assetId").asText()).isEqualTo(fixture.assetId().toString());
+      assertThat(outcome.required("warehouseId").asText()).isEqualTo(fixture.warehouseId().toString());
+      assertThat(outcome.required("desiredStatus").asText()).isEqualTo("FREE");
+      assertThat(outcome.required("finalPlanVersion").asLong()).isEqualTo(finalPlan.version());
+      assertThat(outcome.required("finalPlanSha256").asText()).isEqualTo(finalPlan.sha256());
+      assertThat(outcome.required("findingRevision").asLong()).isEqualTo(review.findingRevision());
+      assertThat(outcome.required("passportObservation").required("presence").asText())
+          .isEqualTo("ABSENT");
+      assertThat(OffsetDateTime.parse(outcome.required("inventoryCompletedAt").asText()))
+          .isEqualTo(
+              jdbc.queryForObject(
+                  "select completed_at from inventory_session where id=?",
+                  OffsetDateTime.class,
+                  fixture.inventoryId()));
+
+      inventory.recoverFurnitureReconciliations();
+      verify(dependencies)
+          .reconcileFurniture(
+              org.mockito.ArgumentMatchers.eq(fixture.inventoryId()),
+              any(),
+              argThat(
+                  request ->
+                      request.items().isEmpty()
+                          && request.sourceOutcomes().size() == 1
+                          && request.sourceOutcomes().getFirst().findingId().equals(fixture.findingId())
+                          && request.sourceOutcomes().getFirst().outcome().equals(outcome)));
+    }
   }
 
   @Test

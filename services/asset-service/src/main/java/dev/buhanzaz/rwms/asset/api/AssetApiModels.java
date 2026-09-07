@@ -855,7 +855,31 @@ public final class AssetApiModels {
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String expectedSnapshotSha256,
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String reviewSha256,
       @NotNull @Size(max = 1000)
-      List<@NotNull @Valid InventoryFurnitureReconciliationItem> items) {}
+      List<@NotNull @Valid InventoryFurnitureReconciliationItem> items,
+      @Size(max = 5000)
+      List<@NotNull @Valid InventorySourceOutcomeCandidate> sourceOutcomes) {
+    public InventoryFurnitureReconciliationRequest {
+      sourceOutcomes = sourceOutcomes == null ? List.of() : List.copyOf(sourceOutcomes);
+    }
+
+    public InventoryFurnitureReconciliationRequest(
+        UUID warehouseId,
+        String expectedSnapshotSha256,
+        String reviewSha256,
+        List<InventoryFurnitureReconciliationItem> items) {
+      this(warehouseId, expectedSnapshotSha256, reviewSha256, items, List.of());
+    }
+
+    @AssertTrue(message = "furniture items or inventory source outcomes are required")
+    public boolean hasReconciliationWork() {
+      return (items != null && !items.isEmpty()) || !sourceOutcomes.isEmpty();
+    }
+  }
+
+  /** Completed LOCAL outcome candidate for a source reserved by this inventory finding. */
+  public record InventorySourceOutcomeCandidate(
+      @NotNull UUID findingId, @NotNull @Valid InventoryOutcomeRequest outcome) {}
+
   public record InventoryFurnitureReconciliationItem(
       @NotNull UUID equipmentId,
       @NotNull @Min(0) Long catalogVersion,

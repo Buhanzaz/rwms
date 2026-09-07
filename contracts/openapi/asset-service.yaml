@@ -2026,7 +2026,9 @@ paths:
       description: >-
         Requires SERVICE inventory-service with exactly asset.inventory. Reads one authoritative
         current inventory-safe asset snapshot, including its current tenant and cabin contents;
-        local general comments and manual notes are never exposed.
+        local general comments and manual notes are never exposed. A caller-addressed UUID reserved
+        by inventory source registration returns its immutable inventory-only proposal (version zero,
+        proposed FREE status and empty contents), not a persisted or live warehouse asset.
       responses:
         '200': { description: Current inventory-safe asset snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryAssetCurrentSnapshot' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -2067,7 +2069,10 @@ paths:
   /api/internal/asset/v1/inventory/validations:
     post:
       operationId: validateInventoryAssets
-      description: Point-in-time read snapshot only; it creates no validation token, lease or fence.
+      description: >-
+        Point-in-time read snapshot only; it creates no validation token, lease or fence. Requested
+        reserved source UUIDs validate as their immutable inventory-only proposals and do not imply
+        that a live warehouse asset exists.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryValidationRequest' } } } }
       responses:
         '200': { description: Deterministically ordered validation snapshot and digest., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryValidation' } } } }
@@ -2080,7 +2085,9 @@ paths:
         Requires SERVICE inventory-service with exactly asset.inventory. Returns every active
         FURNITURE catalogue position, stock and only the requested cabin quantities in canonical
         order. An empty assetIds list is a stock-only snapshot with empty cabins arrays.
-        snapshotSha256 covers the complete returned current state.
+        Caller-selected reserved source UUIDs are represented only inside this inventory response as
+        proposed FREE cabins with version and quantities zero. snapshotSha256 covers the complete
+        returned inventory state; source proposals remain absent from normal warehouse reads.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryFurnitureSnapshotRequest' } } } }
       responses:
         '200': { description: Deterministic current furniture count snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryFurnitureSnapshot' } } } }
@@ -2097,7 +2104,11 @@ paths:
       operationId: reconcileInventoryFurniture
       description: >-
         Atomically applies one absolute count for every current active FURNITURE position and the
-        selected cabins. Every item may carry an empty cabins list for a stock-only review.
+        selected cabins. Every item may carry an empty cabins list for a stock-only review. Optional
+        sourceOutcomes carry exact completed LOCAL outcomes for inventory-added source candidates.
+        Matching reserved sources are materialized directly in their final status before reviewed
+        furniture is applied in this same transaction; candidates that already name materialized
+        sources are harmless replays. At least one furniture item or source outcome is required.
         inventoryId is a permanent source identity: the exact request replays and a changed request
         conflicts. expectedSnapshotSha256 remains mandatory immutable source evidence in that
         request identity, but is not compared with a new full snapshot: non-terminal cabin
@@ -2161,8 +2172,13 @@ paths:
     post:
       operationId: createInventorySourceAsset
       description: >-
-        Atomically creates one FREE asset and its normal rental-item fact. Permanent source identity
-        inventoryId:findingId replays beyond ordinary idempotency retention; changed payload conflicts.
+        Atomically reserves one stable inventory-only source proposal with normalized
+        warehouse-scoped number evidence. It does not claim that number, block ordinary warehouse
+        operations, or create a rental item, warehouse-visible cabin or rental-item event. The
+        returned version-zero FREE snapshot is proposed inventory evidence only. Matching completed LOCAL
+        sourceOutcomes later materialize the reserved UUID directly in its final status together with
+        reviewed furniture. Permanent source identity inventoryId:findingId replays beyond ordinary
+        idempotency retention; changed payload conflicts.
         Canonical callers supply catalogue UUIDs. Supported manager clients may supply the documented
         legacy display names instead; asset-service resolves only exact active
         catalogue values before it registers the permanent source identity. The two representations
@@ -4793,6 +4809,12 @@ components:
       type: object
       additionalProperties: false
       required: [warehouseId, expectedSnapshotSha256, reviewSha256, items]
+      anyOf:
+        - properties:
+            items: { minItems: 1 }
+        - required: [sourceOutcomes]
+          properties:
+            sourceOutcomes: { minItems: 1 }
       properties:
         warehouseId: { type: string, format: uuid }
         expectedSnapshotSha256:
@@ -4804,10 +4826,26 @@ components:
         reviewSha256: { $ref: '#/components/schemas/Sha256' }
         items:
           type: array
-          minItems: 1
           maxItems: 1000
           uniqueItems: true
           items: { $ref: '#/components/schemas/InventoryFurnitureReconciliationItem' }
+        sourceOutcomes:
+          description: >-
+            Completed LOCAL outcome candidates for inventory-added sources. Omitted is equivalent to
+            an empty array for older callers. Each candidate is matched only by the permanent
+            inventoryId:findingId source identity and its reserved assetId; it never creates an
+            unknown asset.
+          type: array
+          maxItems: 5000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/InventorySourceOutcomeCandidate' }
+    InventorySourceOutcomeCandidate:
+      type: object
+      additionalProperties: false
+      required: [findingId, outcome]
+      properties:
+        findingId: { type: string, format: uuid }
+        outcome: { $ref: '#/components/schemas/InventoryOutcomeRequest' }
     InventoryFurnitureReconciliationItem:
       type: object
       additionalProperties: false

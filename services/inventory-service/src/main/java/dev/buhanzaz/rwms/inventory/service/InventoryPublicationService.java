@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.*;
 import dev.buhanzaz.rwms.inventory.domain.FinalPlanReconciliationStrategy;
 import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.FindingMediaReference;
+import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
@@ -41,6 +42,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -270,6 +272,30 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
         appendPublicationReady(intent, session, actor, true);
       }
     }
+  }
+
+  /**
+   * Reuses the frozen publication outcome so isolated source creation and later publication
+   * cannot disagree about status, passport or final-plan fencing.
+   */
+  List<InventoryDependencyGateway.InventorySourceOutcomeCandidate> sourceAssetOutcomes(
+      InventorySession session, List<InventoryFinalPlanEntry> entries) {
+    if (session.getLifecycle() != SessionLifecycle.COMPLETED) {
+      throw new IllegalStateException("Source materialization requires a completed inventory");
+    }
+    List<InventoryDependencyGateway.InventorySourceOutcomeCandidate> result = new ArrayList<>();
+    for (InventoryFinalPlanEntry entry :
+        entries.stream().sorted(Comparator.comparing(InventoryFinalPlanEntry::getFindingId)).toList()) {
+      if (entry.getDispositionKind() != InventoryCabinDispositionKind.LOCAL) continue;
+      InventoryFinding finding = requireFinding(session.getId(), entry.getFindingId());
+      if (finding.getOrigin() != FindingOrigin.ADDED_NEW
+          && finding.getOrigin() != FindingOrigin.ADDED_USED) continue;
+      InventoryPublicationIntent intent = requirePublication(session.getId(), entry.getFindingId());
+      result.add(
+          new InventoryDependencyGateway.InventorySourceOutcomeCandidate(
+              entry.getFindingId(), finalPlanPublicationRequest(session, intent).required("assetOutcome")));
+    }
+    return List.copyOf(result);
   }
 
   List<InventoryPublicationIntent> selectPublications(

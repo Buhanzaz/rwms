@@ -46,6 +46,36 @@ class AssetOpenApiParityTest {
   }
 
   @Test
+  void inventoryFurnitureReconciliationSupportsOptionalSourceOutcomes() throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> request = child(schemas, "InventoryFurnitureReconciliationRequest");
+    assertThat(list(request.get("required")))
+        .containsExactly("warehouseId", "expectedSnapshotSha256", "reviewSha256", "items")
+        .doesNotContain("sourceOutcomes");
+    List<Object> reconciliationWork = list(request.get("anyOf"));
+    assertThat(reconciliationWork).hasSize(2);
+    assertThat(child(child(map(reconciliationWork.get(0)), "properties"), "items"))
+        .containsEntry("minItems", 1);
+    assertThat(list(map(reconciliationWork.get(1)).get("required")))
+        .containsExactly("sourceOutcomes");
+    assertThat(child(child(map(reconciliationWork.get(1)), "properties"), "sourceOutcomes"))
+        .containsEntry("minItems", 1);
+    assertThat(child(child(request, "properties"), "items"))
+        .containsEntry("maxItems", 1000)
+        .containsEntry("uniqueItems", true)
+        .doesNotContainKey("minItems");
+    assertThat(child(child(request, "properties"), "sourceOutcomes"))
+        .containsEntry("maxItems", 5000)
+        .containsEntry("uniqueItems", true)
+        .doesNotContainKey("minItems");
+    Map<String, Object> sourceOutcome = child(schemas, "InventorySourceOutcomeCandidate");
+    assertThat(list(sourceOutcome.get("required"))).containsExactly("findingId", "outcome");
+    assertThat(sourceOutcome).containsEntry("additionalProperties", false);
+    assertThat(child(child(sourceOutcome, "properties"), "outcome"))
+        .containsEntry("$ref", "#/components/schemas/InventoryOutcomeRequest");
+  }
+
+  @Test
   void openApiInventoryExactlyMatchesAssetControllers() throws Exception {
     assertThat(openApiEndpoints(openApi()))
         .containsExactlyInAnyOrderElementsOf(controllerEndpoints());

@@ -376,6 +376,26 @@ public class CabinCompositionService {
     return result;
   }
 
+  /** Resolves display values for one already validated source proposal without a rental-item row. */
+  public CabinComposition compositionFor(CabinSelection selection) {
+    if (selection == null) {
+      throw new IllegalArgumentException("Cabin selection is required");
+    }
+    Set<UUID> ids = new LinkedHashSet<>();
+    ids.add(selection.rentalTypeId());
+    ids.add(selection.dimensionId());
+    ids.add(selection.finishingId());
+    ids.addAll(selection.characteristicIds());
+    Map<UUID, CabinCatalogItem> items =
+        catalog.findAllByIdIn(ids).stream()
+            .collect(Collectors.toMap(CabinCatalogItem::getId, item -> item));
+    return new CabinComposition(
+        value(items, selection.rentalTypeId()),
+        value(items, selection.dimensionId()),
+        value(items, selection.finishingId()),
+        selection.characteristicIds().stream().map(id -> value(items, id)).toList());
+  }
+
   private List<CabinCatalogItemResponse> responses(CabinCatalogKind kind) {
     return catalog.findAllByKindOrderByNameAscIdAsc(kind).stream().map(mapper::toResponse).toList();
   }

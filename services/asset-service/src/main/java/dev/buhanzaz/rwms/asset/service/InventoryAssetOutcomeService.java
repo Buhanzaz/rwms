@@ -71,6 +71,7 @@ final class InventoryAssetOutcomeService {
   private final AssetEventStore events;
   private final InventoryAssetCodec codec;
   private final InventoryAssetOutcomeResponseMapper responses;
+  private final InventoryAssetSourceService sources;
 
   InventoryAssetOutcomeService(
       InventoryAssetOutcomeReceiptRepository receipts,
@@ -85,7 +86,8 @@ final class InventoryAssetOutcomeService {
       CabinCompositionService cabinComposition,
       AssetEventStore events,
       InventoryAssetCodec codec,
-      InventoryAssetOutcomeResponseMapper responses) {
+      InventoryAssetOutcomeResponseMapper responses,
+      InventoryAssetSourceService sources) {
     this.receipts = receipts;
     this.watermarks = watermarks;
     this.rentalItems = rentalItems;
@@ -99,6 +101,7 @@ final class InventoryAssetOutcomeService {
     this.events = events;
     this.codec = codec;
     this.responses = responses;
+    this.sources = sources;
   }
 
   /**
@@ -111,6 +114,25 @@ final class InventoryAssetOutcomeService {
       UUID findingId,
       UUID idempotencyKey,
       InventoryOutcomeRequest request) {
+    return apply(actorSubjectId, inventoryId, findingId, idempotencyKey, request, false);
+  }
+
+  OutcomeResult applyWithSourceMaterialization(
+      UUID actorSubjectId,
+      UUID inventoryId,
+      UUID findingId,
+      UUID idempotencyKey,
+      InventoryOutcomeRequest request) {
+    return apply(actorSubjectId, inventoryId, findingId, idempotencyKey, request, true);
+  }
+
+  private OutcomeResult apply(
+      UUID actorSubjectId,
+      UUID inventoryId,
+      UUID findingId,
+      UUID idempotencyKey,
+      InventoryOutcomeRequest request,
+      boolean allowSourceMaterialization) {
     if (actorSubjectId == null || idempotencyKey == null) {
       throw new IllegalArgumentException(
           "Inventory outcome actor and idempotency key are required");
@@ -128,10 +150,18 @@ final class InventoryAssetOutcomeService {
     }
 
     leases.lockRentalItemAndLease(plan.assetId());
-    RentalItem asset =
-        rentalItems
-            .findByIdForUpdate(plan.assetId())
-            .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+    ResolvedPassport passport = resolvePassport(plan.passport());
+    RentalItem asset = rentalItems.findByIdForUpdate(plan.assetId()).orElse(null);
+    if (asset == null && allowSourceMaterialization) {
+      asset =
+          sources.materializeForOutcome(
+              inventoryId,
+              findingId,
+              plan.assetId(),
+              plan.desiredStatus(),
+              materializationPassport(passport));
+    }
+    if (asset == null) throw new AssetNotFoundException("Rental item was not found");
     if (!plan.warehouseId().equals(asset.getWarehouseId())) {
       throw new AssetConflictException(
           "Inventory outcome cabin belongs to another warehouse");
@@ -144,7 +174,6 @@ final class InventoryAssetOutcomeService {
     InventoryAssetOutcomeWatermark watermark =
         watermarks.findByAssetIdForUpdate(plan.assetId()).orElse(null);
     assertLatest(plan, watermark);
-    ResolvedPassport passport = resolvePassport(plan.passport());
 
     List<UUID> releasedLeaseIds =
         leases.releaseForCompletedInventory(
@@ -459,6 +488,21 @@ final class InventoryAssetOutcomeService {
         projections.fact(saved),
         projections.snapshot(saved));
     return saved;
+  }
+
+  private static InventoryAssetSourceService.MaterializationPassport materializationPassport(
+      ResolvedPassport passport) {
+    if (passport == null) return null;
+    CabinCompositionService.CabinSelection selection = passport.selection();
+    CabinCompositionService.CategorySelection category = passport.category();
+    return new InventoryAssetSourceService.MaterializationPassport(
+        selection.rentalTypeId(),
+        selection.dimensionId(),
+        selection.finishingId(),
+        category.id(),
+        category.name(),
+        selection.characteristicIds(),
+        passport.linoleum());
   }
 
   private static String requiredText(JsonNode value, String field) {

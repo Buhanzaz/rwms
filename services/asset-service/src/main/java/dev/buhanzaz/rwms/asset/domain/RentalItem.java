@@ -169,6 +169,43 @@ public class RentalItem {
         tagsJson);
   }
 
+  /** Materializes one stable inventory-reserved UUID directly in its completed final status. */
+  public static RentalItem materializeInventorySource(
+      UUID id,
+      UUID warehouseId,
+      String number,
+      RentalItemStatus status,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    if (id == null
+        || (status != RentalItemStatus.FREE
+            && status != RentalItemStatus.REPAIR
+            && status != RentalItemStatus.CAPITAL_REPAIR)) {
+      throw new IllegalArgumentException("Inventory source materialization identity is invalid");
+    }
+    RentalItem item =
+        createWithStatus(
+            warehouseId,
+            number,
+            status,
+            rentalTypeId,
+            dimensionId,
+            finishingId,
+            categoryId,
+            category,
+            linoleum,
+            passportJson,
+            tagsJson);
+    item.id = id;
+    return item;
+  }
+
   public static RentalItem createFromInventory(
       UUID warehouseId,
       String number,

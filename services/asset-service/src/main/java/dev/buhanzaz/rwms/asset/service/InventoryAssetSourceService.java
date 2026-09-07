@@ -4,14 +4,13 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
-import dev.buhanzaz.rwms.asset.domain.InventoryAssetNumberClaim;
 import dev.buhanzaz.rwms.asset.domain.InventoryAssetSource;
 import dev.buhanzaz.rwms.asset.domain.InventoryAssetSourceId;
 import dev.buhanzaz.rwms.asset.domain.InventoryAssetSourceOperation;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
+import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.integration.warehouse.WarehouseRegistryClient;
-import dev.buhanzaz.rwms.asset.repository.InventoryAssetNumberClaimRepository;
 import dev.buhanzaz.rwms.asset.repository.InventoryAssetSourceOperationRepository;
 import dev.buhanzaz.rwms.asset.repository.InventoryAssetSourceRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
@@ -25,45 +24,40 @@ import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
 
 /**
- * Owns permanent inventory-finding source creation, number-claim fencing, and replay response
- * persistence.
+ * Owns permanent inventory-finding proposal identity, replay response persistence, and completed
+ * source materialization.
  *
- * <p>The immutable source identity is registered before the number claim is locked. It never uses
- * ordinary idempotency retention: a durable completed source replays its persisted response.
+ * <p>An isolated proposal deliberately does not claim its number or create warehouse state. It
+ * never uses ordinary idempotency retention: the source operation retains the same proposed UUID
+ * and response before and after completed-inventory materialization.
  */
 @Service
 final class InventoryAssetSourceService {
   private final RentalItemRepository rentalItems;
   private final InventoryAssetSourceOperationRepository sourceOperations;
   private final InventoryAssetSourceRepository sources;
-  private final InventoryAssetNumberClaimRepository numberClaims;
   private final InventoryAssetBoundaryRegistrar registrar;
   private final AssetEventStore events;
   private final WarehouseRegistryClient warehouses;
   private final CabinCompositionService cabinComposition;
-  private final InventoryAssetProjectionService projections;
   private final InventoryAssetCodec codec;
 
   InventoryAssetSourceService(
       RentalItemRepository rentalItems,
       InventoryAssetSourceOperationRepository sourceOperations,
       InventoryAssetSourceRepository sources,
-      InventoryAssetNumberClaimRepository numberClaims,
       InventoryAssetBoundaryRegistrar registrar,
       AssetEventStore events,
       WarehouseRegistryClient warehouses,
       CabinCompositionService cabinComposition,
-      InventoryAssetProjectionService projections,
       InventoryAssetCodec codec) {
     this.rentalItems = rentalItems;
     this.sourceOperations = sourceOperations;
     this.sources = sources;
-    this.numberClaims = numberClaims;
     this.registrar = registrar;
     this.events = events;
     this.warehouses = warehouses;
     this.cabinComposition = cabinComposition;
-    this.projections = projections;
     this.codec = codec;
   }
 
@@ -73,10 +67,13 @@ final class InventoryAssetSourceService {
     CabinCompositionService.CabinSelection selection = sourceSelection(request);
     CabinCompositionService.CategorySelection category =
         cabinComposition.requireCategory(request.category());
+    UUID proposedAssetId = UUID.randomUUID();
     RentalItem candidate =
-        RentalItem.createFromInventory(
+        RentalItem.materializeInventorySource(
+            proposedAssetId,
             request.warehouseId(),
             request.number(),
+            RentalItemStatus.FREE,
             selection.rentalTypeId(),
             selection.dimensionId(),
             selection.finishingId(),
@@ -85,12 +82,23 @@ final class InventoryAssetSourceService {
             request.linoleum(),
             passportJson,
             tagsJson);
+    SourcePlan sourcePlan = sourcePlan(candidate, selection);
     String fingerprint = codec.canonicalHash(sourceFingerprint(request, candidate, selection));
     warehouses.requireIncoming(request.warehouseId());
 
     InventoryAssetSourceId sourceId =
         new InventoryAssetSourceId(request.inventoryId(), request.findingId());
-    registerConcurrentSafe(() -> registrar.registerSourceOperation(sourceId, fingerprint));
+    InventorySourceAssetResponse proposedResponse =
+        new InventorySourceAssetResponse(
+            request.inventoryId(), request.findingId(), sourceSnapshot(candidate));
+    registerConcurrentSafe(
+        () ->
+            registrar.registerSourceOperation(
+                sourceId,
+                fingerprint,
+                proposedAssetId,
+                codec.write(sourcePlan),
+                codec.write(proposedResponse)));
     String registeredFingerprint =
         sourceOperations
             .findRequestFingerprintById(sourceId)
@@ -98,24 +106,12 @@ final class InventoryAssetSourceService {
     if (!registeredFingerprint.equals(fingerprint)) {
       throw new AssetConflictException("Inventory source identity is bound to another asset request");
     }
-    registerConcurrentSafe(
-        () ->
-            registrar.claimNumber(
-                candidate.getWarehouseId(), candidate.getIdentityMatchKey(), sourceId));
     InventoryAssetSourceOperation operation =
         sourceOperations
             .findByIdForUpdate(sourceId)
             .orElseThrow(() -> new IllegalStateException("Inventory source registration failed"));
     if (!operation.getRequestFingerprint().equals(fingerprint)) {
       throw new AssetConflictException("Inventory source identity is bound to another asset request");
-    }
-    InventoryAssetNumberClaim claim =
-        numberClaims
-            .findByWarehouseIdAndIdentityMatchKeyForUpdate(
-                candidate.getWarehouseId(), candidate.getIdentityMatchKey())
-            .orElseThrow(() -> new IllegalStateException("Inventory number claim registration failed"));
-    if (!claim.belongsTo(sourceId)) {
-      throw new AssetConflictException("Rental item number identity is already used in this warehouse");
     }
     InventoryAssetSource stored = sources.findById(sourceId).orElse(null);
     if (stored != null) {
@@ -126,13 +122,109 @@ final class InventoryAssetSourceService {
       return new SourceAssetResult(
           codec.read(stored.getResponseBody(), InventorySourceAssetResponse.class), true);
     }
-    if (rentalItems.existsByWarehouseIdAndIdentityMatchKey(
-        candidate.getWarehouseId(), candidate.getIdentityMatchKey())) {
-      throw new AssetConflictException("Rental item number identity is already used in this warehouse");
+    boolean replayed = !proposedAssetId.equals(operation.getReservedRentalItemId());
+    if (!operation.hasProposal()) {
+      operation.bindProposal(
+          proposedAssetId, codec.write(sourcePlan), codec.write(proposedResponse));
+      sourceOperations.saveAndFlush(operation);
+      replayed = false;
     }
+    return new SourceAssetResult(
+        codec.read(operation.getProposalResponse(), InventorySourceAssetResponse.class), replayed);
+  }
 
-    RentalItem saved = rentalItems.saveAndFlush(candidate);
-    cabinComposition.replaceRentalItemCharacteristics(saved.getId(), selection.characteristicIds());
+  /**
+   * Returns the isolated proposal projection for a private inventory read, if still
+   * unmaterialized.
+   */
+  InventoryAssetCurrentSnapshot currentProposal(UUID assetId) {
+    InventoryAssetSourceOperation operation =
+        sourceOperations.findByReservedRentalItemId(assetId).orElse(null);
+    if (operation == null || rentalItems.existsById(assetId) || !operation.hasProposal()) return null;
+    SourcePlan plan = plan(operation);
+    return new InventoryAssetCurrentSnapshot(
+        assetId,
+        0,
+        plan.warehouseId(),
+        RentalItemStatus.FREE,
+        plan.number(),
+        plan.identityMatchKey(),
+        null,
+        plan.passportSnapshot(),
+        List.of());
+  }
+
+  /** Returns an unsaved proposal shape used only by inventory's selected furniture snapshot. */
+  List<RentalItem> pendingRentalItems(List<UUID> assetIds) {
+    if (assetIds.isEmpty()) return List.of();
+    return sourceOperations.findAllByReservedRentalItemIdIn(assetIds).stream()
+        .filter(InventoryAssetSourceOperation::hasProposal)
+        .filter(operation -> !rentalItems.existsById(operation.getReservedRentalItemId()))
+        .map(operation -> proposalItem(operation, RentalItemStatus.FREE, null))
+        .toList();
+  }
+
+  /**
+   * Locks and materializes the exact reserved source when its completed finding outcome first
+   * becomes authoritative. A present observation replaces the proposal passport; an absent one
+   * retains the inspected source proposal.
+   */
+  RentalItem materializeForOutcome(
+      UUID inventoryId,
+      UUID findingId,
+      UUID assetId,
+      RentalItemStatus status,
+      MaterializationPassport passport) {
+    InventoryAssetSourceId sourceId = new InventoryAssetSourceId(inventoryId, findingId);
+    InventoryAssetSourceOperation operation =
+        sourceOperations.findByIdForUpdate(sourceId).orElse(null);
+    if (operation == null) return null;
+    if (!operation.hasProposal() || !assetId.equals(operation.getReservedRentalItemId())) {
+      throw new AssetConflictException("Inventory source outcome does not match its reserved asset");
+    }
+    InventoryAssetSource completed = sources.findById(sourceId).orElse(null);
+    if (completed != null) {
+      if (!assetId.equals(completed.getRentalItemId())) {
+        throw new AssetConflictException("Inventory source is bound to another rental item");
+      }
+      return rentalItems.findByIdForUpdate(assetId).orElseThrow(
+          () -> new IllegalStateException("Completed inventory source rental item is missing"));
+    }
+    if (rentalItems.existsById(assetId)) {
+      throw new AssetConflictException("Reserved inventory source asset identity is already used");
+    }
+    RentalItem created = proposalItem(operation, status, passport);
+    int inserted;
+    try {
+      inserted =
+          rentalItems.insertInventorySource(
+              created.getId(),
+              created.getWarehouseId(),
+              created.getNumber(),
+              created.getIdentityMatchKey(),
+              created.getStatus().name(),
+              created.getRentalTypeId(),
+              created.getDimensionId(),
+              created.getFinishingId(),
+              created.getCategoryId(),
+              created.getCategory(),
+              created.getLinoleum(),
+              created.getPassportJson(),
+              created.getTagsJson());
+    } catch (DataIntegrityViolationException exception) {
+      throw new AssetConflictException(
+          "Rental item number or reserved identity is already used in this warehouse");
+    }
+    if (inserted != 1) {
+      throw new IllegalStateException("Inventory source rental item was not inserted");
+    }
+    RentalItem saved =
+        rentalItems.findByIdForUpdate(assetId).orElseThrow(
+            () -> new IllegalStateException("Inventory source rental item was not materialized"));
+    SourcePlan plan = plan(operation);
+    List<UUID> characteristicIds =
+        passport == null ? plan.characteristicIds() : passport.characteristicIds();
+    cabinComposition.replaceRentalItemCharacteristics(saved.getId(), characteristicIds);
     events.initialize(
         AssetAggregateType.RENTAL_ITEM,
         saved.getId(),
@@ -140,12 +232,142 @@ final class InventoryAssetSourceService {
         AssetEventType.RENTAL_ITEM_CREATED,
         rentalFact(saved),
         rentalSnapshot(saved));
-    InventorySourceAssetResponse response =
-        new InventorySourceAssetResponse(
-            request.inventoryId(), request.findingId(), projections.snapshot(saved));
     sources.saveAndFlush(
-        InventoryAssetSource.complete(sourceId, fingerprint, saved.getId(), codec.write(response)));
-    return new SourceAssetResult(response, false);
+        InventoryAssetSource.complete(
+            sourceId,
+            operation.getRequestFingerprint(),
+            saved.getId(),
+            operation.getProposalResponse()));
+    return saved;
+  }
+
+  /**
+   * Locks this inventory's proposal identities, validates every supplied source outcome, and
+   * filters already-real non-source candidates from the atomic source work. Unsupplied proposals
+   * remain isolated because only inventory-service owns the active completed final plan.
+   */
+  List<InventorySourceOutcomeCandidate> prepareSourceOutcomes(
+      UUID inventoryId, List<InventorySourceOutcomeCandidate> candidates) {
+    Map<UUID, InventorySourceOutcomeCandidate> byFinding = new LinkedHashMap<>();
+    for (InventorySourceOutcomeCandidate candidate : candidates) {
+      if (candidate == null
+          || candidate.findingId() == null
+          || candidate.outcome() == null
+          || candidate.outcome().assetId() == null
+          || byFinding.putIfAbsent(candidate.findingId(), candidate) != null) {
+        throw new IllegalArgumentException("Inventory source outcomes must have unique findings");
+      }
+      if (candidate.outcome().desiredStatus() != InventoryOutcomeStatus.FREE
+          && candidate.outcome().desiredStatus() != InventoryOutcomeStatus.REPAIR
+          && candidate.outcome().desiredStatus() != InventoryOutcomeStatus.CAPITAL_REPAIR) {
+        throw new IllegalArgumentException(
+            "Inventory source outcomes require a local non-rented final status");
+      }
+    }
+    Map<UUID, InventoryAssetSourceOperation> operations = new LinkedHashMap<>();
+    for (InventoryAssetSourceOperation operation :
+        sourceOperations.findAllByInventoryIdForUpdate(inventoryId)) {
+      operations.put(operation.getId().getFindingId(), operation);
+    }
+    List<InventorySourceOutcomeCandidate> applicable = new java.util.ArrayList<>();
+    for (InventorySourceOutcomeCandidate candidate : candidates) {
+      InventoryAssetSourceOperation operation = operations.get(candidate.findingId());
+      if (operation == null) {
+        RentalItem existing = rentalItems.findById(candidate.outcome().assetId()).orElse(null);
+        if (existing != null) {
+          if (!candidate.outcome().warehouseId().equals(existing.getWarehouseId())) {
+            throw new AssetConflictException(
+                "Inventory source outcome asset belongs to another warehouse");
+          }
+          continue;
+        }
+        throw new AssetConflictException("Inventory source outcome has no reserved proposal");
+      }
+      if (!candidate.outcome().assetId().equals(operation.getReservedRentalItemId())) {
+        throw new AssetConflictException("Inventory source outcome does not match its proposal");
+      }
+      if (!operation.hasProposal()) {
+        InventoryAssetSource completed =
+            sources
+                .findById(operation.getId())
+                .orElseThrow(
+                    () -> new AssetConflictException("Inventory source proposal is incomplete"));
+        if (!candidate.outcome().assetId().equals(completed.getRentalItemId())
+            || !rentalItems.existsById(completed.getRentalItemId())) {
+          throw new AssetConflictException("Completed inventory source asset is missing");
+        }
+      }
+      applicable.add(candidate);
+    }
+    return List.copyOf(applicable);
+  }
+
+  private RentalItem proposalItem(
+      InventoryAssetSourceOperation operation,
+      RentalItemStatus status,
+      MaterializationPassport passport) {
+    SourcePlan plan = plan(operation);
+    return RentalItem.materializeInventorySource(
+        operation.getReservedRentalItemId(),
+        plan.warehouseId(),
+        plan.number(),
+        status,
+        passport == null ? plan.rentalTypeId() : passport.rentalTypeId(),
+        passport == null ? plan.dimensionId() : passport.dimensionId(),
+        passport == null ? plan.finishingId() : passport.finishingId(),
+        passport == null ? plan.categoryId() : passport.categoryId(),
+        passport == null ? plan.category() : passport.category(),
+        passport == null ? plan.linoleum() : passport.linoleum(),
+        plan.passportJson(),
+        plan.tagsJson());
+  }
+
+  private SourcePlan plan(InventoryAssetSourceOperation operation) {
+    return codec.read(operation.getSourcePlan(), SourcePlan.class);
+  }
+
+  private SourcePlan sourcePlan(
+      RentalItem item, CabinCompositionService.CabinSelection selection) {
+    CabinCompositionService.CabinComposition composition = cabinComposition.compositionFor(selection);
+    Map<String, Object> passportSnapshot = new LinkedHashMap<>();
+    passportSnapshot.put("rentalType", composition.rentalType().name());
+    passportSnapshot.put("dimensions", composition.dimensions().name());
+    passportSnapshot.put("finishing", composition.finishing().name());
+    passportSnapshot.put("category", item.getCategory());
+    passportSnapshot.put(
+        "characteristics",
+        composition.characteristics().stream().map(CabinCatalogValueResponse::name).toList());
+    passportSnapshot.put("linoleum", item.getLinoleum());
+    passportSnapshot.put(
+        "passport", codec.read(item.getPassportJson(), new TypeReference<Map<String, Object>>() {}));
+    passportSnapshot.put(
+        "tags", codec.read(item.getTagsJson(), new TypeReference<List<String>>() {}));
+    passportSnapshot.put("tenant", null);
+    return new SourcePlan(
+        item.getWarehouseId(),
+        item.getNumber(),
+        item.getIdentityMatchKey(),
+        item.getRentalTypeId(),
+        item.getDimensionId(),
+        item.getFinishingId(),
+        item.getCategoryId(),
+        item.getCategory(),
+        selection.characteristicIds(),
+        item.getLinoleum(),
+        item.getPassportJson(),
+        item.getTagsJson(),
+        java.util.Collections.unmodifiableMap(passportSnapshot));
+  }
+
+  private static InventoryAssetSnapshot sourceSnapshot(RentalItem item) {
+    return new InventoryAssetSnapshot(
+        item.getId(),
+        item.getVersion(),
+        item.getWarehouseId(),
+        item.getStatus(),
+        item.getNumber(),
+        item.getIdentityMatchKey(),
+        null);
   }
 
   /**
@@ -153,7 +375,8 @@ final class InventoryAssetSourceService {
    * caller; the names branch is the supported manager compatibility format and is resolved by the
    * asset-owned catalog before the permanent source identity is registered.
    */
-  private CabinCompositionService.CabinSelection sourceSelection(InventorySourceAssetRequest request) {
+  private CabinCompositionService.CabinSelection sourceSelection(
+      InventorySourceAssetRequest request) {
     boolean hasCanonicalValues =
         request.rentalTypeId() != null
             || request.dimensionId() != null
@@ -273,4 +496,40 @@ final class InventoryAssetSourceService {
    * than a new inventory transition.
    */
   record SourceAssetResult(InventorySourceAssetResponse response, boolean replayed) {}
+
+  /** Durable material required to materialize or synthesize one isolated inventory proposal. */
+  private record SourcePlan(
+      UUID warehouseId,
+      String number,
+      String identityMatchKey,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      List<UUID> characteristicIds,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson,
+      Map<String, Object> passportSnapshot) {
+    private SourcePlan {
+      characteristicIds = List.copyOf(characteristicIds);
+      passportSnapshot =
+          java.util.Collections.unmodifiableMap(new LinkedHashMap<>(passportSnapshot));
+    }
+  }
+
+  /** Resolved final passport used only when completed inventory observed a present passport. */
+  record MaterializationPassport(
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      List<UUID> characteristicIds,
+      Boolean linoleum) {
+    MaterializationPassport {
+      characteristicIds = List.copyOf(characteristicIds);
+    }
+  }
 }

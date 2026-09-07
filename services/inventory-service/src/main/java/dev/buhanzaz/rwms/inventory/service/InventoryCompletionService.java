@@ -277,8 +277,9 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
                   statisticsService.calculateStatistics(result, lockedRevisions.findings(), validatedFindings);
               statisticsService.persistStatistics(result, finalStatistics);
               reviewService.createFurnitureLossIntents(result);
-              reviewService.createFurnitureReconciliationIntent(result);
               publicationService.createPublicationIntents(result, lockedFinalPlan, lockedPlanEntries, actor(jwt));
+              reviewService.createFurnitureReconciliationIntent(
+                  result, publicationService.sourceAssetOutcomes(result, lockedPlanEntries));
               cabinWriteOffs.createIntents(result, lockedFinalPlan, lockedPlanEntries);
               events.append(
                   "SESSION",

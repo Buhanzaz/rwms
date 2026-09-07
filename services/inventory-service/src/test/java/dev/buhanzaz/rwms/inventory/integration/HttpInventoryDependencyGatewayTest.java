@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -119,6 +120,14 @@ class HttpInventoryDependencyGatewayTest {
         "/api/internal/asset/v1/inventory/validations", this::validateAssets);
     server.createContext(
         "/api/internal/asset/v1/inventory/outcomes", this::applyInventoryOutcome);
+    server.createContext(
+        "/api/internal/asset/v1/inventory/furniture-reconciliations",
+        exchange -> {
+          authorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+          idempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+          requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+          respond(exchange, 200, "{}");
+        });
     server.createContext(
         "/api/internal/media/v1/inventory/outcomes", this::publishInventoryCabinPhotos);
     server.createContext(
@@ -911,6 +920,40 @@ class HttpInventoryDependencyGatewayTest {
         }]}]}
         """
             .formatted(cabinId, repairId, repairId, "a".repeat(64)));
+  }
+
+  @Test
+  void furnitureReconciliationRetainsLegacyRequestsAndTransmitsExactSourceOutcomes() throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    InventoryDependencyGateway.FurnitureReconciliationRequest legacy =
+        mapper.readValue(
+            """
+            {"warehouseId":"%s","expectedSnapshotSha256":"%s","reviewSha256":"%s","items":[]}
+            """.formatted(warehouseId, "1".repeat(64), "2".repeat(64)),
+            InventoryDependencyGateway.FurnitureReconciliationRequest.class);
+    assertThat(legacy.sourceOutcomes()).isEmpty();
+    JsonNode outcome = mapper.createObjectNode()
+        .put("assetId", cabinId.toString())
+        .put("warehouseId", warehouseId.toString())
+        .put("desiredStatus", "CAPITAL_REPAIR")
+        .put("finalPlanVersion", 3)
+        .put("finalPlanSha256", "3".repeat(64));
+    InventoryDependencyGateway.FurnitureReconciliationRequest completed =
+        new InventoryDependencyGateway.FurnitureReconciliationRequest(
+            warehouseId,
+            legacy.expectedSnapshotSha256(),
+            legacy.reviewSha256(),
+            List.of(),
+            List.of(new InventoryDependencyGateway.InventorySourceOutcomeCandidate(findingId, outcome)));
+
+    gateway.reconcileFurniture(UUID.randomUUID(), key, completed);
+
+    assertThat(authorization.get()).isEqualTo("Bearer inventory-asset-token");
+    assertThat(idempotencyKey.get()).isEqualTo(key.toString());
+    assertThat(mapper.readTree(requestBody.get()))
+        .isEqualTo(mapper.valueToTree(completed));
   }
 
   private void applyInventoryOutcome(HttpExchange exchange) throws IOException {

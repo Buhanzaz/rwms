@@ -240,6 +240,28 @@ class InventoryCabinDispositionIntegrationTest {
   }
 
   @Test
+  void uninspectedAddedProposalCannotBecomeAMissingCabinOrWriteOff() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    seedSession(inventoryId, UUID.randomUUID());
+    seedFinding(inventoryId, findingId, UUID.randomUUID(), "PROPOSED-01");
+    for (String origin : List.of("ADDED_NEW", "ADDED_USED")) {
+      jdbc.update("update inventory_finding set origin=? where id=?", origin, findingId);
+
+      assertThatThrownBy(() -> application.cabinDispositionReview(jwt(), inventoryId))
+          .isInstanceOf(InventoryException.class)
+          .hasMessageContaining("Inspect every cabin added during inventory");
+      assertThat(
+              jdbc.queryForObject(
+                  "select count(*) from inventory_cabin_disposition_row where inventory_id=?",
+                  Integer.class,
+                  inventoryId))
+          .isZero();
+    }
+    verifyNoInteractions(dependencies);
+  }
+
+  @Test
   void shipmentFurnitureRejectsNullRowsBeforeCanonicalOrdering() {
     UUID inventoryId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();

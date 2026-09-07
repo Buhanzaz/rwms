@@ -293,7 +293,23 @@ public interface InventoryDependencyGateway {
       UUID warehouseId,
       String expectedSnapshotSha256,
       String reviewSha256,
-      List<FurnitureReconciliationItem> items) {}
+      List<FurnitureReconciliationItem> items,
+      List<InventorySourceOutcomeCandidate> sourceOutcomes) {
+    public FurnitureReconciliationRequest {
+      sourceOutcomes = sourceOutcomes == null ? List.of() : List.copyOf(sourceOutcomes);
+    }
+
+    public FurnitureReconciliationRequest(
+        UUID warehouseId,
+        String expectedSnapshotSha256,
+        String reviewSha256,
+        List<FurnitureReconciliationItem> items) {
+      this(warehouseId, expectedSnapshotSha256, reviewSha256, items, List.of());
+    }
+  }
+
+  /** Exact completed-plan asset outcome used to materialize an isolated source registration. */
+  record InventorySourceOutcomeCandidate(UUID findingId, JsonNode outcome) {}
 
   record FurnitureReconciliationItem(
       UUID equipmentId,

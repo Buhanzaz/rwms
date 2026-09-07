@@ -80,6 +80,8 @@ final class InventoryFurnitureReconciliationService {
   private final PresentationUnitHoldRepository presentationHolds;
   private final OrderEquipmentReservationRepository orderEquipmentReservations;
   private final AssetEquipmentHoldService equipmentHolds;
+  private final InventoryAssetSourceService sources;
+  private final InventoryAssetOutcomeService outcomes;
 
   InventoryFurnitureReconciliationService(
       RentalItemRepository rentalItems,
@@ -95,7 +97,9 @@ final class InventoryFurnitureReconciliationService {
       OrderUnitReservationRepository orderReservations,
       PresentationUnitHoldRepository presentationHolds,
       OrderEquipmentReservationRepository orderEquipmentReservations,
-      AssetEquipmentHoldService equipmentHolds) {
+      AssetEquipmentHoldService equipmentHolds,
+      InventoryAssetSourceService sources,
+      InventoryAssetOutcomeService outcomes) {
     this.rentalItems = rentalItems;
     this.equipmentBalances = equipmentBalances;
     this.equipmentCatalog = equipmentCatalog;
@@ -110,6 +114,8 @@ final class InventoryFurnitureReconciliationService {
     this.presentationHolds = presentationHolds;
     this.orderEquipmentReservations = orderEquipmentReservations;
     this.equipmentHolds = equipmentHolds;
+    this.sources = sources;
+    this.outcomes = outcomes;
   }
 
   /**
@@ -138,10 +144,16 @@ final class InventoryFurnitureReconciliationService {
     if (inventoryId == null || idempotencyKey == null) {
       throw new IllegalArgumentException("Inventory furniture reconciliation identity is required");
     }
-    FurnitureReconciliationPlan plan = normalizeFurnitureReconciliationRequest(request);
+    NormalizedFurnitureReconciliation normalized =
+        normalizeFurnitureReconciliationRequest(request);
+    FurnitureReconciliationPlan plan = normalized.plan();
     warehouses.requireIncoming(plan.warehouseId());
     String requestSha256 =
-        codec.canonicalHash(new FurnitureReconciliationFingerprint(inventoryId, plan));
+        normalized.sourceOutcomes().isEmpty()
+            ? codec.canonicalHash(new FurnitureReconciliationFingerprint(inventoryId, plan))
+            : codec.canonicalHash(
+                new SourceFurnitureReconciliationFingerprint(
+                    inventoryId, plan, normalized.sourceOutcomes()));
 
     registerConcurrentSafe(
         () -> registrar.registerFurnitureReconciliation(inventoryId, requestSha256, idempotencyKey));
@@ -158,6 +170,17 @@ final class InventoryFurnitureReconciliationService {
     }
     if (source.isCompleted()) {
       return true;
+    }
+
+    List<InventorySourceOutcomeCandidate> sourceOutcomes =
+        sources.prepareSourceOutcomes(inventoryId, normalized.sourceOutcomes());
+    for (InventorySourceOutcomeCandidate candidate : sourceOutcomes) {
+      outcomes.applyWithSourceMaterialization(
+          INVENTORY_SERVICE_ACTOR,
+          inventoryId,
+          candidate.findingId(),
+          sourceOutcomeIdempotencyKey(inventoryId, candidate.findingId()),
+          candidate.outcome());
     }
 
     FurnitureSnapshotState current = lockedFurnitureSnapshot(plan.warehouseId(), plan.assetIds());
@@ -305,8 +328,15 @@ final class InventoryFurnitureReconciliationService {
     if (assetIds.isEmpty()) {
       return List.of();
     }
-    List<RentalItem> selected =
+    List<RentalItem> persisted =
         forUpdate ? rentalItems.findAllByIdInForUpdate(assetIds) : rentalItems.findAllById(assetIds);
+    List<RentalItem> selected = new ArrayList<>(persisted);
+    if (!forUpdate && persisted.size() != assetIds.size()) {
+      Set<UUID> found = persisted.stream().map(RentalItem::getId).collect(Collectors.toSet());
+      selected.addAll(
+          sources.pendingRentalItems(
+              assetIds.stream().filter(id -> !found.contains(id)).toList()));
+    }
     if (selected.size() != assetIds.size()) {
       throw new AssetNotFoundException("Selected furniture reconciliation cabin was not found");
     }
@@ -326,7 +356,7 @@ final class InventoryFurnitureReconciliationService {
     return new FurnitureSnapshotRequest(request.warehouseId(), assetIds);
   }
 
-  private static FurnitureReconciliationPlan normalizeFurnitureReconciliationRequest(
+  private static NormalizedFurnitureReconciliation normalizeFurnitureReconciliationRequest(
       InventoryFurnitureReconciliationRequest request) {
     if (request == null || request.warehouseId() == null) {
       throw new IllegalArgumentException("Inventory furniture reconciliation warehouse is required");
@@ -334,8 +364,51 @@ final class InventoryFurnitureReconciliationService {
     if (!sha256(request.expectedSnapshotSha256()) || !sha256(request.reviewSha256())) {
       throw new IllegalArgumentException("Inventory furniture reconciliation hashes are invalid");
     }
-    if (request.items() == null || request.items().isEmpty() || request.items().size() > 1000) {
-      throw new IllegalArgumentException("Inventory furniture reconciliation items are required");
+    if (request.items() == null || request.items().size() > 1000) {
+      throw new IllegalArgumentException("Inventory furniture reconciliation items are invalid");
+    }
+    if (request.items().isEmpty() && request.sourceOutcomes().isEmpty()) {
+      throw new IllegalArgumentException("Inventory furniture reconciliation work is required");
+    }
+    OffsetDateTime sourceCompletedAt = null;
+    Long sourceFinalPlanVersion = null;
+    String sourceFinalPlanSha256 = null;
+    Set<UUID> sourceFindingIds = new LinkedHashSet<>();
+    Set<UUID> sourceAssetIds = new LinkedHashSet<>();
+    for (InventorySourceOutcomeCandidate candidate : request.sourceOutcomes()) {
+      if (candidate == null
+          || candidate.findingId() == null
+          || candidate.outcome() == null
+          || candidate.outcome().warehouseId() == null
+          || candidate.outcome().assetId() == null
+          || candidate.outcome().inventoryCompletedAt() == null
+          || candidate.outcome().finalPlanVersion() == null
+          || candidate.outcome().finalPlanVersion() < 1
+          || !sha256(candidate.outcome().finalPlanSha256())
+          || !sourceFindingIds.add(candidate.findingId())
+          || !sourceAssetIds.add(candidate.outcome().assetId())) {
+        throw new IllegalArgumentException("Inventory source outcome candidate is invalid");
+      }
+      if (!request.warehouseId().equals(candidate.outcome().warehouseId())) {
+        throw new IllegalArgumentException(
+            "Inventory source outcomes must belong to the reconciliation warehouse");
+      }
+      OffsetDateTime completedAt =
+          candidate
+              .outcome()
+              .inventoryCompletedAt()
+              .withOffsetSameInstant(ZoneOffset.UTC)
+              .truncatedTo(ChronoUnit.MICROS);
+      if (sourceCompletedAt == null) {
+        sourceCompletedAt = completedAt;
+        sourceFinalPlanVersion = candidate.outcome().finalPlanVersion();
+        sourceFinalPlanSha256 = candidate.outcome().finalPlanSha256();
+      } else if (!sourceCompletedAt.equals(completedAt)
+          || !sourceFinalPlanVersion.equals(candidate.outcome().finalPlanVersion())
+          || !sourceFinalPlanSha256.equals(candidate.outcome().finalPlanSha256())) {
+        throw new IllegalArgumentException(
+            "Inventory source outcomes must share one completed final-plan fence");
+      }
     }
 
     Set<UUID> equipmentIds = new LinkedHashSet<>();
@@ -369,14 +442,32 @@ final class InventoryFurnitureReconciliationService {
     }
     items.sort(Comparator.comparing(item -> item.equipmentId().toString()));
     if (commonAssetIds == null) {
-      throw new IllegalArgumentException("Inventory furniture reconciliation cabins are invalid");
+      commonAssetIds =
+          request.sourceOutcomes().stream()
+              .map(InventorySourceOutcomeCandidate::outcome)
+              .map(InventoryOutcomeRequest::assetId)
+              .sorted(Comparator.comparing(UUID::toString))
+              .toList();
     }
-    return new FurnitureReconciliationPlan(
-        request.warehouseId(),
-        request.expectedSnapshotSha256(),
-        request.reviewSha256(),
-        List.copyOf(items),
-        List.copyOf(commonAssetIds));
+    List<InventorySourceOutcomeCandidate> sourceOutcomes =
+        request.sourceOutcomes().stream()
+            .sorted(Comparator.comparing(value -> value.findingId().toString()))
+            .toList();
+    if (!items.isEmpty()) {
+      Set<UUID> scoped = new LinkedHashSet<>(commonAssetIds);
+      if (sourceOutcomes.stream().anyMatch(value -> !scoped.contains(value.outcome().assetId()))) {
+        throw new IllegalArgumentException(
+            "Inventory source outcomes must belong to the furniture cabin scope");
+      }
+    }
+    return new NormalizedFurnitureReconciliation(
+        new FurnitureReconciliationPlan(
+            request.warehouseId(),
+            request.expectedSnapshotSha256(),
+            request.reviewSha256(),
+            List.copyOf(items),
+            List.copyOf(commonAssetIds)),
+        List.copyOf(sourceOutcomes));
   }
 
   private static List<UUID> normalizedFurnitureAssetIds(List<UUID> assetIds) {
@@ -692,6 +783,12 @@ final class InventoryFurnitureReconciliationService {
         + locationKind.name();
   }
 
+  private static UUID sourceOutcomeIdempotencyKey(UUID inventoryId, UUID findingId) {
+    return UUID.nameUUIDFromBytes(
+        ("rwms:asset-service:inventory-source-outcome:" + inventoryId + ':' + findingId)
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
   private static void registerConcurrentSafe(Runnable registration) {
     try {
       registration.run();
@@ -740,6 +837,17 @@ final class InventoryFurnitureReconciliationService {
   /** Inventory identity and normalized plan hashed to detect conflicting reconciliation replay. */
   private record FurnitureReconciliationFingerprint(
       UUID inventoryId, FurnitureReconciliationPlan plan) {}
+
+  /** New request identity including source outcomes while legacy no-source hashes remain stable. */
+  private record SourceFurnitureReconciliationFingerprint(
+      UUID inventoryId,
+      FurnitureReconciliationPlan plan,
+      List<InventorySourceOutcomeCandidate> sourceOutcomes) {}
+
+  /** Legacy furniture plan plus separately normalized source outcomes. */
+  private record NormalizedFurnitureReconciliation(
+      FurnitureReconciliationPlan plan,
+      List<InventorySourceOutcomeCandidate> sourceOutcomes) {}
 
   /**
    * Per-catalog-item target distribution, fenced by catalog version and the expected stock

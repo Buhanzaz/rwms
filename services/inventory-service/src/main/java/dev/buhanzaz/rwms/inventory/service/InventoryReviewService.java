@@ -750,13 +750,15 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
     return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8));
   }
 
-  void createFurnitureReconciliationIntent(InventorySession session) {
+  void createFurnitureReconciliationIntent(
+      InventorySession session,
+      List<InventoryDependencyGateway.InventorySourceOutcomeCandidate> sourceOutcomes) {
     if (session.getLifecycle() != SessionLifecycle.COMPLETED) {
       throw new IllegalStateException("Furniture reconciliation requires a completed inventory");
     }
     InventoryDependencyGateway.FurnitureReconciliationRequest request =
-        furnitureReconciliationRequest(session);
-    if (request.items().isEmpty()) {
+        furnitureReconciliationRequest(session, sourceOutcomes);
+    if (request.items().isEmpty() && request.sourceOutcomes().isEmpty()) {
       return;
     }
     String requestBody = canonicalWrite(request);
@@ -780,7 +782,8 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
   }
 
   InventoryDependencyGateway.FurnitureReconciliationRequest furnitureReconciliationRequest(
-      InventorySession session) {
+      InventorySession session,
+      List<InventoryDependencyGateway.InventorySourceOutcomeCandidate> sourceOutcomes) {
     InventoryDependencyGateway.FurnitureSnapshot snapshot = furnitureSnapshot(session);
     JsonNode review = confirmedFurnitureReview(session);
     Map<UUID, JsonNode> reviewedItems = new LinkedHashMap<>();
@@ -845,7 +848,8 @@ final class InventoryReviewService extends InventoryReviewWorkflowSupport {
         session.getWarehouseId(),
         session.getFurnitureAssetSnapshotSha256(),
         session.getFurnitureReviewSha256(),
-        List.copyOf(items));
+        List.copyOf(items),
+        sourceOutcomes);
   }
 
   long requiredNonNegativeLong(JsonNode value, String field) {

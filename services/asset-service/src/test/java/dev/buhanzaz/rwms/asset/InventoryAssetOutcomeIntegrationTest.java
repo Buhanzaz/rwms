@@ -23,6 +23,13 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeShipmentContent;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryOutcomeStatus;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureReconciliationCabin;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureReconciliationItem;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureReconciliationRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryFurnitureSnapshotRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceAssetRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceAssetResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceOutcomeCandidate;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
@@ -114,6 +121,240 @@ class InventoryAssetOutcomeIntegrationTest {
   @AfterAll
   static void stopDatabase() {
     POSTGRES.stop();
+  }
+
+  @Test
+  void sourceProposalMaterializesAtItsExactUuidOnlyInsideFurnitureReconciliation() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    var proposal =
+        inventory.createSourceAsset(
+            new InventorySourceAssetRequest(
+                inventoryId,
+                findingId,
+                warehouseId,
+                "SOURCE-ATOMIC-" + UUID.randomUUID(),
+                TYPE_BK_1,
+                DIMENSION_24_X_6,
+                FINISHING_DVP,
+                CATEGORY_NEW,
+                plasticWindow(),
+                true,
+                Map.of("origin", "inventory"),
+                List.of("SOURCE")));
+    UUID assetId = proposal.response().asset().assetId();
+    InventoryOutcomeRequest outcome =
+        request(warehouseId, assetId, now(), InventoryOutcomeStatus.REPAIR);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_item where id=?", Integer.class, assetId))
+        .isZero();
+    assertThatThrownBy(
+            () ->
+                inventory.applyOutcome(
+                    UUID.randomUUID(), inventoryId, findingId, UUID.randomUUID(), outcome))
+        .isInstanceOf(dev.buhanzaz.rwms.asset.service.AssetNotFoundException.class);
+
+    var snapshot =
+        inventory.furnitureSnapshot(
+            new InventoryFurnitureSnapshotRequest(warehouseId, List.of(assetId)));
+    List<InventoryFurnitureReconciliationItem> items =
+        snapshot.items().stream()
+            .map(
+                item ->
+                    new InventoryFurnitureReconciliationItem(
+                        item.equipmentId(),
+                        item.catalogVersion(),
+                        item.currentStockQuantity(),
+                        item.cabins().stream()
+                            .map(
+                                cabin ->
+                                    new InventoryFurnitureReconciliationCabin(
+                                        cabin.assetId(), cabin.currentQuantity()))
+                            .toList()))
+            .toList();
+    inventory.reconcileFurniture(
+        inventoryId,
+        UUID.randomUUID(),
+        new InventoryFurnitureReconciliationRequest(
+            warehouseId,
+            snapshot.snapshotSha256(),
+            "b".repeat(64),
+            items,
+            List.of(new InventorySourceOutcomeCandidate(findingId, outcome))));
+
+    assertThat(jdbc.queryForObject("select id from rental_item where id=?", UUID.class, assetId))
+        .isEqualTo(assetId);
+    assertThat(currentStatus(assetId)).isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(jdbc.queryForObject(
+            "select count(*) from inventory_asset_source where inventory_id=? and finding_id=?",
+            Integer.class,
+            inventoryId,
+            findingId))
+        .isOne();
+    assertThat(jdbc.queryForObject(
+            "select count(*) from domain_event where aggregate_id=? and event_type='asset.rental-item.created.v1'",
+            Integer.class,
+            assetId.toString()))
+        .isOne();
+    assertThat(
+            inventory
+                .createSourceAsset(
+                    new InventorySourceAssetRequest(
+                        inventoryId,
+                        findingId,
+                        warehouseId,
+                        proposal.response().asset().displayCanonicalNumber(),
+                        TYPE_BK_1,
+                        DIMENSION_24_X_6,
+                        FINISHING_DVP,
+                        CATEGORY_NEW,
+                        plasticWindow(),
+                        true,
+                        Map.of("origin", "inventory"),
+                        List.of("SOURCE")))
+                .response())
+        .isEqualTo(proposal.response());
+  }
+
+  @Test
+  void sourceOutcomeBatchRejectsMixedFinalPlanAndCrossWarehouseExistingAsset() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID firstFindingId = UUID.randomUUID();
+    UUID secondFindingId = UUID.randomUUID();
+    UUID firstAssetId =
+        sourceProposal(inventoryId, firstFindingId, warehouseId).response().asset().assetId();
+    UUID secondAssetId =
+        sourceProposal(inventoryId, secondFindingId, warehouseId).response().asset().assetId();
+    OffsetDateTime completedAt = now();
+    InventoryOutcomeRequest first =
+        requestWithPlan(
+            warehouseId,
+            firstAssetId,
+            completedAt,
+            2L,
+            "a".repeat(64),
+            InventoryOutcomeStatus.FREE);
+    InventoryOutcomeRequest mixed =
+        requestWithPlan(
+            warehouseId,
+            secondAssetId,
+            completedAt,
+            3L,
+            "a".repeat(64),
+            InventoryOutcomeStatus.REPAIR);
+
+    assertThatThrownBy(
+            () ->
+                inventory.reconcileFurniture(
+                    inventoryId,
+                    UUID.randomUUID(),
+                    new InventoryFurnitureReconciliationRequest(
+                        warehouseId,
+                        "c".repeat(64),
+                        "d".repeat(64),
+                        List.of(),
+                        List.of(
+                            new InventorySourceOutcomeCandidate(firstFindingId, first),
+                            new InventorySourceOutcomeCandidate(secondFindingId, mixed)))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("one completed final-plan fence");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_item where id in (?, ?)",
+                Integer.class,
+                firstAssetId,
+                secondAssetId))
+        .isZero();
+
+    UUID otherWarehouseAsset = rentalItem(UUID.randomUUID(), "SOURCE-WRONG-WAREHOUSE-").id();
+    InventoryOutcomeRequest crossWarehouse =
+        request(warehouseId, otherWarehouseAsset, completedAt, InventoryOutcomeStatus.FREE);
+    assertThatThrownBy(
+            () ->
+                inventory.reconcileFurniture(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new InventoryFurnitureReconciliationRequest(
+                        warehouseId,
+                        "e".repeat(64),
+                        "f".repeat(64),
+                        List.of(),
+                        List.of(
+                            new InventorySourceOutcomeCandidate(
+                                UUID.randomUUID(), crossWarehouse)))))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("another warehouse");
+  }
+
+  @Test
+  void sourceNumberCollisionRollsBackMaterializationButRetainsIsolatedProposal() {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse existing = rentalItem(warehouseId, "SOURCE-COLLISION-");
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    var proposal =
+        inventory.createSourceAsset(
+            new InventorySourceAssetRequest(
+                inventoryId,
+                findingId,
+                warehouseId,
+                existing.number(),
+                TYPE_BK_1,
+                DIMENSION_24_X_6,
+                FINISHING_DVP,
+                CATEGORY_NEW,
+                plasticWindow(),
+                true,
+                Map.of(),
+                List.of()));
+    UUID proposedAssetId = proposal.response().asset().assetId();
+    InventoryOutcomeRequest outcome =
+        request(warehouseId, proposedAssetId, now(), InventoryOutcomeStatus.FREE);
+
+    assertThatThrownBy(
+            () ->
+                inventory.reconcileFurniture(
+                    inventoryId,
+                    UUID.randomUUID(),
+                    new InventoryFurnitureReconciliationRequest(
+                        warehouseId,
+                        "1".repeat(64),
+                        "2".repeat(64),
+                        List.of(),
+                        List.of(new InventorySourceOutcomeCandidate(findingId, outcome)))))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("number or reserved identity");
+
+    assertThat(jdbc.queryForObject(
+            "select count(*) from inventory_asset_source_operation where inventory_id=? and finding_id=?",
+            Integer.class,
+            inventoryId,
+            findingId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_item where id=?", Integer.class, proposedAssetId))
+        .isZero();
+    assertThat(jdbc.queryForObject(
+            "select count(*) from inventory_asset_source where inventory_id=? and finding_id=?",
+            Integer.class,
+            inventoryId,
+            findingId))
+        .isZero();
+    assertThat(jdbc.queryForObject(
+            "select count(*) from inventory_asset_outcome_receipt where asset_id=?",
+            Integer.class,
+            proposedAssetId))
+        .isZero();
+    assertThat(jdbc.queryForObject(
+            "select count(*) from domain_event where aggregate_id=?",
+            Integer.class,
+            proposedAssetId.toString()))
+        .isZero();
   }
 
   @Test
@@ -865,6 +1106,24 @@ class InventoryAssetOutcomeIntegrationTest {
                 Map.of(),
                 List.of()))
         .response();
+  }
+
+  private InventoryAssetService.CreateResult<InventorySourceAssetResponse> sourceProposal(
+      UUID inventoryId, UUID findingId, UUID warehouseId) {
+    return inventory.createSourceAsset(
+        new InventorySourceAssetRequest(
+            inventoryId,
+            findingId,
+            warehouseId,
+            "SOURCE-BATCH-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            CATEGORY_NEW,
+            plasticWindow(),
+            true,
+            Map.of(),
+            List.of()));
   }
 
   private EquipmentResponse equipment(String prefix) {

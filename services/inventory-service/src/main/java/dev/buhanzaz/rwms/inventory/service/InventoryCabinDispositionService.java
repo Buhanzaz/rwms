@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.service;
 
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.*;
 
+import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionCandidateKind;
 import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind;
@@ -369,6 +370,14 @@ final class InventoryCabinDispositionService extends InventoryTechnicalRuntimeSu
   }
 
   private InventoryCabinDispositionCandidateKind candidateKind(InventoryFinding finding) {
+    if (finding.getInspection() == InspectionState.NOT_INSPECTED
+        && (finding.getOrigin() == FindingOrigin.ADDED_NEW
+            || finding.getOrigin() == FindingOrigin.ADDED_USED)) {
+      throw new InventoryException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "INVENTORY_NEW_CABIN_NOT_INSPECTED",
+          "Inspect every cabin added during inventory before completion review");
+    }
     if (finding.getInspection() == InspectionState.NOT_INSPECTED
         || finding.getReconciliation() == ReconciliationState.MISSING) {
       return InventoryCabinDispositionCandidateKind.MISSING;

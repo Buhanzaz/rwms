@@ -62,6 +62,7 @@ final class InventoryAssetProjectionService {
   private final CabinCompositionService cabinComposition;
   private final InventoryAssetCodec codec;
   private final InventoryAssetSnapshotTransaction snapshotTransaction;
+  private final InventoryAssetSourceService sources;
 
   InventoryAssetProjectionService(
       RentalItemRepository rentalItems,
@@ -70,7 +71,8 @@ final class InventoryAssetProjectionService {
       OrderUnitReservationRepository orderReservations,
       CabinCompositionService cabinComposition,
       InventoryAssetCodec codec,
-      InventoryAssetSnapshotTransaction snapshotTransaction) {
+      InventoryAssetSnapshotTransaction snapshotTransaction,
+      InventoryAssetSourceService sources) {
     this.rentalItems = rentalItems;
     this.equipmentBalances = equipmentBalances;
     this.equipmentCatalog = equipmentCatalog;
@@ -78,6 +80,7 @@ final class InventoryAssetProjectionService {
     this.cabinComposition = cabinComposition;
     this.codec = codec;
     this.snapshotTransaction = snapshotTransaction;
+    this.sources = sources;
   }
 
   List<CaptureMemberRow> captureMemberSnapshot(UUID warehouseId) {
@@ -87,10 +90,12 @@ final class InventoryAssetProjectionService {
   InventoryAssetCurrentSnapshot currentAssetSnapshot(UUID assetId) {
     return snapshotTransaction.execute(
         () -> {
-          RentalItem item =
-              rentalItems
-                  .findById(assetId)
-                  .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+          RentalItem item = rentalItems.findById(assetId).orElse(null);
+          if (item == null) {
+            InventoryAssetCurrentSnapshot proposal = sources.currentProposal(assetId);
+            if (proposal != null) return proposal;
+            throw new AssetNotFoundException("Rental item was not found");
+          }
           String tenantSnapshot = activeTenantSnapshots(List.of(assetId)).get(assetId);
           List<EquipmentContentResponse> contentsSnapshot =
               List.copyOf(contentsByRentalItem(List.of(assetId)).getOrDefault(assetId, List.of()));
@@ -135,10 +140,24 @@ final class InventoryAssetProjectionService {
             .map(
                 id -> {
                   RentalItem item = current.get(id);
-                  return item == null
-                      ? new InventoryValidationItem(
-                          id, false, null, null, null, null, null, null, null, null)
-                      : new InventoryValidationItem(
+                  if (item == null) {
+                    InventoryAssetCurrentSnapshot proposal = sources.currentProposal(id);
+                    return proposal == null
+                        ? new InventoryValidationItem(
+                            id, false, null, null, null, null, null, null, null, null)
+                        : new InventoryValidationItem(
+                            id,
+                            true,
+                            proposal.version(),
+                            proposal.warehouseId(),
+                            proposal.status(),
+                            proposal.displayCanonicalNumber(),
+                            proposal.identityMatchKey(),
+                            proposal.tenantSnapshot(),
+                            proposal.passportSnapshot(),
+                            proposal.contentsSnapshot());
+                  }
+                  return new InventoryValidationItem(
                           id,
                           true,
                           item.getVersion(),

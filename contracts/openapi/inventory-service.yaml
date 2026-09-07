@@ -359,6 +359,10 @@ paths:
       description: >-
         Requires USER, rwms.write and warehouse EDIT. The permanent remote
         source is inventoryId:findingId and survives ordinary idempotency expiry.
+        Registers an isolated proposal with a stable asset identity, not a warehouse cabin.
+        Warehouse and rental availability do not include it before COMPLETED publication.
+        Completion materializes the inspected final status and passport atomically with
+        reviewed furniture; cancelling leaves the proposal isolated.
       requestBody:
         required: true
         content:
@@ -462,6 +466,9 @@ paths:
       description: >-
         Requires USER, rwms.write and warehouse MANAGE. Returns or rebuilds the exact
         server-owned return/missing candidate set from current active finding revisions.
+        Uninspected ADDED_NEW or ADDED_USED findings return 422
+        INVENTORY_NEW_CABIN_NOT_INSPECTED; an isolated proposal cannot become a missing
+        warehouse cabin or an automatic write-off.
       responses:
         '200': { $ref: '#/components/responses/CabinDispositionReviewResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
