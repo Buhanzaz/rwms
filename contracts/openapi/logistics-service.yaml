@@ -7,9 +7,10 @@ info:
     and private route-planning integration flows.
     Public operations require a locally validated USER Bearer JWT, the
     matching rwms scope, and warehouse access. The rental client/order subset also
-    accepts only the dedicated rwms-rental-manager-web/android credential with
-    RENTAL_MANAGER, rentalAccess=true and exactly rental.manage as its application
-    scope; operational document endpoints remain on rwms scopes. Every retriable
+    accepts only the dedicated rwms-rental-manager-web/android credential for a
+    recognized non-CUSTOMER USER role with rentalAccess=true and exactly
+    rental.manage as its application scope; operational document endpoints remain on
+    rwms scopes. Every retriable
     mutation uses a subject-bound Idempotency-Key; mutable transitions also require
     the current document version.
 servers:
@@ -740,8 +741,9 @@ paths:
     get:
       operationId: listRentalExpiredTrips
       description: >-
-        Latest 50 auto-cancelled trips across the authenticated rental manager's current
-        readable warehouses, newest first. Requires rental access and RENTAL_MANAGER role.
+        Latest 50 auto-cancelled trips across the authenticated rental-entitled staff user's
+        current readable warehouses, newest first. Requires a recognized non-CUSTOMER USER role
+        and rental access; existing role and warehouse permissions remain authoritative.
         Does not grant full-order visibility or expose customer/address/free-text contents.
       responses:
         "200":
@@ -2687,9 +2689,10 @@ paths:
       operationId: listRentalBookingChangeAlerts
       description: >-
         Returns at most fifty oldest unread completed CustomerApp booking mutations for a
-        RENTAL_MANAGER with rental access and current warehouse READ permission. Each manager
-        has independent acknowledgements. No assignment to a responsible manager is required.
-        canOpenOrder preserves existing order visibility; this notification grants no wider order access.
+        recognized non-CUSTOMER USER with rental access and current warehouse READ permission.
+        Each user has independent acknowledgements. No assignment to a responsible manager is
+        required. canOpenOrder preserves existing order visibility; this notification grants no
+        wider order access.
       responses:
         "200":
           description: Warehouse-authorized completed changes; pending mutations are excluded.

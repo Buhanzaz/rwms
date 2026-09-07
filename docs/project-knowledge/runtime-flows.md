@@ -1331,9 +1331,9 @@ guest domain state.
    A staff waiver requires rental write access, warehouse EDIT, a reason, exact quote
    version and idempotency key; original fee facts are retained. The limited pending-fee
    feed exposes only the fee intent and does not widen full order visibility.
-   V96 completed-change alerts fan out to all rental managers with current warehouse
-   READ/rental access. Acknowledgements belong to individual managers, not to the
-   booking, and cannot hide another manager's unread notification.
+   V96 completed-change alerts fan out to all rental-entitled staff users with current
+   warehouse READ access. Acknowledgements belong to individual users, not to the
+   booking, and cannot hide another user's unread notification.
 10. A confirmed fixed choice enters the logistics-owned planning feed with hard
    bounds; a confirmed `DURING_DAY` choice enters as a soft date-only option
    with null planner bounds. Informational `travelZoneHours` and the site-derived
@@ -1382,8 +1382,9 @@ and [`dynamic-slot design`](../isochrone-slot-planning.md).
 ### Rental client and order entry
 
 The dedicated manager web and Android applications obtain only
-`rental.manage`. Auth-service also freezes `RENTAL_MANAGER`,
-`rentalAccess=true` and the dedicated client ID into that boundary.
+`rental.manage`. Auth-service also freezes a recognized non-customer staff role,
+`rentalAccess=true` and the dedicated client ID into that boundary. The global role
+continues to control order visibility, administration and warehouse permissions.
 Warehouse-service accepts it only for the active warehouse directory; a direct warehouse UUID
 read, inactive listing, mutation,
 support or internal route still fails. The shared browser provider then shows only
@@ -1394,9 +1395,9 @@ orders reject a token carrying any application scope in addition to
 `rental.manage`; operational return, shipment and transfer APIs still require their
 ordinary RWMS scopes.
 
-The standalone Android client validates the authoritative `/me` subject and rental access before
-exposing data, then intersects the live warehouse directory with explicit active `EDIT`/`MANAGE`
-grants. It pages clients and
+The standalone Android client validates the authoritative `/me` subject, recognized non-customer
+staff role and rental access before exposing data, then intersects the live warehouse directory
+with explicit active `EDIT`/`MANAGE` grants. It pages clients and
 orders through the same public logistics API as the web application, obeys
 server `permissions.canEdit`, sends version-fenced updates and stable
 idempotency keys, and stores only a SHA-256 request fingerprint for command
@@ -2442,9 +2443,9 @@ and
    auto-cancellations remain visible through `driver-tasks?expiredOnly=true` and the panel.
    Cargo and lease ownership are unchanged; current work requires custody review and
    an explicit return or customer-agreed redirection, with no auto-cancellation fee.
-   The isolated Manager app polls `rental-expired-trips` across all of the current rental
-   manager's readable warehouses, with a bounded 50-row operational-only projection and
-   no expansion of full-order visibility.
+   The isolated Manager app polls `rental-expired-trips` across all of the current
+   rental-entitled staff user's readable warehouses, with a bounded 50-row operational-only
+   projection and no expansion of full-order visibility.
 5. A driver-board move command always moves the whole grouped task. A locked local
    pre-start check runs before task-board; after version-fenced remote success
    logistics synchronizes the owning document date while preserving the desired

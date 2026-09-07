@@ -28,8 +28,8 @@ and charges no customer fee: loaded cargo needs an explicit return or agreed red
 `GET /api/logistics/v1/driver-tasks?warehouseId=…&expiredOnly=true` exposes the last 50
 auto-cancellations to warehouse-authorized readers; the panel shows them with contact guidance.
 The isolated Manager app uses `GET /api/logistics/v1/rental-expired-trips`: one bounded
-feed for every rental manager's current readable warehouses, containing operational trip
-facts only, never another manager's order/customer/address/free-text data.
+feed for every rental-entitled staff user's current readable warehouses, containing operational
+trip facts only, never another manager's order/customer/address/free-text data.
 
 Global `GET/PUT /api/logistics/v1/settings/rental` also owns late-change policy.
 V94 adds `lateChangeNoticeDays` (default 2 warehouse-local calendar days), nullable
@@ -384,9 +384,10 @@ Staff with rental write authority and warehouse EDIT may waive a current unexpir
 a mandatory reason, quote version and idempotency key. The limited pending-fee feed is independent
 of full order visibility; it grants no other order access. Original fee facts remain stored,
 payable amount becomes zero, and the order audit records the actor/reason. V96 adds independent
-read receipts: completed cancellation/reschedule notifications reach **every RENTAL_MANAGER with
-current warehouse READ and rental access**, not only a responsible manager. Reading by one
-manager does not hide the change from another. The bounded feeds batch their dependent reads.
+read receipts: completed cancellation/reschedule notifications reach **every recognized
+non-customer staff user with current warehouse READ and rental access**, not only a responsible
+manager. Reading by one user does not hide the change from another. The bounded feeds batch their
+dependent reads.
 
 ### Planner recovery owner boundaries
 

@@ -28,7 +28,7 @@ Russian version: [README.ru.md](README.ru.md).
 - `/manager/` is the separate rental-manager web surface. It accepts only the
   dedicated `rwms-rental-manager-web` session of a recognized non-customer `USER`
   with `rentalAccess=true` and exactly `rental.manage`. The rental entitlement can
-  be combined with any staff global role; that role still controls read-only,
+  be combined with any staff global role; that role still controls order visibility,
   administration and warehouse-specific permissions. Its shared warehouse provider
   keeps only explicitly granted warehouses; an empty grant set is explained without
   blocking chat or client lookup.
