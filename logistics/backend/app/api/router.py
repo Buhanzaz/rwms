@@ -9,6 +9,7 @@ from app.api import (
     dynamic_operations,
     geocoding,
     health,
+    map_settings,
     plans,
     policy_zones,
     request_rescheduling,
@@ -23,6 +24,7 @@ api_router.include_router(health.router)
 admin_router = APIRouter(prefix="/admin", dependencies=[Depends(get_current_admin)])
 admin_router.include_router(admin_catalog.router)
 admin_router.include_router(admin_settings.router)
+admin_router.include_router(map_settings.admin_router)
 api_router.include_router(admin_router)
 protected_router = APIRouter(dependencies=[Depends(get_current_user)])
 protected_router.include_router(catalog.router)
@@ -34,4 +36,5 @@ protected_router.include_router(rwms.router)
 protected_router.include_router(routing.router)
 protected_router.include_router(slot_planning.router)
 protected_router.include_router(geocoding.router)
+protected_router.include_router(map_settings.router)
 api_router.include_router(protected_router)

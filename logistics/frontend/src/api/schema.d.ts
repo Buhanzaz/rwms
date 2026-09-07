@@ -4,6 +4,30 @@
  */
 
 export interface paths {
+    "/api/admin/map-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Admin Map Settings
+         * @description The parent router requires the isolated SYSTEM_ADMIN administration client.
+         */
+        get: operations["plannerAdminGetMapSettings"];
+        /**
+         * Put Admin Map Settings
+         * @description Commit the global presentation setting under its own expected-version fence.
+         */
+        put: operations["plannerAdminReplaceMapSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/trailers/{trailer_id}": {
         parameters: {
             query?: never;
@@ -354,6 +378,26 @@ export interface paths {
          * @description Record customer/operator feedback as an immutable solve constraint.
          */
         post: operations["post_human_decision_api_logistics_actions__action_id__decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/map-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Map Settings
+         * @description The parent router requires the panel USER session and rwms.read scope.
+         */
+        get: operations["plannerGetMapSettings"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1679,6 +1723,21 @@ export interface components {
             target_warehouse_id: string;
         };
         /**
+         * AdminMapSettingsRead
+         * @description Expose key presence to administrators without echoing the saved key.
+         */
+        AdminMapSettingsRead: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "STANDARD" | "YANDEX";
+            /** Version */
+            version: number;
+            /** Yandex Api Key Configured */
+            yandex_api_key_configured: boolean;
+        };
+        /**
          * AdminPlanningSettingsRead
          * @description Current configuration and map context, without private warehouse identities.
          */
@@ -2789,6 +2848,36 @@ export interface components {
                 [key: string]: unknown;
             };
             reason: components["schemas"]["NonBlank"];
+        };
+        /**
+         * MapSettingsRead
+         * @description The JavaScript key is delivered only to authenticated map consumers when selected.
+         */
+        MapSettingsRead: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "STANDARD" | "YANDEX";
+            /** Version */
+            version: number;
+            /** Yandex Api Key */
+            yandex_api_key: string | null;
+        };
+        /**
+         * MapSettingsUpdate
+         * @description A null/blank key retains the existing key when changing the provider.
+         */
+        MapSettingsUpdate: {
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "STANDARD" | "YANDEX";
+            /** Yandex Api Key */
+            yandex_api_key?: string | null;
         };
         MultiPolygonCoordinates: components["schemas"]["PolygonCoordinates"][];
         /**
@@ -5767,6 +5856,59 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    plannerAdminGetMapSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMapSettingsRead"];
+                };
+            };
+        };
+    };
+    plannerAdminReplaceMapSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MapSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMapSettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     admin_delete_trailer_api_admin_trailers__trailer_id__delete: {
         parameters: {
             query: {
@@ -6557,6 +6699,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerGetMapSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapSettingsRead"];
                 };
             };
         };

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Logistics Planner Administration API
-  version: 1.1.0
+  version: 1.2.0
   x-rwms-owner: logistics-planner-service
   x-rwms-stability: admin-catalog-v1
   description: >-
@@ -20,6 +20,73 @@ tags:
   - name: Planner administration settings
     description: SYSTEM_ADMIN-only planning, tariffs and exceptional map policies.
 paths:
+  /admin/map-settings:
+    get:
+      tags: [Planner administration settings]
+      operationId: plannerAdminGetMapSettings
+      summary: Read the global logistics map display settings
+      description: >-
+        Requires the isolated rwms-admin-web USER client, SYSTEM_ADMIN role and
+        admin.manage scope. Returns key presence without echoing the saved key.
+        This setting is shared by all warehouses and never changes truck routing.
+      responses:
+        '200':
+          description: Current version and map provider; Cache-Control no-store.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminMapSettings'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    put:
+      tags: [Planner administration settings]
+      operationId: plannerAdminReplaceMapSettings
+      summary: Select the standard map or Yandex JavaScript API 3.0
+      description: >-
+        Uses the same isolated administrator authority as GET. expected_version
+        fences the global setting; stale writes return 409 MAP_SETTINGS_VERSION_CONFLICT.
+        A null, omitted or blank yandex_api_key retains the stored key; a nonblank
+        value replaces it after trimming. YANDEX requires a stored or supplied key,
+        otherwise returns 422 YANDEX_MAP_KEY_REQUIRED. STANDARD preserves the key
+        for later reuse. The key is never seeded into source or returned here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MapSettingsUpdate'}
+      responses:
+        '200':
+          description: Saved setting with incremented version; Cache-Control no-store.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminMapSettings'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /map-settings:
+    servers:
+      - url: /logistics-panel/api
+    get:
+      tags: [Planner map display]
+      operationId: plannerGetMapSettings
+      summary: Read the selected map configuration for the authenticated logistics browser
+      description: >-
+        Served through the existing same-origin logistics application API prefix,
+        rewritten to the planner's /api/map-settings. Requires a panel USER session
+        and rwms.read. The JavaScript browser key is returned only when YANDEX is
+        active, never for STANDARD. The migration-created default is STANDARD.
+        Missing configuration returns 503 MAP_SETTINGS_UNAVAILABLE, not a fallback.
+      responses:
+        '200':
+          description: Current browser map configuration; Cache-Control no-store.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MapSettings'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
   /admin/warehouses/{warehouse_id}/vehicles:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -688,6 +755,39 @@ components:
         application/problem+json:
           schema: {$ref: '#/components/schemas/Problem'}
   schemas:
+    MapProvider:
+      type: string
+      enum: [STANDARD, YANDEX]
+    AdminMapSettings:
+      type: object
+      additionalProperties: false
+      required: [version, provider, yandex_api_key_configured]
+      properties:
+        version: {type: integer, minimum: 1}
+        provider: {$ref: '#/components/schemas/MapProvider'}
+        yandex_api_key_configured: {type: boolean}
+    MapSettingsUpdate:
+      type: object
+      additionalProperties: false
+      required: [expected_version, provider]
+      properties:
+        expected_version: {type: integer, minimum: 1}
+        provider: {$ref: '#/components/schemas/MapProvider'}
+        yandex_api_key:
+          type: [string, 'null']
+          maxLength: 256
+          writeOnly: true
+          description: Omit, use null or leave blank to keep the saved JavaScript API key.
+    MapSettings:
+      type: object
+      additionalProperties: false
+      required: [version, provider, yandex_api_key]
+      properties:
+        version: {type: integer, minimum: 1}
+        provider: {$ref: '#/components/schemas/MapProvider'}
+        yandex_api_key:
+          type: [string, 'null']
+          description: Browser JavaScript API key for YANDEX; null for STANDARD.
     Uuid:
       type: string
       format: uuid

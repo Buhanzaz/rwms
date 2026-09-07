@@ -2,6 +2,15 @@
 
 Status: Confirmed repository layout as of 2026-08-12.
 
+The logistics planner owns a global, version-fenced map display setting in
+[`logistics-planner-service.yaml`](../../contracts/openapi/logistics-planner-service.yaml).
+The isolated admin client selects STANDARD or YANDEX JavaScript API 3.0 and can replace
+the browser key. Admin reads expose only key presence; authenticated operator reads
+under `/logistics-panel/api/map-settings` return the key only for the active YANDEX
+provider, with `Cache-Control: no-store`. The map setting does not alter warehouse
+planning, geocoding, truck routing or saved routes. Alembic `20260907_0037` owns the
+singleton's initial STANDARD state; no credential is seeded into the repository.
+
 The asset-owned internal maintenance rental-item snapshot requires the canonical
 `number` (a non-null string of 1–128 characters). Owner HTTP serialization and the
 maintenance consumer retain that same value.

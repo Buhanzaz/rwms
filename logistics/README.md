@@ -63,6 +63,16 @@ and never produces synthetic circles or changes persisted demand.
 
 ## Interface
 
+The planner owns one global map display configuration, separate from warehouse planning
+and truck routing. The isolated admin API `/api/logistics-planner/v1/admin/map-settings`
+requires `rwms-admin-web`, `SYSTEM_ADMIN` and `admin.manage`; writes use `expected_version`.
+Administrators choose `STANDARD` or `YANDEX` (JavaScript API 3.0) and supply a browser API key.
+The key is stored in the planner database, omitted from admin responses and retained when
+switching back to STANDARD. Authenticated logistics readers obtain the key only while
+YANDEX is selected through `/logistics-panel/api/map-settings`; responses use `no-store`.
+Alembic revision `20260907_0037` seeds STANDARD without a credential. A missing setting
+is an explicit error, and changing the map never changes Valhalla routing or saved plans.
+
 Planner, warehouse-directory, contractor and transfer requests share one HTTP response decoder.
 Failures retain the HTTP status and Problem Details code and produce a safe user message; a 204 response
 is decoded without a JSON body. Each adapter validates its domain payload. Request cancellation remains

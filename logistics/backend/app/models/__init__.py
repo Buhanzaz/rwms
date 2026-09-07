@@ -31,6 +31,7 @@ from app.models.domain import (
     Warehouse,
     WarehouseIsochroneTariff,
 )
+from app.models.map_settings import MapDisplaySettings
 from app.models.operations import (
     ArchiveManifest,
     LegalHold,
@@ -67,6 +68,7 @@ __all__ = [
     "LogisticsNoticeStatus",
     "LogisticsRequest",
     "ManualChangeAudit",
+    "MapDisplaySettings",
     "OptimizationRun",
     "OptimizationTraceEvent",
     "OsmRestrictionImport",

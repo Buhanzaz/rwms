@@ -71,6 +71,36 @@
         "title": "AdminCatalogRelocationRequest",
         "type": "object"
       },
+      "AdminMapSettingsRead": {
+        "additionalProperties": false,
+        "description": "Expose key presence to administrators without echoing the saved key.",
+        "properties": {
+          "provider": {
+            "enum": [
+              "STANDARD",
+              "YANDEX"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "yandex_api_key_configured": {
+            "title": "Yandex Api Key Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "provider",
+          "yandex_api_key_configured"
+        ],
+        "title": "AdminMapSettingsRead",
+        "type": "object"
+      },
       "AdminPlanningSettingsRead": {
         "additionalProperties": false,
         "description": "Current configuration and map context, without private warehouse identities.",
@@ -3346,6 +3376,82 @@
           "reason"
         ],
         "title": "ManualChangeRequest",
+        "type": "object"
+      },
+      "MapSettingsRead": {
+        "additionalProperties": false,
+        "description": "The JavaScript key is delivered only to authenticated map consumers when selected.",
+        "properties": {
+          "provider": {
+            "enum": [
+              "STANDARD",
+              "YANDEX"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "yandex_api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yandex Api Key"
+          }
+        },
+        "required": [
+          "version",
+          "provider",
+          "yandex_api_key"
+        ],
+        "title": "MapSettingsRead",
+        "type": "object"
+      },
+      "MapSettingsUpdate": {
+        "additionalProperties": false,
+        "description": "A null/blank key retains the existing key when changing the provider.",
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "provider": {
+            "enum": [
+              "STANDARD",
+              "YANDEX"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "yandex_api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 256,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yandex Api Key"
+          }
+        },
+        "required": [
+          "expected_version",
+          "provider"
+        ],
+        "title": "MapSettingsUpdate",
         "type": "object"
       },
       "MultiPolygonCoordinates": {
@@ -10565,6 +10671,78 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/admin/map-settings": {
+      "get": {
+        "description": "The parent router requires the isolated SYSTEM_ADMIN administration client.",
+        "operationId": "plannerAdminGetMapSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMapSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Admin Map Settings",
+        "tags": [
+          "admin map settings"
+        ]
+      },
+      "put": {
+        "description": "Commit the global presentation setting under its own expected-version fence.",
+        "operationId": "plannerAdminReplaceMapSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MapSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMapSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Admin Map Settings",
+        "tags": [
+          "admin map settings"
+        ]
+      }
+    },
     "/api/admin/trailers/{trailer_id}": {
       "delete": {
         "description": "Delete an eligible trailer only when no vehicle selects it as default.",
@@ -11958,6 +12136,33 @@
         "summary": "Post Human Decision",
         "tags": [
           "dynamic-logistics"
+        ]
+      }
+    },
+    "/api/map-settings": {
+      "get": {
+        "description": "The parent router requires the panel USER session and rwms.read scope.",
+        "operationId": "plannerGetMapSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Map Settings",
+        "tags": [
+          "map settings"
         ]
       }
     },
