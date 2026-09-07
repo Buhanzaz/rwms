@@ -66,15 +66,20 @@ class AuthorizationServerConfigurationTest {
     }
 
     @Test
-    void rentalManagerAndAdministrationClientsEnforceRoleBoundaries() {
-        assertThatCode(() -> configuration.validateInteractiveClientRole(
-                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
-                        UserGlobalRole.RENTAL_MANAGER))
-                .doesNotThrowAnyException();
-        assertThatCode(() -> configuration.validateInteractiveClientRole(
-                        OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID,
-                        UserGlobalRole.RENTAL_MANAGER))
-                .doesNotThrowAnyException();
+    void rentalEntitlementAndAdministrationClientsEnforceRoleBoundaries() {
+        for (UserGlobalRole role : List.of(
+                UserGlobalRole.SYSTEM_ADMIN,
+                UserGlobalRole.WMS_ADMIN,
+                UserGlobalRole.WAREHOUSE_MANAGER,
+                UserGlobalRole.RENTAL_MANAGER,
+                UserGlobalRole.VIEWER)) {
+            assertThatCode(() -> configuration.validateInteractiveClientRole(
+                            OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID, role))
+                    .doesNotThrowAnyException();
+            assertThatCode(() -> configuration.validateInteractiveClientRole(
+                            OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID, role))
+                    .doesNotThrowAnyException();
+        }
         assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
                         OAuthClientProperties.PANEL_CLIENT_ID,
                         UserGlobalRole.RENTAL_MANAGER))
@@ -90,11 +95,6 @@ class AuthorizationServerConfigurationTest {
                         UserGlobalRole.WAREHOUSE_MANAGER))
                 .isInstanceOf(OAuth2AuthenticationException.class)
                 .hasMessageContaining("Administration application access is not allowed");
-        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
-                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
-                        UserGlobalRole.WMS_ADMIN))
-                .isInstanceOf(OAuth2AuthenticationException.class)
-                .hasMessageContaining("only the dedicated manager applications");
         assertThatCode(() -> configuration.validateInteractiveClientRole(
                         OAuthClientProperties.ADMIN_WEB_CLIENT_ID,
                         UserGlobalRole.SYSTEM_ADMIN))
@@ -112,9 +112,14 @@ class AuthorizationServerConfigurationTest {
                         UserGlobalRole.RENTAL_MANAGER,
                         true))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> configuration.validateInteractiveClientAccess(
+                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                        UserGlobalRole.SYSTEM_ADMIN,
+                        true))
+                .doesNotThrowAnyException();
         assertThatThrownBy(() -> configuration.validateInteractiveClientAccess(
                         OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
-                        UserGlobalRole.RENTAL_MANAGER,
+                        UserGlobalRole.VIEWER,
                         false))
                 .isInstanceOf(OAuth2AuthenticationException.class)
                 .hasMessageContaining("revoked");

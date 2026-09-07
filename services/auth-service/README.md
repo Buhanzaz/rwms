@@ -217,11 +217,12 @@ update preserves its current persisted value.
   limiting remains defence in depth rather than the only protection.
 - `CUSTOMER` users and `rwms-customer-android` are mutually exclusive with all
   other user clients during authorization-code and refresh-token exchange.
-- `RENTAL_MANAGER` users can mint interactive tokens only through
-  `rwms-rental-manager-web` or `rwms-rental-manager-android`. Both clients have
-  only `rental.manage`; they cannot mint panel, logistics, or administration
-  tokens. `rwms-admin-web` is restricted to `SYSTEM_ADMIN` and `WMS_ADMIN` and
-  has only `admin.manage`.
+- Any non-customer `USER` with `rentalAccess=true` can mint an interactive token
+  through `rwms-rental-manager-web` or `rwms-rental-manager-android`. Both clients
+  have only `rental.manage`. The `RENTAL_MANAGER` role remains confined to those
+  clients and cannot mint panel, logistics, or administration tokens.
+  `rwms-admin-web` is restricted to `SYSTEM_ADMIN` and `WMS_ADMIN` and has only
+  `admin.manage`.
 
 These rules put durable access invariants where the credential and token owner
 can enforce them transactionally, rather than relying on UI checks or every

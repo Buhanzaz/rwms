@@ -978,9 +978,9 @@ public class AuthorizationServerConfiguration {
     /**
      * Enforces the authoritative role boundary for each dedicated interactive application.
      *
-     * <p>Customer and rental-manager subjects cannot obtain panel, logistics, or administration
-     * scopes through another client. Conversely, broader administrative roles cannot use the
-     * customer or rental-manager clients to cross application boundaries.
+     * <p>Customer subjects remain isolated to their application. Rental access is an independent
+     * entitlement for staff roles, so any staff user may use a dedicated rental-manager client;
+     * the {@code RENTAL_MANAGER} role remains isolated from unrelated applications.
      *
      * @param clientId registered OAuth client identifier
      * @param globalRole authoritative user role, or {@code null} for non-user subjects
@@ -1001,13 +1001,17 @@ public class AuthorizationServerConfiguration {
         boolean rentalManagerClient =
                 OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID.equals(clientId)
                         || OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID.equals(clientId);
-        if (rentalManagerClient != (globalRole == UserGlobalRole.RENTAL_MANAGER)) {
-            if (rentalManagerClient || globalRole == UserGlobalRole.RENTAL_MANAGER) {
-                throw new OAuth2AuthenticationException(
-                        new OAuth2Error("access_denied"),
-                        "Rental managers may use only the dedicated manager applications",
-                        null);
-            }
+        if (rentalManagerClient && globalRole == null) {
+            throw new OAuth2AuthenticationException(
+                    new OAuth2Error("access_denied"),
+                    "Dedicated rental manager applications require a staff user",
+                    null);
+        }
+        if (!rentalManagerClient && globalRole == UserGlobalRole.RENTAL_MANAGER) {
+            throw new OAuth2AuthenticationException(
+                    new OAuth2Error("access_denied"),
+                    "Rental managers may use only the dedicated manager applications",
+                    null);
         }
         boolean adminClient = OAuthClientProperties.ADMIN_WEB_CLIENT_ID.equals(clientId);
         boolean adminRole = globalRole == UserGlobalRole.SYSTEM_ADMIN
@@ -1021,9 +1025,9 @@ public class AuthorizationServerConfiguration {
     }
 
     /**
-     * Applies mutable application entitlements after the immutable role/client boundary. A rental
-     * manager whose rental access was explicitly revoked cannot obtain a fresh or refreshed token
-     * for either dedicated manager application.
+     * Applies mutable application entitlements after the immutable role/client boundary. A staff
+     * user whose rental access was not granted or was revoked cannot obtain a fresh or refreshed
+     * token for either dedicated manager application.
      */
     void validateInteractiveClientAccess(
             String clientId, UserGlobalRole globalRole, boolean rentalAccess) {

@@ -109,7 +109,7 @@ class ApplicationRoleAccessIntegrationTest {
     }
 
     @Test
-    void administratorUsesAdminClientButCannotImpersonateRentalManagerApplication() throws Exception {
+    void administratorUsesAdminAndPanelClients() throws Exception {
         AdminUserResponse administrator = create("application.admin.allowed", UserGlobalRole.WMS_ADMIN);
 
         OAuthTokens tokens = authorize(
@@ -133,9 +133,35 @@ class ApplicationRoleAccessIntegrationTest {
         mvc.perform(get("/api/admin/users")
                         .header("Authorization", "Bearer " + panelTokens.accessToken()))
                 .andExpect(status().isForbidden());
+    }
+
+    @ParameterizedTest
+    @MethodSource("rentalEntitledStaffRoles")
+    void rentalEntitledStaffCanUseTheDedicatedManagerApplication(UserGlobalRole role)
+            throws Exception {
+        AdminUserResponse staff = create("application.rental-entitled." + role.name(), role, true);
+
+        OAuthTokens tokens = authorize(
+                staff.username(),
+                "rwms-rental-manager-web",
+                "http://localhost:8080/manager/auth/callback",
+                "openid profile offline_access rental.manage",
+                status().isOk());
+
+        var accessToken = jwtDecoder.decode(tokens.accessToken());
+        assertThat(accessToken.getClaimAsString("global_role")).isEqualTo(role.name());
+        assertThat(accessToken.getClaimAsBoolean("rentalAccess")).isTrue();
+        assertThat(accessToken.getClaimAsStringList("scope"))
+                .contains("rental.manage")
+                .doesNotContain("rwms.read", "rwms.write", "admin.manage");
+    }
+
+    @Test
+    void staffWithoutRentalAccessCannotUseTheDedicatedManagerApplication() throws Exception {
+        AdminUserResponse viewer = create("application.rental-revoked", UserGlobalRole.VIEWER, false);
 
         authorize(
-                administrator.username(),
+                viewer.username(),
                 "rwms-rental-manager-web",
                 "http://localhost:8080/manager/auth/callback",
                 "openid profile offline_access rental.manage",
@@ -173,7 +199,21 @@ class ApplicationRoleAccessIntegrationTest {
                         "http://localhost:8080/auth/rental-manager/callback"));
     }
 
+    private static Stream<UserGlobalRole> rentalEntitledStaffRoles() {
+        return Stream.of(
+                UserGlobalRole.SYSTEM_ADMIN,
+                UserGlobalRole.WMS_ADMIN,
+                UserGlobalRole.WAREHOUSE_MANAGER,
+                UserGlobalRole.RENTAL_MANAGER,
+                UserGlobalRole.VIEWER);
+    }
+
     private AdminUserResponse create(String username, UserGlobalRole role) {
+        return create(username, role, null);
+    }
+
+    private AdminUserResponse create(
+            String username, UserGlobalRole role, Boolean rentalAccess) {
         return users.create(
                 new CreateUserRequest(
                         username,
@@ -185,7 +225,7 @@ class ApplicationRoleAccessIntegrationTest {
                         role,
                         true,
                         null,
-                        null,
+                        rentalAccess,
                         List.of()),
                 adminAuthentication());
     }

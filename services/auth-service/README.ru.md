@@ -217,11 +217,11 @@ warehouse accesses используют optimistic concurrency. `409` означ
   единственным механизмом.
 - Пользователи `CUSTOMER` и `rwms-customer-android` взаимно изолированы от всех
   остальных user clients при authorization-code и refresh-token exchange.
-- Пользователь `RENTAL_MANAGER` получает interactive token только через
+- Любой не-клиентский `USER` с `rentalAccess=true` получает interactive token через
   `rwms-rental-manager-web` или `rwms-rental-manager-android`. Оба client имеют
-  только `rental.manage` и не могут выпустить panel, logistics или admin token.
-  `rwms-admin-web` доступен только `SYSTEM_ADMIN` и `WMS_ADMIN` и имеет только
-  `admin.manage`.
+  только `rental.manage`. Роль `RENTAL_MANAGER` по-прежнему ограничена этими
+  client и не может выпустить panel, logistics или admin token. `rwms-admin-web`
+  доступен только `SYSTEM_ADMIN` и `WMS_ADMIN` и имеет только `admin.manage`.
 
 Так durable access invariants находятся там, где владелец credentials и токенов
 может обеспечить их в транзакции, а не зависят от UI-проверки или дублирования
