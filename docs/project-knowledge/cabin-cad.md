@@ -14,7 +14,7 @@ Template once; opening an existing project installs its server document in an
 in-memory editor projection and restores the local draft on exit. Remote
 geometry is never written into the local browser draft as authoritative state.
 The current network UI opens the server template as a render input; Master
-Template editing remains in the local Master Setup path.
+Template geometry editing remains in the local Master Setup path.
 
 Primary evidence:
 
@@ -122,6 +122,14 @@ resources in canonical plan millimetres. Their review UI remains available to a
 member who cannot control CAD geometry; they increment only the annotation
 revision and never mutate `CADDocument`. The service remains authoritative for
 author, resolution and deletion permissions.
+
+`GET /api/cad/v1/projects/{id}/report-source` supplies public metadata and both
+accepted geometry resources from one PostgreSQL statement, with membership
+checked against that same state. It excludes annotations and invitation data.
+Optional `MasterTemplate.manufacturing` schema-version 1 stores authored material
+bindings, cutting parameters, surface layers, extra parts and drawing title
+fields. It shares the existing designer-only template revision/control fences,
+shared validation and JSONB persistence; no new database is involved.
 
 `CADDocument` schema-version 2 and `MasterTemplate` schema-version 1 remain
 opaque versioned snapshots. `server/src/validation.ts` directly imports the
@@ -482,9 +490,14 @@ saved semantic parameters and evaluates the same engine used by Master Setup.
 The retired hard-coded frame GLB and its mesh-scale path are not a runtime
 fallback.
 
-The shared Master Setup/CAD canvas and component-card canvases render on
-demand. Every canvas reports initialization and WebGL context loss/restoration;
-card previews additionally warn when more than eight renderers are active.
+The shared Master Setup/CAD canvas and one shared component-library preview
+render on demand. Every canvas reports initialization and WebGL context
+loss/restoration. Native SVG catalog cards share that one preview; built-in
+model details use stable catalog IDs and shared geometry/material resources.
+The 3D camera fits town bounds on entry and on an explicit fit request, while
+ordinary dragging preserves the camera. Plan rendering culls offscreen module,
+wall and opening shapes with a margin while the full document stays authoritative.
+Shared-wall discovery checks footprint contacts before examining wall details.
 Opacity-specific GLB material clones are disposed when replaced without
 disposing cached GLTF geometry, and texture cache retirement remains explicit.
 The shared canvas requests the browser's `high-performance` WebGL adapter, but

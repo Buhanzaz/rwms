@@ -133,6 +133,28 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '503': { $ref: '#/components/responses/Unavailable' }
 
+  /api/cad/v1/projects/{projectId}/report-source:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getCadProjectReportSource
+      summary: Read one coherent project, document and template report source.
+      description: >-
+        Requires current project membership. The service reads the public project
+        envelope and both opaque snapshots from one current project row; internal
+        invitations, annotations and validation metadata are never included.
+      responses:
+        '200':
+          description: Caller-visible state and coherent accepted source snapshots.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectReportSource' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
   /api/cad/v1/projects/{projectId}/document:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -686,7 +708,10 @@ components:
         dimension check in the shared template engine pass. The server limits
         its serialized snapshot to 64 MiB and each of geometry resources and
         occurrences to 10,000; consumers must not duplicate or extend this
-        snapshot schema here.
+        snapshot schema here. When present, `manufacturing` is optional
+        schema-version 1 metadata for bindings, layers, extras, titleblock
+        fields and `surfacesInModel`; its exact model is defined by
+        `cabin-cad/src/master-template/domain/manufacturing.ts`.
     ProjectDocumentResource:
       type: object
       additionalProperties: false
@@ -700,6 +725,14 @@ components:
       required: [revision, template]
       properties:
         revision: { type: integer, minimum: 1 }
+        template: { $ref: '#/components/schemas/MasterTemplate' }
+    ProjectReportSource:
+      type: object
+      additionalProperties: false
+      required: [project, document, template]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectState' }
+        document: { $ref: '#/components/schemas/CADDocument' }
         template: { $ref: '#/components/schemas/MasterTemplate' }
     Point2D:
       type: object
