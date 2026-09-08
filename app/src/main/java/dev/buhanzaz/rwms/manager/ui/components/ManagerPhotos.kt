@@ -21,12 +21,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -51,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -62,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -379,6 +383,7 @@ fun ManagerInlinePhotoPager(
     val scope = rememberCoroutineScope()
     BoxWithConstraints(modifier = modifier.fillMaxWidth().testTag(testTag)) {
         val pagerHeight = (maxWidth * 0.75f).coerceAtMost(320.dp)
+        val edgeWidth = maxWidth / 5f
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -402,6 +407,8 @@ fun ManagerInlinePhotoPager(
                 symbol = "‹",
                 contentDescription = "Предыдущее фото",
                 enabled = pagerState.currentPage > 0,
+                edge = InlinePagerArrowEdge.Start,
+                edgeWidth = edgeWidth,
                 onClick = {
                     scope.launch {
                         pagerState.animateScrollToPage(pagerState.currentPage - 1)
@@ -413,6 +420,8 @@ fun ManagerInlinePhotoPager(
                 symbol = "›",
                 contentDescription = "Следующее фото",
                 enabled = pagerState.currentPage < photoUris.lastIndex,
+                edge = InlinePagerArrowEdge.End,
+                edgeWidth = edgeWidth,
                 onClick = {
                     scope.launch {
                         pagerState.animateScrollToPage(pagerState.currentPage + 1)
@@ -436,34 +445,62 @@ fun ManagerInlinePhotoPager(
     }
 }
 
-/** Provides one accessible 56dp previous/next target over an inline photo pager. */
+private enum class InlinePagerArrowEdge {
+    Start,
+    End,
+}
+
+/** Provides one accessible edge control over an inline photo pager. */
 @Composable
 private fun InlinePagerArrow(
     symbol: String,
     contentDescription: String,
     enabled: Boolean,
+    edge: InlinePagerArrowEdge,
+    edgeWidth: Dp,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val gradient = when (edge) {
+        InlinePagerArrowEdge.Start -> Brush.horizontalGradient(
+            listOf(
+                Color.Black.copy(alpha = 0.80f),
+                Color.Black.copy(alpha = 0.40f),
+                Color.Transparent,
+            ),
+        )
+
+        InlinePagerArrowEdge.End -> Brush.horizontalGradient(
+            listOf(
+                Color.Transparent,
+                Color.Black.copy(alpha = 0.40f),
+                Color.Black.copy(alpha = 0.80f),
+            ),
+        )
+    }
     IconButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier
-            .size(56.dp)
+            .fillMaxHeight()
+            .width(edgeWidth)
+            .background(gradient)
             .semantics { this.contentDescription = contentDescription },
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-            shape = CircleShape,
+        Box(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            contentAlignment = if (edge == InlinePagerArrowEdge.Start) {
+                Alignment.CenterStart
+            } else {
+                Alignment.CenterEnd
+            },
         ) {
-            Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    text = symbol,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 40.sp,
-                    lineHeight = 40.sp,
-                )
-            }
+            Text(
+                text = symbol,
+                color = Color.White,
+                fontSize = 40.sp,
+                lineHeight = 40.sp,
+            )
         }
     }
 }

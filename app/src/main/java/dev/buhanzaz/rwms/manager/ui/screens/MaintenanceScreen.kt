@@ -42,7 +42,6 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -142,7 +141,7 @@ private const val MAINTENANCE_STEP_COUNT = 5
 internal const val MAINTENANCE_CATALOG_PAGE_SIZE = 9
 internal const val MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS = 2_000L
 private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 48.dp
-internal const val MAINTENANCE_CATALOG_PHOTO_DRAWER_HEIGHT_DIVISOR = 3f
+internal const val MAINTENANCE_CATALOG_PHOTO_DRAWER_DRAG_MULTIPLIER = 5f
 
 /**
  * Defines manager UI or local cache state; it does not own a server-side business transition.
@@ -1041,7 +1040,7 @@ private fun MaintenanceAssetCombobox(
                 },
                 singleLine = true,
                 enabled = enabled,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             )
             ExposedDropdownMenu(
                 expanded = expanded && feedback == null && visibleAssets.isNotEmpty(),
@@ -1630,12 +1629,10 @@ internal fun MaintenanceCatalogStep(
             val density = LocalDensity.current
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 val drawerFooterHeight = with(density) { drawerFooterHeightPx.toDp() }
-                val availableRevealHeight = (
+                val maximumRevealHeight = (
                     maxHeight - MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT -
                         drawerFooterHeight
                     ).coerceAtLeast(0.dp)
-                val maximumRevealHeight =
-                    availableRevealHeight / MAINTENANCE_CATALOG_PHOTO_DRAWER_HEIGHT_DIVISOR
                 catalogLines(
                     Modifier.fillMaxSize(),
                     PaddingValues(
@@ -1935,7 +1932,10 @@ private fun MaintenanceCatalogPhotoDrawer(
                                 },
                                 onVerticalDrag = { change, dragAmount ->
                                     change.consume()
-                                    revealedHeightPx = (revealedHeightPx + dragAmount)
+                                    revealedHeightPx = (
+                                        revealedHeightPx +
+                                            dragAmount * MAINTENANCE_CATALOG_PHOTO_DRAWER_DRAG_MULTIPLIER
+                                        )
                                         .coerceIn(0f, maximumRevealHeightPx)
                                 },
                                 onDragEnd = {
@@ -2427,28 +2427,57 @@ private fun MaintenanceQuantityField(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         isError = isError,
         trailingIcon = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                IconButton(
+            Column(
+                modifier = Modifier.width(32.dp).height(48.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                MaintenanceQuantityArrow(
+                    symbol = "▲",
+                    contentDescription = "Увеличить количество",
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().height(24.dp),
                     onClick = {
                         onValueChange(maintenanceQuantityAfterStep(value, step = 1))
                     },
+                )
+                MaintenanceQuantityArrow(
+                    symbol = "▼",
+                    contentDescription = "Уменьшить количество",
                     enabled = enabled,
-                    modifier = Modifier.semantics {
-                        contentDescription = "Увеличить количество"
-                    },
-                ) { Text("▲") }
-                IconButton(
+                    modifier = Modifier.fillMaxWidth().height(24.dp),
                     onClick = {
                         onValueChange(maintenanceQuantityAfterStep(value, step = -1))
                     },
-                    enabled = enabled,
-                    modifier = Modifier.semantics {
-                        contentDescription = "Уменьшить количество"
-                    },
-                ) { Text("▼") }
+                )
             }
         },
     )
+}
+
+@Composable
+private fun MaintenanceQuantityArrow(
+    symbol: String,
+    contentDescription: String,
+    enabled: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = symbol,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            },
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

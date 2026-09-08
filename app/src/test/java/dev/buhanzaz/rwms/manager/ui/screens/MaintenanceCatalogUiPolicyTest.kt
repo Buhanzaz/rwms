@@ -29,6 +29,11 @@ class MaintenanceCatalogUiPolicyTest {
     }
 
     @Test
+    fun `photo drawer needs five times less physical drag than its reveal height`() {
+        assertThat(MAINTENANCE_CATALOG_PHOTO_DRAWER_DRAG_MULTIPLIER).isEqualTo(5f)
+    }
+
+    @Test
     fun `quantity arrows step by one and never create a non-positive quantity`() {
         assertThat(maintenanceQuantityAfterStep("1", step = -1)).isEqualTo("1")
         assertThat(maintenanceQuantityAfterStep("2", step = -1)).isEqualTo("1")
