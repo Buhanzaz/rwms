@@ -1,16 +1,20 @@
 # Cabin CAD Master Template Flow
 
-Status: Confirmed browser-prototype behavior as of 2026-08-19; the
-collaboration backend stage was delivered on 2026-09-08. Browser integration
-and public release remain incomplete.
+Status: Confirmed browser behavior as of 2026-09-09. `cabin-cad/` now has
+separate local and network-project modes. The browser network client and its
+gateway contract are implemented; browser E2E and public release verification
+remain pending.
 
-`cabin-cad/` remains an independent browser engineering prototype. Its current
-browser code does not yet use the RWMS gateway, the CAD collaboration API, or a
-server-side project. Its existing browser persistence is therefore
-prototype-local and must not be treated as authoritative RWMS product data.
-The delivered server stage described below changes that future collaboration
-boundary; it does not make the browser UI online or replace the existing
-prototype persistence until a client is explicitly wired and published.
+`cabin-cad/` remains an independent browser engineering prototype, with an
+explicit boundary between its two CAD paths. Local `Master Setup` and `CAD`
+continue to use prototype-local browser state. `Network Projects` authenticates
+and loads a server-owned project through the public RWMS gateway. Creating a
+network project captures the current local `CADDocument` and saved Master
+Template once; opening an existing project installs its server document in an
+in-memory editor projection and restores the local draft on exit. Remote
+geometry is never written into the local browser draft as authoritative state.
+The current network UI opens the server template as a render input; Master
+Template editing remains in the local Master Setup path.
 
 Primary evidence:
 
@@ -28,10 +32,15 @@ Primary evidence:
 - [`cabin-cad/src/viewer3d/masterTemplateRenderCache.ts`](../../cabin-cad/src/viewer3d/masterTemplateRenderCache.ts)
 - [`cabin-cad/src/viewer3d/materialTexture.ts`](../../cabin-cad/src/viewer3d/materialTexture.ts)
 - [`cabin-cad/src/viewer3d/Viewer3D.tsx`](../../cabin-cad/src/viewer3d/Viewer3D.tsx)
+- [`cabin-cad/src/collaboration/OnlineProjects.tsx`](../../cabin-cad/src/collaboration/OnlineProjects.tsx)
+- [`cabin-cad/src/collaboration/projectSession.ts`](../../cabin-cad/src/collaboration/projectSession.ts)
+- [`cabin-cad/src/collaboration/editorBinding.ts`](../../cabin-cad/src/collaboration/editorBinding.ts)
+- [`cabin-cad/src/collaboration/auth.ts`](../../cabin-cad/src/collaboration/auth.ts)
+- [`cabin-cad/src/collaboration/CollaborationBar.tsx`](../../cabin-cad/src/collaboration/CollaborationBar.tsx)
 - [`cabin-cad/vite.config.ts`](../../cabin-cad/vite.config.ts)
 - [`cabin-cad/README.md`](../../cabin-cad/README.md)
 
-## Network Collaboration Backend Stage
+## Network Collaboration
 
 [`cabin-cad/server/`](../../cabin-cad/server/) now contains a Node.js 22+
 backend that owns CAD project membership, role assignment, control fencing,
@@ -42,24 +51,37 @@ public HTTP boundary is
 [`cad-service.yaml`](../../contracts/openapi/cad-service.yaml); there is no
 second browser-defined contract.
 
-The intended interactive path is deliberately same-origin:
+The implemented interactive path is deliberately same-origin:
 
 ```text
-Cabin CAD browser (future client) -> /api/cad/v1/**
+Cabin CAD browser -> /api/cad/v1/**
     -> API gateway (private CAD_SERVICE_URL) -> cad-service
 ```
 
 The browser must never receive an internal service address, `CAD_SERVICE_URL`,
 or a direct `/api/internal/**` route. `/health` is a local service check, not a
-browser collaboration endpoint. The current browser is not wired to this path,
-and no public gateway/Nginx deployment is claimed by this documentation.
+browser collaboration endpoint. [`CadApi`](../../cabin-cad/src/collaboration/api.ts)
+uses only the same-origin `/api/cad/v1/**` paths, `no-store` reads and Bearer
+authentication. The development Vite proxy is opt-in through
+`CAD_DEV_GATEWAY_URL`; it preserves those public paths rather than supplying a
+browser service address. A public gateway/Nginx deployment is not claimed by
+this documentation.
 
 The interactive OIDC client is `rwms-cad`, with callback
 `/cabin-cad/auth/callback`. Every collaboration operation needs a verified USER
 Bearer JWT with `cad.project`; issuer, audience, signature, `exp`, `iat` and
 `sub` are checked before current project membership is resolved. Missing,
 revoked or inaccessible membership deliberately appears as a project-not-found
-response rather than client-side cached access.
+response rather than client-side cached access. The browser uses Authorization
+Code with PKCE through `oidc-client-ts`; its OIDC user and transaction state
+are tab-scoped `sessionStorage`, and refresh failure requires a new login.
+
+After login, `OnlineProjects` lists memberships, opens a chosen server project,
+or creates one from the captured local snapshots. A creator can issue the
+one-client invitation from the collaboration bar. An invitation arriving before
+login is retained only across that login in session storage, then accepted for
+the authenticated subject; it never selects a role in the browser. The project
+list and invitation acceptance always fetch their result from cad-service.
 
 A project creator is assigned `designer`. A signed invitation is valid for 24
 hours, may be accepted once by a signed-in recipient, and always assigns that
@@ -78,6 +100,29 @@ delete it, and only the author can change its text. Ordinary mutable operations
 use a project-scoped `operationId` and return the durable result only for the
 exact same actor, operation kind and body.
 
+`ProjectSession` polls project revision metadata every 1.5 seconds while the
+session is ready. It fetches the document, template and annotations separately
+only when their corresponding revision changes, so a comment update does not
+reload CAD geometry. Presence refresh is separately throttled to ten seconds.
+Three consecutive non-authorisation read failures stop automatic polling and
+leave an explicit recovery action; `401`, `403` and `404` also stop polling
+immediately. This is polling, not a WebSocket or browser-owned projection.
+
+At most one network mutation is pending. A document save carries its original
+`operationId`, document revision and control-version fences; control, membership
+and annotation changes carry their own expected version fence. An uncertain
+submission retains the exact request identity and payload for retry, and the
+session refuses exit or sign-out while its outcome is unknown. A rejected stale
+document fence restores the last server-accepted editor snapshot instead of
+making a local change authoritative. Project creation retains the same captured
+snapshot and project ID for an uncertain retry.
+
+Plan comments, freehand ink, arrows and rectangles are independent annotation
+resources in canonical plan millimetres. Their review UI remains available to a
+member who cannot control CAD geometry; they increment only the annotation
+revision and never mutate `CADDocument`. The service remains authoritative for
+author, resolution and deletion permissions.
+
 `CADDocument` schema-version 2 and `MasterTemplate` schema-version 1 remain
 opaque versioned snapshots. `server/src/validation.ts` directly imports the
 framework-free shared `src/cad` and `src/master-template` validators and
@@ -94,8 +139,10 @@ The repository includes
 [`nginx-cad.conf.example`](../../cabin-cad/server/nginx-cad.conf.example) for a
 future publication. It raises the CAD location's `client_max_body_size` to
 80m from the current public 12m cap and sets 50-second proxy read/send
-timeouts. It is not a live Nginx edit. Browser API wiring, gateway/public-route
-publication and release verification remain later work.
+timeouts. It is not a live Nginx edit. Public gateway-route publication and
+release verification remain later work. The gateway route and browser API
+wiring exist in source; no browser E2E or live public route check is claimed
+here.
 
 ## Ownership And Layering
 
