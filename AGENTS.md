@@ -108,6 +108,24 @@ Do not ask the user to decide something that current authoritative sources alrea
 
 The task is not an invitation to fix every problem discovered in the repository.
 
+## Mandatory Proportionality And Completion Discipline
+
+Investigation, review and verification must remain strictly proportional to the current direct
+request. For a local UI or behavior change, trace only the active path and the boundaries needed
+to make that path work.
+
+Do not delay implementation or handoff to investigate speculative, rare or pre-existing edge
+cases unless repository evidence shows that the current task introduced the problem or that it
+directly prevents the requested behavior from working. A hypothetical possibility is not enough.
+
+Do not start repeated review rounds after the requested behavior has focused passing coverage.
+Every additional review or test round must be justified by a concrete failure, an actionable
+finding in the current diff, or an authoritative invariant directly affected by the request.
+
+Once the requested behavior works, its focused checks pass and the current diff has no known
+task-caused regression, stop exploring, commit the coherent change and complete the handoff.
+Finishing the smallest complete change promptly is a mandatory part of correctness.
+
 A discovered problem may be fixed during the current task only when at least one is true:
 
 1. the current task introduced it;
