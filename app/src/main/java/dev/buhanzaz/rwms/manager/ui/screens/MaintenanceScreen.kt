@@ -42,6 +42,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -141,6 +142,7 @@ private const val MAINTENANCE_STEP_COUNT = 5
 internal const val MAINTENANCE_CATALOG_PAGE_SIZE = 9
 internal const val MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS = 2_000L
 private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 48.dp
+internal const val MAINTENANCE_CATALOG_PHOTO_DRAWER_HEIGHT_DIVISOR = 3f
 
 /**
  * Defines manager UI or local cache state; it does not own a server-side business transition.
@@ -1039,6 +1041,7 @@ private fun MaintenanceAssetCombobox(
                 },
                 singleLine = true,
                 enabled = enabled,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
             ExposedDropdownMenu(
                 expanded = expanded && feedback == null && visibleAssets.isNotEmpty(),
@@ -1627,10 +1630,12 @@ internal fun MaintenanceCatalogStep(
             val density = LocalDensity.current
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 val drawerFooterHeight = with(density) { drawerFooterHeightPx.toDp() }
-                val maximumRevealHeight = (
+                val availableRevealHeight = (
                     maxHeight - MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT -
                         drawerFooterHeight
                     ).coerceAtLeast(0.dp)
+                val maximumRevealHeight =
+                    availableRevealHeight / MAINTENANCE_CATALOG_PHOTO_DRAWER_HEIGHT_DIVISOR
                 catalogLines(
                     Modifier.fillMaxSize(),
                     PaddingValues(
@@ -2405,6 +2410,47 @@ private fun MaintenanceCatalogExistingWorkDialog(
     )
 }
 
+@Composable
+private fun MaintenanceQuantityField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    isError: Boolean = false,
+    enabled: Boolean = true,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Количество") },
+        singleLine = true,
+        enabled = enabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        isError = isError,
+        trailingIcon = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                IconButton(
+                    onClick = {
+                        onValueChange(maintenanceQuantityAfterStep(value, step = 1))
+                    },
+                    enabled = enabled,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Увеличить количество"
+                    },
+                ) { Text("▲") }
+                IconButton(
+                    onClick = {
+                        onValueChange(maintenanceQuantityAfterStep(value, step = -1))
+                    },
+                    enabled = enabled,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Уменьшить количество"
+                    },
+                ) { Text("▼") }
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MaintenanceCatalogAddSheet(
@@ -2472,13 +2518,9 @@ private fun MaintenanceCatalogAddSheet(
                     )
                 }
                 item {
-                    OutlinedTextField(
+                    MaintenanceQuantityField(
                         value = quantity,
                         onValueChange = { quantity = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Количество") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         isError = quantity.isNotBlank() && !validQuantity,
                     )
                 }
@@ -3180,13 +3222,9 @@ private fun CustomMaintenanceLineSheet(
                     }
                 }
                 item {
-                    OutlinedTextField(
+                    MaintenanceQuantityField(
                         value = draft.quantity,
                         onValueChange = { value -> draft = draft.copy(quantity = value) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Количество") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     )
                 }
                 item {
@@ -3353,13 +3391,9 @@ private fun MaintenanceLineEditSheet(
                 item { Text(line.description, style = MaterialTheme.typography.titleLarge) }
                 item { Text(catalogTypeLabel(line.lineType), style = MaterialTheme.typography.labelLarge) }
                 item {
-                    OutlinedTextField(
+                    MaintenanceQuantityField(
                         value = quantity,
                         onValueChange = { quantity = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Количество") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     )
                 }
                 if (line.lineType == "WORK") {
@@ -4158,6 +4192,14 @@ internal fun maintenanceTotal(lines: List<MaintenanceLineEditorState>): BigDecim
 private fun maintenanceQuantity(value: String): BigDecimal? {
     if (!quantityPattern.matches(value.trim())) return null
     return value.trim().replace(',', '.').toBigDecimalOrNull()
+}
+
+internal fun maintenanceQuantityAfterStep(value: String, step: Int): String {
+    val current = maintenanceQuantity(value) ?: BigDecimal.ONE
+    val next = current
+        .add(BigDecimal.valueOf(step.toLong()))
+        .max(BigDecimal.ONE)
+    return next.stripTrailingZeros().toPlainString().replace('.', ',')
 }
 
 private fun maintenancePrice(value: String): BigDecimal? {

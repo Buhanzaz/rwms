@@ -29,6 +29,14 @@ class MaintenanceCatalogUiPolicyTest {
     }
 
     @Test
+    fun `quantity arrows step by one and never create a non-positive quantity`() {
+        assertThat(maintenanceQuantityAfterStep("1", step = -1)).isEqualTo("1")
+        assertThat(maintenanceQuantityAfterStep("2", step = -1)).isEqualTo("1")
+        assertThat(maintenanceQuantityAfterStep("1,5", step = 1)).isEqualTo("2,5")
+        assertThat(maintenanceQuantityAfterStep("invalid", step = 1)).isEqualTo("2")
+    }
+
+    @Test
     fun `photo drawer opens only after more than half of its height is revealed`() {
         assertThat(
             maintenanceCatalogPhotoDrawerShouldExpand(

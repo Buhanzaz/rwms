@@ -55,7 +55,8 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         compose.waitForIdle()
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertDoesNotExist()
         compose.onNodeWithText("Существующая работа").assertExists()
-        val revealTravelPx = collapsedDrawerRevealTravelPx()
+        val revealTravelPx =
+            collapsedDrawerRevealTravelPx() / MAINTENANCE_CATALOG_PHOTO_DRAWER_HEIGHT_DIVISOR
 
         dragHandleBy(revealTravelPx * 0.2f)
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertDoesNotExist()
@@ -64,7 +65,7 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertExists()
         compose.onNodeWithContentDescription("Потяните вверх, чтобы скрыть фотографии").assertExists()
         compose.onNodeWithText("Существующая работа").assertDoesNotExist()
-        assertSelectorIsImmediatelyAboveAddLine()
+        assertSelectorIsAboveAddLine()
 
         compose.onNodeWithContentDescription("Фото состояния 1").performClick()
         compose.onNodeWithContentDescription("Фото состояния · 1 из 2").assertExists()
@@ -102,7 +103,7 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         return travelPx
     }
 
-    private fun assertSelectorIsImmediatelyAboveAddLine() {
+    private fun assertSelectorIsAboveAddLine() {
         val footerBottom = compose.onNodeWithTag("maintenance-catalog-photo-drawer-footer")
             .fetchSemanticsNode()
             .boundsInRoot
@@ -112,7 +113,6 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
             .boundsInRoot
             .top
         assertThat(addLineTop - footerBottom).isGreaterThan(0f)
-        assertThat(addLineTop - footerBottom).isLessThan(48f)
     }
 
     private fun dragHandleBy(deltaY: Float) {
