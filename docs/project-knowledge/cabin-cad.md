@@ -1,9 +1,9 @@
 # Cabin CAD Master Template Flow
 
-Status: Confirmed browser behavior as of 2026-09-09. `cabin-cad/` now has
-separate local and network-project modes. The browser network client and its
-gateway contract are implemented; browser E2E and public release verification
-remain pending.
+Status: Published runtime recorded as of 2026-09-09. `cabin-cad/` has separate
+local and network-project modes. The public `/cabin-cad/` route returns the new
+index with HTTP 200, and a disposable browser E2E check has passed. The public
+authenticated OIDC journey has also passed.
 
 `cabin-cad/` remains an independent browser engineering prototype, with an
 explicit boundary between its two CAD paths. Local `Master Setup` and `CAD`
@@ -64,8 +64,10 @@ browser collaboration endpoint. [`CadApi`](../../cabin-cad/src/collaboration/api
 uses only the same-origin `/api/cad/v1/**` paths, `no-store` reads and Bearer
 authentication. The development Vite proxy is opt-in through
 `CAD_DEV_GATEWAY_URL`; it preserves those public paths rather than supplying a
-browser service address. A public gateway/Nginx deployment is not claimed by
-this documentation.
+browser service address. Nginx includes
+`/etc/nginx/snippets/rwms-cad-api.conf` before generic API routing; its CAD
+location allows 80 MiB bodies and uses 50-second proxy read/send timeouts. The
+gateway receives the private CAD upstream through `CAD_SERVICE_URL`.
 
 The interactive OIDC client is `rwms-cad`, with callback
 `/cabin-cad/auth/callback`. Every collaboration operation needs a verified USER
@@ -172,14 +174,19 @@ deadline. PostgreSQL schema changes are Flyway-only under
 [`server/db/migration/`](../../cabin-cad/server/db/migration/); the Node process
 does not perform DDL.
 
-The repository includes
-[`nginx-cad.conf.example`](../../cabin-cad/server/nginx-cad.conf.example) for a
-future publication. It raises the CAD location's `client_max_body_size` to
-80m from the current public 12m cap and sets 50-second proxy read/send
-timeouts. It is not a live Nginx edit. Public gateway-route publication and
-release verification remain later work. The gateway route and browser API
-wiring exist in source; no browser E2E or live public route check is claimed
-here.
+The published runtime uses the `block-box-cad` Compose project with `cad-db` and
+`cad-service`. Flyway V1 completed successfully on the new `cad-data` volume;
+`cad-service` is private on `127.0.0.1:8097`, and its runtime environment file
+`/var/lib/rwms/runtime/cad-service.env` has mode `0600`. The repository's
+[`nginx-cad.conf.example`](../../cabin-cad/server/nginx-cad.conf.example)
+documents the same 80 MiB and 50-second CAD Nginx settings.
+
+The auth-service and API-gateway artifacts were built from clean primary
+revision `823c3cc2`; the CAD source revision was `c88f7e8`. The release record
+is `/var/lib/rwms/releases/rwms-cad-20260908T233144Z-823c3cc2/provenance/release.json`.
+The public route and disposable browser E2E are verified as above. The public
+authenticated OIDC journey also passed: discovery, token exchange and a
+no-mutation public-project list each returned HTTP 200.
 
 ## Ownership And Layering
 
