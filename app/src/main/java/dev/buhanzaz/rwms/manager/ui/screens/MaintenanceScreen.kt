@@ -140,8 +140,7 @@ import kotlinx.coroutines.launch
 private const val MAINTENANCE_STEP_COUNT = 5
 internal const val MAINTENANCE_CATALOG_PAGE_SIZE = 9
 internal const val MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS = 2_000L
-private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 48.dp
-internal const val MAINTENANCE_CATALOG_PHOTO_DRAWER_DRAG_MULTIPLIER = 5f
+private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 24.dp
 
 /**
  * Defines manager UI or local cache state; it does not own a server-side business transition.
@@ -1932,10 +1931,7 @@ private fun MaintenanceCatalogPhotoDrawer(
                                 },
                                 onVerticalDrag = { change, dragAmount ->
                                     change.consume()
-                                    revealedHeightPx = (
-                                        revealedHeightPx +
-                                            dragAmount * MAINTENANCE_CATALOG_PHOTO_DRAWER_DRAG_MULTIPLIER
-                                        )
+                                    revealedHeightPx = (revealedHeightPx + dragAmount)
                                         .coerceIn(0f, maximumRevealHeightPx)
                                 },
                                 onDragEnd = {

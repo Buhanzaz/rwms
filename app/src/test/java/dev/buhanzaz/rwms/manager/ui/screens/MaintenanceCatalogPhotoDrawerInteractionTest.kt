@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState
@@ -40,6 +41,7 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         render()
 
         compose.onNodeWithTag("maintenance-catalog-photo-drawer-handle").assertExists()
+        assertHandleHeight()
         compose.onNodeWithContentDescription("Потяните вниз, чтобы открыть фотографии").assertExists()
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertDoesNotExist()
         compose.onNodeWithText("Существующая работа").assertExists()
@@ -56,12 +58,11 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertDoesNotExist()
         compose.onNodeWithText("Существующая работа").assertExists()
         val revealTravelPx = collapsedDrawerRevealTravelPx()
-        val fingerTravelPx = revealTravelPx / MAINTENANCE_CATALOG_PHOTO_DRAWER_DRAG_MULTIPLIER
 
-        dragHandleBy(fingerTravelPx * 0.2f)
+        dragHandleBy(revealTravelPx * 0.2f)
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertDoesNotExist()
 
-        dragHandleBy(fingerTravelPx * 0.8f)
+        dragHandleBy(revealTravelPx * 0.8f)
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertExists()
         compose.onNodeWithContentDescription("Потяните вверх, чтобы скрыть фотографии").assertExists()
         compose.onNodeWithText("Существующая работа").assertDoesNotExist()
@@ -72,10 +73,10 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         compose.onNodeWithText("Готово").assertExists().performClick()
         compose.waitForIdle()
 
-        dragHandleBy(-fingerTravelPx * 0.2f)
+        dragHandleBy(-revealTravelPx * 0.2f)
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertExists()
 
-        dragHandleBy(-fingerTravelPx * 0.8f)
+        dragHandleBy(-revealTravelPx * 0.8f)
         compose.onNodeWithTag("maintenance-catalog-photo-pager").assertDoesNotExist()
         compose.onNodeWithText("Существующая работа").assertExists()
 
@@ -101,6 +102,15 @@ class MaintenanceCatalogPhotoDrawerInteractionTest {
         val travelPx = addLineTop - footerBottom
         assertThat(travelPx).isGreaterThan(200f)
         return travelPx
+    }
+
+    private fun assertHandleHeight() {
+        val actualHeightPx = compose.onNodeWithTag("maintenance-catalog-photo-drawer-handle")
+            .fetchSemanticsNode()
+            .boundsInRoot
+            .height
+        val expectedHeightPx = with(compose.density) { 24.dp.toPx() }
+        assertThat(actualHeightPx).isWithin(1f).of(expectedHeightPx)
     }
 
     private fun assertSelectorIsImmediatelyAboveAddLine() {
