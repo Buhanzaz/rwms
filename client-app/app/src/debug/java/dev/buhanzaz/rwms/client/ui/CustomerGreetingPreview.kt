@@ -17,7 +17,7 @@ internal fun CustomerGreetingPreview(@PreviewParameter(CustomerGreetingPhases::c
         message = null,
         submitting = false,
         onLogin = { _, _, _ -> },
-        onRegister = { _, _, _, _, _ -> },
+        onRegister = { _, _, _, _, _, _, _ -> },
         greetingPreviewProgress = progress,
     )
 }
@@ -29,7 +29,7 @@ internal fun CustomerLoginFieldsPreview() {
         message = null,
         submitting = false,
         onLogin = { _, _, _ -> },
-        onRegister = { _, _, _, _, _ -> },
+        onRegister = { _, _, _, _, _, _, _ -> },
         initialPage = CustomerAuthenticationPage.LOGIN,
     )
 }
@@ -41,7 +41,7 @@ internal fun CustomerRegistrationFieldsPreview() {
         message = null,
         submitting = false,
         onLogin = { _, _, _ -> },
-        onRegister = { _, _, _, _, _ -> },
+        onRegister = { _, _, _, _, _, _, _ -> },
         initialPage = CustomerAuthenticationPage.REGISTRATION,
     )
 }
@@ -53,7 +53,7 @@ internal fun CustomerRecoveryFieldsPreview() {
         message = null,
         submitting = false,
         onLogin = { _, _, _ -> },
-        onRegister = { _, _, _, _, _ -> },
+        onRegister = { _, _, _, _, _, _, _ -> },
         initialPage = CustomerAuthenticationPage.PASSWORD_RECOVERY,
     )
 }

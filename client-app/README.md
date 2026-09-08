@@ -34,11 +34,15 @@ apply, and a completed greeting is not replayed on configuration changes.
 Authentication follows the supplied 404 × 874 canvases: full-screen caustic artwork,
 a field-width BLOCK BOX wordmark, bottom-aligned forms, translucent borderless fields and soft
 shadows. The wordmark keeps its width across entry and login, moves above registration, and
-stays fully visible above each scrollable form when the keyboard opens. Registration submits with
+shrinks above each scrollable form when the keyboard opens. Short forms keep their actions at the
+bottom of the available canvas; the longer registration remains scrollable. Registration submits with
 `Зарегистрироваться`, recovery uses `Отправить`, and login keeps `Вход`. System Back returns
 from recovery to login, and from login/registration to entry.
-Registration collects login, email, confirmed password and phone; the auth boundary still receives
-only its contract fields, while email and phone prefill the mandatory individual logistics profile.
+Registration collects first name, last name, login, email, confirmed password and phone once.
+After authentication the app saves the individual logistics profile through its existing API,
+then opens city selection. There is no separate customer-data form. An interrupted save keeps
+the encrypted, account-bound registration draft and offers a retry; the profile edits those saved
+values. Accounts without a profile or registration draft show an explicit error.
 The recovery form matches the supplied reference; submitting it reports that recovery is unavailable
 because the current auth contract has no recovery operation. It never reports a sent email or SMS.
 

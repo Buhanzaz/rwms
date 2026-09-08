@@ -17,7 +17,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerCart
@@ -121,6 +125,73 @@ class CustomerVisualReviewTest {
 
     @Test
     @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders registration with focused first name field`() {
+        setRegistration(CustomerAppearanceMode.LIGHT)
+
+        composeRule.onNodeWithTag("customer-registration-first-name").performClick()
+        dispatchKeyboardInset(338)
+        composeRule.waitForIdle()
+        captureRoot("registration-ime-first-name")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders registration scrolled to contact fields`() {
+        setRegistration(CustomerAppearanceMode.LIGHT)
+
+        dispatchKeyboardInset(338)
+        composeRule.onNodeWithTag("customer-registration-screen")
+            .performScrollToNode(hasTestTag("customer-registration-phone"))
+        composeRule.onNodeWithTag("customer-registration-phone").assertIsDisplayed()
+        captureRoot("registration-ime-contact")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders registration submit state after all fields are filled`() {
+        var submitted = false
+        setRegistration(
+            CustomerAppearanceMode.LIGHT,
+            onRegister = { _, _, _, _, _, _, _ -> submitted = true },
+        )
+
+        composeRule.onNodeWithTag("customer-registration-login").performScrollTo()
+            .performTextReplacement("client")
+        composeRule.onNodeWithTag("customer-registration-first-name").performScrollTo()
+            .performTextReplacement("Иван")
+        composeRule.onNodeWithTag("customer-registration-last-name").performScrollTo()
+            .performTextReplacement("Петров")
+        composeRule.onNodeWithTag("customer-registration-email").performScrollTo()
+            .performTextReplacement("client@example.test")
+        composeRule.onNodeWithTag("customer-registration-phone").performScrollTo()
+            .performTextReplacement("+79990000000")
+        composeRule.onNodeWithTag("customer-registration-password").performScrollTo()
+            .performTextReplacement("secret123")
+        composeRule.onNodeWithTag("customer-registration-password-repeat").performScrollTo()
+            .performTextReplacement("secret123")
+        composeRule.onNodeWithTag("customer-registration-submit").performScrollTo().performClick()
+        composeRule.runOnIdle { assertThat(submitted).isTrue() }
+        captureRoot("registration-submitted")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders profile in light appearance`() {
+        setProfile(CustomerAppearanceMode.LIGHT)
+        composeRule.onNodeWithTag("profile-screen").assertIsDisplayed()
+        captureRoot("profile-light")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders profile in dark appearance`() {
+        setProfile(CustomerAppearanceMode.DARK)
+        composeRule.onNodeWithTag("profile-screen").assertIsDisplayed()
+        captureRoot("profile-dark")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders password recovery in light appearance`() {
         setAuth(CustomerAppearanceMode.LIGHT)
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
@@ -205,6 +276,54 @@ class CustomerVisualReviewTest {
                 CustomerTheme(appearanceMode) {
                     CustomerStoreLaunchGate {
                         CustomerAppContent(CustomerAppState.SignedOut())
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun setRegistration(
+        appearanceMode: CustomerAppearanceMode,
+        onRegister: (String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
+    ) {
+        composeRule.setContent {
+            CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
+                CustomerTheme(appearanceMode) {
+                    CustomerAuthenticationScreen(
+                        message = null,
+                        submitting = false,
+                        onLogin = { _, _, _ -> },
+                        onRegister = onRegister,
+                        initialPage = CustomerAuthenticationPage.REGISTRATION,
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun dispatchKeyboardInset(bottom: Int) {
+        composeRule.runOnIdle {
+            val insets = WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, bottom))
+                .setVisible(WindowInsetsCompat.Type.ime(), bottom > 0)
+                .build()
+            ViewCompat.dispatchApplyWindowInsets(composeRule.activity.window.decorView, insets)
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun setProfile(appearanceMode: CustomerAppearanceMode) {
+        composeRule.setContent {
+            CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
+                CustomerTheme(appearanceMode) {
+                    CustomerStoreLaunchGate {
+                        ProfileFormScreen(
+                            existing = reviewState().profile!!,
+                            busy = false,
+                            onSave = {},
+                        )
                     }
                 }
             }

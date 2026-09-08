@@ -99,51 +99,35 @@ class ProfileAndWarehouseScreensTest {
     }
 
     @Test
-    fun `registration contact draft creates only an individual profile`() {
-        var saved: CustomerProfile? = null
+    fun `profile displays saved registration values without a repeated identity step`() {
+        val profile = existingProfile().copy(email = "client@example.test")
         composeRule.setContent {
-            CustomerTheme {
-                ProfileFormScreen(
-                    existing = null,
-                    busy = false,
-                    onSave = { saved = it },
-                    registrationDraft = CustomerRegistrationProfileDraft(
-                        email = "client@example.test",
-                        phone = "+79990000000",
-                    ),
-                )
-            }
+            CustomerTheme { ProfileFormScreen(existing = profile, busy = false, onSave = {}) }
         }
-
-        composeRule.onNodeWithText("Физическое лицо").assertExists()
-        composeRule.onNodeWithText("Юридическое лицо").assertDoesNotExist()
-        composeRule.onNodeWithTag("profile-first-name").performTextReplacement("Иван")
-        composeRule.onNodeWithTag("profile-last-name").performTextReplacement("Петров")
-        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-save"))
-        composeRule.onNodeWithTag("profile-save").assertIsEnabled().performClick()
-
-        composeRule.runOnIdle {
-            assertThat(saved?.entityType).isEqualTo(CustomerEntityType.INDIVIDUAL)
-            assertThat(saved?.email).isEqualTo("client@example.test")
-            assertThat(saved?.phone).isEqualTo("+79990000000")
-        }
+        composeRule.onNodeWithText("Физическое лицо").assertDoesNotExist()
+        composeRule.onNodeWithText("Данные клиента").assertDoesNotExist()
+        composeRule.onNodeWithText("Иван").assertExists()
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-last-name"))
+        composeRule.onNodeWithText("Петров").assertExists()
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-email"))
+        composeRule.onNodeWithText("client@example.test").assertExists()
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-phone"))
+        composeRule.onNodeWithText("+79990000000").assertExists()
     }
 
     @Test
-    fun `mandatory profile displays save failures`() {
+    fun `profile displays save failures`() {
         composeRule.setContent {
             CustomerTheme {
                 ProfileFormScreen(
-                    existing = null,
+                    existing = existingProfile(),
                     busy = false,
                     onSave = {},
                     errorMessage = "Не удалось сохранить профиль",
                 )
             }
         }
-
         composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-error"))
-        composeRule.onNodeWithTag("profile-error").assertExists()
         composeRule.onNodeWithText("Не удалось сохранить профиль").assertExists()
     }
 

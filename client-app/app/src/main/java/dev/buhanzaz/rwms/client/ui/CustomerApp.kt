@@ -46,6 +46,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -162,6 +163,7 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
                 state = state,
                 onLogin = viewModel::login,
                 onRegister = viewModel::register,
+                onRetryRegistration = viewModel::retryRegistrationProfile,
                 onContinueAsGuest = viewModel::continueAsGuest,
                 onGuestWarehouse = viewModel::selectGuestWarehouse,
                 onGuestFilters = viewModel::applyGuestFilters,
@@ -225,7 +227,8 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
 fun CustomerAppContent(
     state: CustomerAppState,
     onLogin: (String, String, Boolean) -> Unit = { _, _, _ -> },
-    onRegister: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
+    onRegister: (String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
+    onRetryRegistration: () -> Unit = {},
     onContinueAsGuest: () -> Unit = {},
     onGuestWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse) -> Unit = {},
     onGuestFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit = {},
@@ -286,12 +289,12 @@ fun CustomerAppContent(
             val workflow = state.workflow
             when {
                 workflow.bootstrapping -> LoadingCustomerScreen("Загружаем данные клиента…")
-                workflow.profile == null -> ProfileFormScreen(
-                    existing = null,
+                workflow.profile == null -> RegistrationStatusScreen(
                     busy = workflow.busy,
-                    onSave = onSaveProfile,
-                    errorMessage = workflow.error,
-                    registrationDraft = workflow.registrationProfileDraft,
+                    pending = workflow.registrationPending,
+                    error = workflow.registrationError ?: workflow.error,
+                    onRetry = onRetryRegistration,
+                    onLogout = onLogout,
                 )
                 else -> SignedInNavigation(
                     state = workflow,
@@ -572,6 +575,7 @@ private fun SignedInNavigation(
                             onMenu = { coroutineScope.launch { drawerState.open() } },
                             onProfile = ::openProfile,
                             avatarUrl = state.profile?.avatar?.thumbnailUrl,
+                            errorMessage = state.registrationError,
                         )
                     }
                     entry<CatalogRoute> {
@@ -713,7 +717,7 @@ private fun SignedInNavigation(
                     }
                     entry<ProfileRoute> {
                         ProfileFormScreen(
-                            existing = state.profile,
+                            existing = requireNotNull(state.profile),
                             busy = state.busy,
                             onSave = onSaveProfile,
                             onAvatarCropped = onAvatarCropped,
@@ -800,6 +804,43 @@ private fun LoadingCustomerScreen(message: String) {
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
             )
+        }
+    }
+}
+
+/** Keeps interrupted registration recoverable without asking for the same profile data twice. */
+@Composable
+private fun RegistrationStatusScreen(
+    busy: Boolean,
+    pending: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    androidx.compose.material3.Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        topBar = { CustomerTopBar(title = "Регистрация") },
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(16.dp).testTag("registration-status-screen"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (busy) {
+                androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("Сохраняем регистрацию…", style = MaterialTheme.typography.bodyLarge)
+            } else {
+                Text(
+                    error ?: "Данные регистрации недоступны. Обратитесь в поддержку.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                if (pending) {
+                    Button(onClick = onRetry, modifier = Modifier.fillMaxWidth().testTag("registration-retry")) {
+                        Text("Повторить сохранение")
+                    }
+                }
+                TextButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
+            }
         }
     }
 }

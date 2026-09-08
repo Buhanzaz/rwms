@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.client.auth.CustomerAuthRepository
 import dev.buhanzaz.rwms.client.auth.CustomerAuthState
+import dev.buhanzaz.rwms.client.auth.PendingCustomerRegistration
 import dev.buhanzaz.rwms.client.data.AvailableEquipment
 import dev.buhanzaz.rwms.client.data.BookingChangeApplicationState
 import dev.buhanzaz.rwms.client.data.BookingChangeOperation
@@ -49,19 +50,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.round
 
-/** Contact values collected during account registration and reused by the mandatory profile step. */
-data class CustomerRegistrationProfileDraft(
-    val email: String,
-    val phone: String,
-)
-
 /** Complete UI state for the signed-in customer funnel; no field is authoritative outside the server. */
 data class CustomerWorkflowState(
     val bootstrapping: Boolean = true,
     val busy: Boolean = false,
     val error: String? = null,
     val profile: CustomerProfile? = null,
-    val registrationProfileDraft: CustomerRegistrationProfileDraft? = null,
+    val registrationPending: Boolean = false,
+    val registrationError: String? = null,
     val warehouses: List<CustomerWarehouse> = emptyList(),
     val selectedWarehouse: CustomerWarehouse? = null,
     val rememberWarehouseChoice: Boolean = false,
@@ -326,6 +322,7 @@ class CustomerAppViewModel @Inject constructor(
     private var activeSessionMarker: String? = null
     private var pendingFilters: Pair<String, CabinFilters>? = null
     private val automaticReadPolicy = CustomerAutomaticReadPolicy()
+    private var bootstrapReadRetryable = false
     private var guestReadJob: Job? = null
     private var guestReadGeneration = 0L
     private var showLoginRequested = false
@@ -339,12 +336,11 @@ class CustomerAppViewModel @Inject constructor(
                 val marker = authRepository.notificationSession()
                 if (auth != CustomerAuthState.SignedIn || marker != activeSessionMarker) {
                     cancelGuestRead()
-                    val registrationDraft = mutableWorkflow.value.registrationProfileDraft
-                        .takeUnless { auth is CustomerAuthState.SignedOut }
                     sessionGeneration += 1
                     activeSessionMarker = null
                     pendingFilters = null
                     automaticReadPolicy.reset()
+                    bootstrapReadRetryable = false
                     bootstrappedSession = false
                     mutableState.value = when (auth) {
                         is CustomerAuthState.SignedOut -> CustomerAppState.SignedOut(auth.message, showLogin = showLoginRequested)
@@ -354,7 +350,7 @@ class CustomerAppViewModel @Inject constructor(
                     // Keep the old gate owned until its job has finished every cleanup path.
                     mutationJob?.cancelAndJoin()
                     mutationJob = null
-                    mutableWorkflow.value = CustomerWorkflowState(registrationProfileDraft = registrationDraft)
+                    mutableWorkflow.value = CustomerWorkflowState()
                     activeSessionMarker = marker
                 }
                 when (auth) {
@@ -502,25 +498,22 @@ class CustomerAppViewModel @Inject constructor(
 
     /** Starts the PKCE customer login with the explicit session persistence choice. */
     fun login(username: String, password: String, rememberMe: Boolean) {
-        mutableWorkflow.value = mutableWorkflow.value.copy(registrationProfileDraft = null)
         viewModelScope.launch { authRepository.login(username, password, rememberMe) }
     }
 
-    /** Registers an individual account and carries its contact values into profile completion. */
+    /** Registers one individual account and begins server-backed profile provisioning after PKCE. */
     fun register(
         username: String,
         email: String,
         password: String,
         confirmation: String,
         phone: String,
+        firstName: String,
+        lastName: String,
     ) {
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            registrationProfileDraft = CustomerRegistrationProfileDraft(
-                email = email.trim(),
-                phone = phone.trim(),
-            ),
-        )
-        viewModelScope.launch { authRepository.register(username, password, confirmation) }
+        viewModelScope.launch {
+            authRepository.register(username, email, password, confirmation, phone, firstName, lastName)
+        }
     }
 
     /** Clears remote/local authorization and returns to the signed-out graph. */
@@ -531,17 +524,11 @@ class CustomerAppViewModel @Inject constructor(
     /** Saves a validated individual or legal profile. */
     fun saveProfile(profile: CustomerProfile) = launchMutation {
         validateProfile(profile)?.let { throw CustomerApiException(422, it) }
-        val saved = if (profile.id == null) {
-            repository.createProfile(profile)
-        } else {
-            repository.updateProfile(profile)
+        if (profile.id == null || profile.version == null) {
+            throw CustomerApiException(409, "Профиль клиента ещё не создан")
         }
-        val warehouses = if (profile.id == null) repository.warehouses() else mutableWorkflow.value.warehouses
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            profile = saved,
-            registrationProfileDraft = null,
-            warehouses = warehouses,
-        )
+        val saved = repository.updateProfile(profile)
+        mutableWorkflow.value = mutableWorkflow.value.copy(profile = saved)
     }
 
     /**
@@ -925,13 +912,20 @@ class CustomerAppViewModel @Inject constructor(
         if (authRepository.state.value != CustomerAuthState.SignedIn || authRepository.notificationSession() != marker) return
         automaticReadPolicy.reset()
         mutableWorkflow.value = mutableWorkflow.value.copy(automaticUpdatesPaused = false)
+        if (bootstrapReadRetryable && !mutableWorkflow.value.bootstrapping) bootstrap(automaticRetry = true)
     }
 
     /** Admits bounded foreground reads; a busy command lane does not consume a failed attempt. */
     fun refreshCustomerUpdates() {
-        if (mutableWorkflow.value.bootstrapping || mutableWorkflow.value.profile == null ||
-            !automaticReadPolicy.canAttempt(SystemClock.elapsedRealtime())
-        ) return
+        val current = mutableWorkflow.value
+        if (current.bootstrapping) return
+        val now = SystemClock.elapsedRealtime()
+        if (bootstrapReadRetryable && automaticReadPolicy.canAttempt(now)) {
+            bootstrap(automaticRetry = true)
+            return
+        }
+        if (current.profile == null) return
+        if (!automaticReadPolicy.canAttempt(now)) return
         val marker = activeSessionMarker ?: return
         val generation = sessionGeneration
         launchMutation(showBusy = false) {
@@ -1290,18 +1284,41 @@ class CustomerAppViewModel @Inject constructor(
         mutableWorkflow.value = mutableWorkflow.value.copy(error = null)
     }
 
-    private fun bootstrap() = launchMutation(showBusy = false, onAdmitted = { bootstrappedSession = true }) {
-        val profile = repository.profileOrNull()
-        val warehouses = if (profile != null) repository.warehouses() else emptyList()
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            bootstrapping = false,
-            profile = profile,
-            warehouses = warehouses,
-        )
-        if (profile == null) {
-            workflowStore.clear()
+    /** Replays only the persisted registration profile command for the active authenticated subject. */
+    fun retryRegistrationProfile() {
+        if (!mutableWorkflow.value.registrationPending) return
+        bootstrap()
+    }
+
+    private fun bootstrap(automaticRetry: Boolean = false) = launchMutation(
+        showBusy = false,
+        onAdmitted = {
+            bootstrappedSession = true
+            mutableWorkflow.value = mutableWorkflow.value.copy(
+                bootstrapping = true,
+                registrationError = null,
+                error = null,
+            )
+        },
+    ) {
+        val profile = resolveAuthenticatedProfile() ?: run {
+            if (!bootstrapReadRetryable) workflowStore.clear()
+            if (automaticRetry && bootstrapReadRetryable) recordAutomaticBootstrapRead(CustomerReadOutcome.FAILED)
             return@launchMutation
         }
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            profile = profile,
+            registrationPending = false,
+            registrationError = null,
+            error = null,
+        )
+        val warehouses = bootstrapWarehousesOrNull() ?: run {
+            if (automaticRetry && bootstrapReadRetryable) recordAutomaticBootstrapRead(CustomerReadOutcome.FAILED)
+            return@launchMutation
+        }
+        bootstrapReadRetryable = false
+        if (automaticRetry) recordAutomaticBootstrapRead(CustomerReadOutcome.SUCCESS)
+        mutableWorkflow.value = mutableWorkflow.value.copy(warehouses = warehouses)
         workflowStore.read()?.takeIf(CustomerWorkflowReference::rememberWarehouse)?.let { reference ->
             resumeWorkflow(reference, warehouses)
         }
@@ -1312,6 +1329,108 @@ class CustomerAppViewModel @Inject constructor(
         refreshCustomerUpdatesOwned(
             changeToReveal = changeReferences.firstOrNull()?.let { it.bookingId to it.quoteId },
         )
+    }
+
+    /**
+     * Reads the authoritative profile before creating it, so a lost create response can be
+     * reconciled with the one-time profile that logistics already committed.
+     */
+    private suspend fun resolveAuthenticatedProfile(): CustomerProfile? {
+        val pending = authRepository.pendingRegistration()
+        val existing = try {
+            repository.profileOrNull()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            if (failure.isExpiredCustomerSession()) throw failure
+            bootstrapReadRetryable = pending == null && failure.isRetryableBootstrapRead()
+            registrationUnavailable(pending != null, profileReadFailureMessage(failure))
+            return null
+        }
+        if (existing != null) {
+            bootstrapReadRetryable = false
+            clearConfirmedPendingRegistration()
+            return existing
+        }
+        if (pending == null) {
+            bootstrapReadRetryable = false
+            registrationUnavailable(
+                pending = false,
+                message = "Профиль клиента не найден. Обратитесь в поддержку.",
+            )
+            return null
+        }
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            registrationPending = true,
+            registrationError = null,
+            error = null,
+        )
+        bootstrapReadRetryable = false
+        return try {
+            repository.createProfile(pending.toCustomerProfile()).also {
+                clearConfirmedPendingRegistration()
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            if (failure.isExpiredCustomerSession()) throw failure
+            val reconciled = try {
+                repository.profileOrNull()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (reconciliationFailure: Throwable) {
+                if (reconciliationFailure.isExpiredCustomerSession()) throw reconciliationFailure
+                null
+            }
+            if (reconciled != null) {
+                clearConfirmedPendingRegistration()
+                reconciled
+            } else {
+                registrationUnavailable(pending = true, message = registrationFailureMessage(failure))
+                null
+            }
+        }
+    }
+
+    /** Server confirmation is enough to enter the app; a local cleanup retry cannot deny access. */
+    private suspend fun clearConfirmedPendingRegistration() {
+        try {
+            authRepository.completePendingRegistration()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // The confirmed logistics profile remains authoritative if encrypted-local cleanup fails.
+        }
+    }
+
+    /** Keeps a transient warehouse read retryable without replaying the profile-create command. */
+    private suspend fun bootstrapWarehousesOrNull(): List<CustomerWarehouse>? = try {
+        repository.warehouses()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Throwable) {
+        if (failure.isExpiredCustomerSession()) throw failure
+        bootstrapReadRetryable = failure.isRetryableBootstrapRead()
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            registrationError = warehouseReadFailureMessage(failure),
+            error = null,
+        )
+        null
+    }
+
+    /** Publishes an explicit recovery state instead of treating a missing profile as completed setup. */
+    private fun registrationUnavailable(pending: Boolean, message: String) {
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            registrationPending = pending,
+            registrationError = message,
+            error = null,
+        )
+    }
+
+    /** Shares the existing bounded read budget with transient bootstrap recovery. */
+    private fun recordAutomaticBootstrapRead(outcome: CustomerReadOutcome) {
+        automaticReadPolicy.record(outcome, SystemClock.elapsedRealtime())
+        mutableWorkflow.value = mutableWorkflow.value.copy(automaticUpdatesPaused = automaticReadPolicy.paused)
     }
 
     private fun launchMutation(
@@ -1624,6 +1743,35 @@ class CustomerAppViewModel @Inject constructor(
         }
     }
 }
+
+/** Converts the one-time encrypted registration facts into the existing logistics create contract. */
+private fun PendingCustomerRegistration.toCustomerProfile() = CustomerProfile(
+    entityType = CustomerEntityType.INDIVIDUAL,
+    firstName = firstName,
+    lastName = lastName,
+    phone = phone,
+    email = email,
+)
+
+private fun Throwable.isExpiredCustomerSession(): Boolean =
+    (this as? CustomerApiException)?.status == 401
+
+private fun Throwable.isRetryableBootstrapRead(): Boolean {
+    val status = (this as? CustomerApiException)?.status ?: return true
+    return status == 429 || status >= 500
+}
+
+private fun profileReadFailureMessage(failure: Throwable): String =
+    (failure as? CustomerApiException)?.message
+        ?: "Не удалось загрузить профиль клиента. Проверьте подключение и повторите попытку."
+
+private fun warehouseReadFailureMessage(failure: Throwable): String =
+    (failure as? CustomerApiException)?.message
+        ?: "Не удалось загрузить доступные города. Проверьте подключение и повторите попытку."
+
+private fun registrationFailureMessage(failure: Throwable): String =
+    (failure as? CustomerApiException)?.message
+        ?: "Не удалось сохранить регистрацию. Проверьте подключение и повторите попытку."
 
 private fun validateProfile(profile: CustomerProfile): String? = when {
     profile.phone.isBlank() -> "Укажите номер телефона"

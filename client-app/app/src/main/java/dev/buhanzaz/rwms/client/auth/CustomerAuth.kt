@@ -20,6 +20,8 @@ import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Locale
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -44,6 +46,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Authenticator
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -88,6 +93,25 @@ object RegistrationValidator {
 }
 
 private val CustomerUsernamePattern = Regex("^[A-Za-z0-9][A-Za-z0-9._-]*$")
+private val CustomerEmailPattern = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+
+/** Rejects invalid logistics profile facts before creating an auth subject that cannot yet use them. */
+internal fun registrationProfileValidationMessage(
+    firstName: String,
+    lastName: String,
+    email: String,
+    phone: String,
+): String? = when {
+    firstName.trim().isBlank() -> "Введите имя"
+    firstName.trim().length > 255 -> "Имя не должно превышать 255 символов"
+    lastName.trim().isBlank() -> "Введите фамилию"
+    lastName.trim().length > 255 -> "Фамилия не должна превышать 255 символов"
+    !CustomerEmailPattern.matches(email.trim()) -> "Введите корректный Email"
+    email.trim().length > 320 -> "Email не должен превышать 320 символов"
+    phone.trim().isBlank() -> "Введите номер телефона"
+    phone.trim().length > 32 -> "Номер телефона не должен превышать 32 символа"
+    else -> null
+}
 
 /** Encrypted token record stored in DataStore; credentials and cookies are never represented here. */
 @Serializable
@@ -96,10 +120,35 @@ internal data class StoredCustomerSession(
     @SerialName("refreshToken") val refreshToken: String? = null,
     @SerialName("expiresAtEpochMs") val expiresAtEpochMs: Long,
     @SerialName("scope") val scope: String? = null,
+    @SerialName("pendingRegistration") val pendingRegistration: PendingCustomerRegistration? = null,
 ) {
     /** Treats the token as expired slightly early to avoid racing a request in transit. */
     fun isAccessTokenUsable(nowEpochMs: Long): Boolean = expiresAtEpochMs - TOKEN_LEEWAY_MS > nowEpochMs
 }
+
+/** Encrypted contact facts retained only until logistics confirms the named auth subject's profile. */
+@Serializable
+internal data class PendingCustomerRegistration(
+    @SerialName("subjectId") val subjectId: String,
+    @SerialName("username") val username: String,
+    @SerialName("firstName") val firstName: String,
+    @SerialName("lastName") val lastName: String,
+    @SerialName("email") val email: String,
+    @SerialName("phone") val phone: String,
+) {
+    /** Storage and recovery use the same case-insensitive username identity as auth-service. */
+    fun usernameKey(): String = username.lowercase(Locale.ROOT)
+}
+
+/** Identity claims used only to bind a local registration retry to the authenticated subject. */
+private data class CustomerTokenIdentity(
+    val subjectId: String,
+    val usernameKey: String,
+)
+
+private fun String.canonicalSubjectIdOrNull(): String? = runCatching {
+    UUID.fromString(this).toString()
+}.getOrNull()
 
 /** Configuration for the public HTTPS OAuth and registration surface. */
 @Singleton
@@ -135,13 +184,20 @@ class CustomerAuthConfiguration @Inject constructor() {
 
 /** Securely performs customer registration and OAuth Authorization Code + S256 PKCE exchanges. */
 @Singleton
-class CustomerAuthRepository @Inject constructor(
-    @param:ApplicationContext private val context: Context,
+class CustomerAuthRepository internal constructor(
     private val configuration: CustomerAuthConfiguration,
-    @param:Named("raw") private val rawClient: OkHttpClient,
+    private val rawClient: OkHttpClient,
     private val json: Json,
+    private val sessionStore: EncryptedCustomerSessionStore,
 ) {
-    private val sessionStore = EncryptedCustomerSessionStore(context, json)
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        configuration: CustomerAuthConfiguration,
+        @Named("raw") rawClient: OkHttpClient,
+        json: Json,
+    ) : this(configuration, rawClient, json, EncryptedCustomerSessionStore(context, json))
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val exchangeMutex = Mutex()
     private val registrationMutex = Mutex()
@@ -152,6 +208,23 @@ class CustomerAuthRepository @Inject constructor(
 
     /** Non-secret process-local fence; background results cannot cross logout or account changes. */
     fun notificationSession(): String? = notificationSessionMarker.takeIf { mutableState.value == CustomerAuthState.SignedIn }
+
+    /** Returns the encrypted profile command belonging only to the current signed-in registration. */
+    internal fun pendingRegistration(): PendingCustomerRegistration? = cachedSession?.pendingRegistration
+
+    /** Forgets a pending registration only after logistics has authoritatively returned its profile. */
+    suspend fun completePendingRegistration() = exchangeMutex.withLock {
+        val current = cachedSession ?: return@withLock
+        val pending = current.pendingRegistration ?: return@withLock
+        val updated = current.copy(pendingRegistration = null)
+        sessionStore.forgetPendingRegistration(pending)
+        if (persistSessionAcrossRestarts) {
+            sessionStore.write(updated)
+        } else {
+            sessionStore.clear()
+        }
+        cachedSession = updated
+    }
 
     /** Current session state consumed by the app-level conditional graph. */
     val state: StateFlow<CustomerAuthState> = mutableState.asStateFlow()
@@ -170,17 +243,32 @@ class CustomerAuthRepository @Inject constructor(
         }
     }
 
-    /** Registers the account with CSRF protection, then signs in through the same PKCE flow. */
-    suspend fun register(username: String, password: String, confirmation: String) {
+    /**
+     * Registers the account with CSRF protection, durably retains its profile facts, then signs in
+     * through the same PKCE flow.
+     */
+    suspend fun register(
+        username: String,
+        email: String,
+        password: String,
+        confirmation: String,
+        phone: String,
+        firstName: String,
+        lastName: String,
+    ) {
         if (!registrationMutex.tryLock()) return
         try {
             RegistrationValidator.validate(username, password, confirmation)?.let { message ->
                 mutableState.value = CustomerAuthState.SignedOut(message)
                 return
             }
+            registrationProfileValidationMessage(firstName, lastName, email, phone)?.let { message ->
+                mutableState.value = CustomerAuthState.SignedOut(message)
+                return
+            }
             mutableState.value = CustomerAuthState.Authenticating
             try {
-                withContext(Dispatchers.IO) {
+                val registration = withContext(Dispatchers.IO) {
                     val cookies = EphemeralCustomerCookieJar()
                     val client = ephemeralClient(cookies)
                     try {
@@ -200,13 +288,26 @@ class CustomerAuthRepository @Inject constructor(
                             }
                             response.body.string().takeIf(String::isNotBlank)?.let {
                                 json.decodeFromString<RegistrationResponse>(it)
-                            }
+                            } ?: throw CustomerAuthException("Сервер не подтвердил регистрацию")
                         }
                     } finally {
                         cookies.clear()
                     }
                 }
-                login(username, password, rememberMe = true)
+                val registeredUsername = registration.username.trim().takeIf { returned ->
+                    returned.equals(username.trim(), ignoreCase = true)
+                } ?: throw CustomerAuthException("Сервер вернул некорректную регистрацию")
+                val pending = PendingCustomerRegistration(
+                    subjectId = registration.subjectId.canonicalSubjectIdOrNull()
+                        ?: throw CustomerAuthException("Сервер вернул некорректную регистрацию"),
+                    username = registeredUsername,
+                    firstName = firstName.trim(),
+                    lastName = lastName.trim(),
+                    email = email.trim(),
+                    phone = phone.trim(),
+                )
+                sessionStore.rememberPendingRegistration(pending)
+                login(registeredUsername, password, rememberMe = true, pendingRegistration = pending)
             } catch (cancelled: CancellationException) {
                 mutableState.value = CustomerAuthState.SignedOut()
                 throw cancelled
@@ -229,12 +330,40 @@ class CustomerAuthRepository @Inject constructor(
             mutableState.value = CustomerAuthState.SignedOut("Введите логин и пароль")
             return
         }
+        login(
+            username.trim(),
+            password,
+            rememberMe,
+            pendingRegistration = null,
+        )
+    }
+
+    /** Performs one credential exchange and binds only the matching encrypted registration retry. */
+    private suspend fun login(
+        username: String,
+        password: String,
+        rememberMe: Boolean,
+        pendingRegistration: PendingCustomerRegistration?,
+    ) {
         exchangeMutex.withLock {
             mutableState.value = CustomerAuthState.Authenticating
             try {
+                val pending = pendingRegistration ?: sessionStore.pendingRegistration(username)
                 val token = withContext(Dispatchers.IO) { nativePkceLogin(username.trim(), password) }
+                val boundPending = pending?.let { registration ->
+                    token.customerIdentityOrNull()?.let { identity ->
+                        if (registration.usernameKey() == identity.usernameKey &&
+                            registration.subjectId == identity.subjectId
+                        ) {
+                            sessionStore.pendingRegistration(registration.username)
+                                ?.takeIf { stored -> stored == registration }
+                        } else {
+                            null
+                        }
+                    }
+                }
                 persistSessionAcrossRestarts = rememberMe
-                persist(token.toStoredSession())
+                persist(token.toStoredSession(pendingRegistration = boundPending))
                 notificationSessionMarker = java.util.UUID.randomUUID().toString()
                 mutableState.value = CustomerAuthState.SignedIn
             } catch (cancelled: CancellationException) {
@@ -271,7 +400,10 @@ class CustomerAuthRepository @Inject constructor(
             }
             try {
                 val payload = withContext(Dispatchers.IO) { refresh(refresh) }
-                val updated = payload.toStoredSession(fallbackRefreshToken = refresh)
+                val updated = payload.toStoredSession(
+                    fallbackRefreshToken = refresh,
+                    pendingRegistration = current.pendingRegistration,
+                )
                 persist(updated)
                 updated.accessToken
             } catch (failure: CustomerAuthException) {
@@ -436,12 +568,36 @@ class CustomerAuthRepository @Inject constructor(
         mutableState.value = CustomerAuthState.SignedOut(message)
     }
 
-    private fun OAuthTokenPayload.toStoredSession(fallbackRefreshToken: String? = null) = StoredCustomerSession(
+    private fun OAuthTokenPayload.toStoredSession(
+        fallbackRefreshToken: String? = null,
+        pendingRegistration: PendingCustomerRegistration? = null,
+    ) = StoredCustomerSession(
         accessToken = access_token,
         refreshToken = refresh_token ?: fallbackRefreshToken,
         expiresAtEpochMs = System.currentTimeMillis() + expires_in.coerceAtLeast(1) * 1_000,
         scope = scope,
+        pendingRegistration = pendingRegistration,
     )
+
+    /** Reads only the signed-in identity claims used to fence an encrypted local retry command. */
+    private fun OAuthTokenPayload.customerIdentityOrNull(): CustomerTokenIdentity? = runCatching {
+        val payload = access_token.split('.').let { parts ->
+            require(parts.size == 3)
+            String(
+                Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP),
+                StandardCharsets.UTF_8,
+            )
+        }
+        val claims = json.parseToJsonElement(payload).jsonObject
+        val subjectId = requireNotNull(claims["sub"]?.jsonPrimitive?.contentOrNull)
+            .canonicalSubjectIdOrNull()
+            ?: error("JWT subject is not a UUID")
+        val username = requireNotNull(claims["preferred_username"]?.jsonPrimitive?.contentOrNull)
+            .trim()
+            .takeIf(String::isNotBlank)
+            ?: error("JWT username is blank")
+        CustomerTokenIdentity(subjectId, username.lowercase(Locale.ROOT))
+    }.getOrNull()
 
     private fun Response.asAuthFailure(defaultMessage: String): CustomerAuthException {
         val payload = body.string().take(MAX_AUTH_RESPONSE_BYTES)
@@ -522,63 +678,122 @@ internal class CustomerAuthException(
 
 private val Context.customerSessionDataStore by preferencesDataStore(name = "customer_secure_session")
 private val encryptedSessionKey = stringPreferencesKey("oauth_session_v1")
+private val encryptedPendingRegistrationsKey = stringPreferencesKey("pending_customer_registrations_v1")
 
 /** Persists only AES-GCM ciphertext; the non-exportable key remains in Android Keystore. */
 internal class EncryptedCustomerSessionStore(
     private val context: Context,
     private val json: Json,
+    private val cipher: CustomerSessionCipher = CustomerSessionCipher(),
 ) {
     /** Decrypts a valid session or safely treats corrupted local state as signed out. */
     suspend fun read(): StoredCustomerSession? {
         val encoded = context.customerSessionDataStore.data.first()[encryptedSessionKey] ?: return null
-        return runCatching { json.decodeFromString<StoredCustomerSession>(decrypt(encoded)) }.getOrNull()
+        return runCatching { json.decodeFromString<StoredCustomerSession>(cipher.decrypt(encoded)) }.getOrNull()
     }
 
     /** Atomically replaces the encrypted OAuth session. */
     suspend fun write(session: StoredCustomerSession) {
-        val encrypted = encrypt(json.encodeToString(session))
+        val encrypted = cipher.encrypt(json.encodeToString(session))
         context.customerSessionDataStore.edit { preferences -> preferences[encryptedSessionKey] = encrypted }
     }
 
-    /** Removes the encrypted session after logout or terminal authorization failure. */
+    /** Returns a profile command only when it belongs to the normalized login being authenticated. */
+    suspend fun pendingRegistration(username: String): PendingCustomerRegistration? {
+        val registrations = decodePendingRegistrations(
+            context.customerSessionDataStore.data.first()[encryptedPendingRegistrationsKey],
+        )
+        return registrations[username.trim().lowercase(Locale.ROOT)]
+            ?.takeIf { it.usernameKey() == username.trim().lowercase(Locale.ROOT) }
+    }
+
+    /** Retains confirmed-subject profile facts so a process restart can finish provisioning. */
+    suspend fun rememberPendingRegistration(registration: PendingCustomerRegistration) {
+        context.customerSessionDataStore.edit { preferences ->
+            val registrations = decodePendingRegistrations(preferences[encryptedPendingRegistrationsKey]).toMutableMap()
+            registrations[registration.usernameKey()] = registration
+            preferences[encryptedPendingRegistrationsKey] = cipher.encrypt(json.encodeToString(registrations))
+        }
+    }
+
+    /** Removes only the exact command that the owning logistics profile has confirmed. */
+    suspend fun forgetPendingRegistration(registration: PendingCustomerRegistration) {
+        context.customerSessionDataStore.edit { preferences ->
+            val registrations = decodePendingRegistrations(preferences[encryptedPendingRegistrationsKey]).toMutableMap()
+            val key = registration.usernameKey()
+            if (registrations[key] != registration) return@edit
+            registrations.remove(key)
+            if (registrations.isEmpty()) {
+                preferences.remove(encryptedPendingRegistrationsKey)
+            } else {
+                preferences[encryptedPendingRegistrationsKey] = cipher.encrypt(json.encodeToString(registrations))
+            }
+        }
+    }
+
+    /** Removes only the encrypted OAuth session; unresolved registration facts survive re-login. */
     suspend fun clear() {
         context.customerSessionDataStore.edit { preferences -> preferences.remove(encryptedSessionKey) }
     }
 
-    private fun encrypt(plainText: String): String {
-        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val cipherText = cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8))
-        return "${Base64.encodeToString(cipher.iv, Base64.NO_WRAP)}:${Base64.encodeToString(cipherText, Base64.NO_WRAP)}"
+    private fun decodePendingRegistrations(encoded: String?): Map<String, PendingCustomerRegistration> =
+        encoded?.let {
+            runCatching {
+                json.decodeFromString<Map<String, PendingCustomerRegistration>>(cipher.decrypt(it))
+            }.getOrNull()
+        }.orEmpty()
+}
+
+/**
+ * Encrypts customer session records with the non-exportable Android Keystore key. JVM tests supply
+ * an in-memory AES key through the internal constructor without replacing the production provider.
+ */
+internal class CustomerSessionCipher private constructor(
+    private val secretKeyProvider: () -> SecretKey,
+) {
+    constructor() : this(::loadOrCreateAndroidKeyStoreKey)
+
+    /** Creates an AES-GCM cipher backed by a caller-scoped key for deterministic JVM tests. */
+    internal constructor(secretKey: SecretKey) : this({ secretKey })
+
+    fun encrypt(plainText: String): String {
+        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION).apply {
+            init(Cipher.ENCRYPT_MODE, secretKeyProvider())
+        }
+        return "${Base64.encodeToString(cipher.iv, Base64.NO_WRAP)}:" +
+            Base64.encodeToString(cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8)), Base64.NO_WRAP)
     }
 
-    private fun decrypt(encoded: String): String {
+    fun decrypt(encoded: String): String {
         val parts = encoded.split(':', limit = 2)
         require(parts.size == 2) { "Malformed encrypted customer session" }
-        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
-        cipher.init(
-            Cipher.DECRYPT_MODE,
-            key(),
-            GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)),
-        )
+        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION).apply {
+            init(
+                Cipher.DECRYPT_MODE,
+                secretKeyProvider(),
+                GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)),
+            )
+        }
         return String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)
     }
 
-    private fun key(): SecretKey {
-        val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
-        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER).apply {
-            init(
-                KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+    private companion object {
+        fun loadOrCreateAndroidKeyStoreKey(): SecretKey {
+            val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
+            (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+            return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER).apply {
+                init(
+                    KeyGenParameterSpec.Builder(
+                        KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .build(),
                 )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build(),
-            )
-        }.generateKey()
+            }.generateKey()
+        }
     }
 }
 

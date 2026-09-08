@@ -25,4 +25,34 @@ class RegistrationValidatorTest {
         assertThat(RegistrationValidator.validate("клиент", "password-123", "password-123"))
             .contains("латинские")
     }
+
+    @Test
+    fun `registration requires both names before creating the account`() {
+        assertThat(registrationProfileValidationMessage(" ", "Петров", "client@example.test", "+79990000000"))
+            .isEqualTo("Введите имя")
+        assertThat(registrationProfileValidationMessage("Иван", " ", "client@example.test", "+79990000000"))
+            .isEqualTo("Введите фамилию")
+    }
+
+    @Test
+    fun `registration rejects facts that exceed the logistics profile contract`() {
+        assertThat(registrationProfileValidationMessage("И".repeat(256), "Петров", "client@example.test", "+79990000000"))
+            .isNotNull()
+        assertThat(registrationProfileValidationMessage("Иван", "П".repeat(256), "client@example.test", "+79990000000"))
+            .isNotNull()
+        assertThat(registrationProfileValidationMessage("Иван", "Петров", "a".repeat(314) + "@b.test", "+79990000000"))
+            .isNotNull()
+        assertThat(registrationProfileValidationMessage("Иван", "Петров", "client@example.test", "1".repeat(33)))
+            .isNotNull()
+    }
+
+    @Test
+    fun `registration accepts trimmed facts at the logistics contract limits`() {
+        assertThat(registrationProfileValidationMessage(
+            " ${"И".repeat(255)} ",
+            " ${"П".repeat(255)} ",
+            " ${"a".repeat(313)}@b.test ",
+            " ${"1".repeat(32)} ",
+        )).isNull()
+    }
 }

@@ -1144,7 +1144,11 @@ guest domain state.
    `offline_access`. Media accepts only those protocol scopes in addition to `customer.rental`;
    any other scope remains forbidden for customer media. Logistics verifies principal type, role, scope,
    audience and `client_id`/`azp` before reading customer state.
-3. The customer creates one individual/legal profile. Its kind and auth/client
+3. Android registration collects first/last name and contacts together with the credentials.
+   After PKCE, it creates the individual logistics profile through the existing customer API
+   before opening the signed-in catalog. There is no second profile-entry step. A failed save
+   retains an encrypted account-bound draft for retry, including after process restart; a missing
+   profile without a draft is an explicit error. Existing individual/legal profile kind and auth/client
    binding remain immutable, while contact/display fields are editable under
    the logistics profile version fence and synchronize the existing rental-client
    projection in one transaction. The profile's camera action opens Android Photo Picker and a

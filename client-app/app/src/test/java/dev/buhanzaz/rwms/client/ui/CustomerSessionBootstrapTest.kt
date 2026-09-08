@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModelStore
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.auth.CustomerAuthConfiguration
 import dev.buhanzaz.rwms.client.auth.CustomerAuthRepository
+import dev.buhanzaz.rwms.client.auth.CustomerSessionCipher
 import dev.buhanzaz.rwms.client.auth.CustomerAuthState
 import dev.buhanzaz.rwms.client.auth.EncryptedCustomerSessionStore
+import dev.buhanzaz.rwms.client.auth.PendingCustomerRegistration
 import dev.buhanzaz.rwms.client.data.BookingChangeApplicationState
 import dev.buhanzaz.rwms.client.data.BookingChangeOperation
 import dev.buhanzaz.rwms.client.data.BookingChangeSettlement
@@ -36,8 +38,11 @@ import dev.buhanzaz.rwms.client.data.InquirySession
 import dev.buhanzaz.rwms.client.notifications.CustomerNotifications
 import java.lang.reflect.Proxy
 import java.io.IOException
+import java.util.ArrayDeque
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.UUID
+import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.time.Duration.Companion.seconds
@@ -55,10 +60,12 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -66,6 +73,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import retrofit2.HttpException
+import retrofit2.Response
 
 /** Exercises real native login around a deliberately non-cancellable old customer API read. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -79,6 +88,7 @@ class CustomerSessionBootstrapTest {
     private val viewModels = ViewModelStore()
     private val completedBootstraps = Channel<Unit>(Channel.UNLIMITED)
     private lateinit var auth: CustomerAuthRepository
+    private lateinit var sessionStore: EncryptedCustomerSessionStore
     private lateinit var client: OkHttpClient
     private lateinit var workflowStore: CustomerWorkflowStore
     private var profileCalls = 0
@@ -101,24 +111,45 @@ class CustomerSessionBootstrapTest {
     private var heldPublicCabins: Continuation<CabinPage>? = null
     private var publicCabinFailure: CustomerApiException? = null
     private var registrationRequest: RecordedRequest? = null
+    private var registrationResponseSubjectId = CUSTOMER_SUBJECT_ID
+    private var registrationResponseUsername = "client_01"
+    private var tokenSubjectId = CUSTOMER_SUBJECT_ID
+    private var tokenUsername = "client_01"
+    private val profileReadResults = ArrayDeque<Result<CustomerProfile?>>()
+    private val createdProfiles = mutableListOf<CustomerProfile>()
+    private var createProfileFailure: Throwable? = null
 
     @Before
     fun setUp() = runBlocking {
         Dispatchers.setMain(dispatcher)
-        EncryptedCustomerSessionStore(context, json).clear()
+        sessionStore = EncryptedCustomerSessionStore(
+            context,
+            json,
+            CustomerSessionCipher(SecretKeySpec(ByteArray(32) { 0x2A }, "AES")),
+        )
+        sessionStore.clear()
         workflowStore = CustomerWorkflowStore(context, json)
         workflowStore.clear()
         checkoutFixture = null
         checkoutCalls.clear()
         checkoutCompleted = false
         registrationRequest = null
+        registrationResponseSubjectId = CUSTOMER_SUBJECT_ID
+        registrationResponseUsername = "client_01"
+        tokenSubjectId = CUSTOMER_SUBJECT_ID
+        tokenUsername = "client_01"
+        profileReadResults.clear()
+        createdProfiles.clear()
+        createProfileFailure = null
         val configuration = CustomerAuthConfiguration()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl?.encodedPath) {
                 "/auth/api/auth/csrf" -> jsonResponse("""{"parameterName":"_csrf","token":"test-csrf"}""")
                 "/auth/api/customer/v1/registrations" -> {
                     registrationRequest = request
-                    jsonResponse("""{"subjectId":"11111111-1111-4111-8111-111111111111","username":"client_01"}""")
+                    jsonResponse(
+                        """{"subjectId":"$registrationResponseSubjectId","username":"$registrationResponseUsername"}""",
+                    )
                         .setResponseCode(201)
                 }
                 "/auth/login" -> MockResponse().setResponseCode(302)
@@ -129,7 +160,9 @@ class CustomerSessionBootstrapTest {
                     MockResponse().setResponseCode(302)
                         .setHeader("Location", "${configuration.redirectUri}?code=test-code&state=$state")
                 }
-                "/auth/oauth2/token" -> jsonResponse("""{"access_token":"test-access-token","expires_in":3600}""")
+                "/auth/oauth2/token" -> jsonResponse(
+                    """{"access_token":"${customerJwt(tokenSubjectId, tokenUsername)}","expires_in":3600}""",
+                )
                 else -> MockResponse().setResponseCode(404)
             }
         }
@@ -141,7 +174,7 @@ class CustomerSessionBootstrapTest {
                 .encodedPath(original.url.encodedPath).encodedQuery(original.url.encodedQuery).build()
             chain.proceed(original.newBuilder().url(local).build()).newBuilder().request(original).build()
         }.build()
-        auth = CustomerAuthRepository(context, configuration, client, json)
+        auth = CustomerAuthRepository(configuration, client, json, sessionStore)
         auth.state.first { it is CustomerAuthState.SignedOut }
         Unit
     }
@@ -155,6 +188,7 @@ class CustomerSessionBootstrapTest {
         heldCabins?.resumeWith(Result.success(CabinPage()))
         heldCabins = null
         viewModels.clear()
+        auth.pendingRegistration()?.let { pending -> sessionStore.forgetPendingRegistration(pending) }
         auth.logout()
         workflowStore.clear()
         server.shutdown()
@@ -173,7 +207,15 @@ class CustomerSessionBootstrapTest {
 
     @Test
     fun `registration sends the CSRF protected contract and continues through PKCE login`() = runBlocking {
-        auth.register("client_01", "password-123", "password-123")
+        auth.register(
+            username = "client_01",
+            email = "client@example.test",
+            password = "password-123",
+            confirmation = "password-123",
+            phone = "+79990000000",
+            firstName = "Иван",
+            lastName = "Петров",
+        )
 
         val request = requireNotNull(registrationRequest)
         assertThat(request.method).isEqualTo("POST")
@@ -182,6 +224,142 @@ class CustomerSessionBootstrapTest {
             """{"username":"client_01","password":"password-123","passwordConfirmation":"password-123"}""",
         )
         assertThat(server.requestCount).isEqualTo(6)
+        assertThat(auth.state.value).isEqualTo(CustomerAuthState.SignedIn)
+        assertThat(auth.pendingRegistration()).isEqualTo(
+            PendingCustomerRegistration(
+                subjectId = CUSTOMER_SUBJECT_ID,
+                username = "client_01",
+                firstName = "Иван",
+                lastName = "Петров",
+                email = "client@example.test",
+                phone = "+79990000000",
+            ),
+        )
+    }
+
+    @Test
+    fun `confirmed registration creates its individual profile before the catalog opens`() = runTest(dispatcher) {
+        profileReadResults.add(Result.success(null))
+        val viewModel = registrationViewModel()
+        runCurrent()
+
+        registerCustomer()
+        advanceUntilIdle()
+
+        val expected = CustomerProfile(
+            entityType = CustomerEntityType.INDIVIDUAL,
+            firstName = "Иван",
+            lastName = "Петров",
+            phone = "+79990000000",
+            email = "client@example.test",
+        )
+        val workflow = readyWorkflow(viewModel)
+        assertThat(createdProfiles).containsExactly(expected)
+        assertThat(workflow.profile).isEqualTo(expected.copy(id = "created-profile", version = 1))
+        assertThat(workflow.registrationPending).isFalse()
+        assertThat(workflow.registrationError).isNull()
+        assertThat(auth.pendingRegistration()).isNull()
+    }
+
+    @Test
+    fun `lost profile creation response reconciles its existing profile without a second create`() = runTest(dispatcher) {
+        val reconciled = CustomerProfile(
+            id = "reconciled-profile",
+            version = 7,
+            entityType = CustomerEntityType.INDIVIDUAL,
+            firstName = "Иван",
+            lastName = "Петров",
+            phone = "+79990000000",
+            email = "client@example.test",
+        )
+        profileReadResults.add(Result.success(null))
+        profileReadResults.add(Result.success(reconciled))
+        createProfileFailure = IOException("create response lost")
+        val viewModel = registrationViewModel()
+        runCurrent()
+
+        registerCustomer()
+        advanceUntilIdle()
+
+        assertThat(createdProfiles).containsExactly(
+            reconciled.copy(id = null, version = null),
+        )
+        assertThat(readyWorkflow(viewModel).profile).isEqualTo(reconciled)
+        assertThat(auth.pendingRegistration()).isNull()
+    }
+
+    @Test
+    fun `failed profile creation retries the confirmed draft without registering again`() = runTest(dispatcher) {
+        profileReadResults.add(Result.success(null))
+        profileReadResults.add(Result.success(null))
+        createProfileFailure = CustomerApiException(503, "Профиль временно не сохранён")
+        val viewModel = registrationViewModel()
+        runCurrent()
+
+        registerCustomer()
+        advanceUntilIdle()
+
+        val expected = CustomerProfile(
+            entityType = CustomerEntityType.INDIVIDUAL,
+            firstName = "Иван",
+            lastName = "Петров",
+            phone = "+79990000000",
+            email = "client@example.test",
+        )
+        assertThat(readyWorkflow(viewModel).registrationPending).isTrue()
+        assertThat(readyWorkflow(viewModel).registrationError).isEqualTo("Профиль временно не сохранён")
+        assertThat(createdProfiles).containsExactly(expected)
+
+        createProfileFailure = null
+        profileReadResults.add(Result.success(null))
+        viewModel.retryRegistrationProfile()
+        advanceUntilIdle()
+
+        assertThat(createdProfiles).containsExactly(expected, expected)
+        assertThat(readyWorkflow(viewModel).profile).isEqualTo(expected.copy(id = "created-profile", version = 1))
+        assertThat(readyWorkflow(viewModel).registrationPending).isFalse()
+        assertThat(readyWorkflow(viewModel).registrationError).isNull()
+        assertThat(auth.pendingRegistration()).isNull()
+        assertThat(server.requestCount).isEqualTo(6)
+    }
+
+    @Test
+    fun `encrypted confirmed draft survives restoration but a different JWT subject cannot provision it`() = runTest(dispatcher) {
+        val pending = PendingCustomerRegistration(
+            subjectId = CUSTOMER_SUBJECT_ID,
+            username = "client_01",
+            firstName = "Иван",
+            lastName = "Петров",
+            email = "client@example.test",
+            phone = "+79990000000",
+        )
+        sessionStore.rememberPendingRegistration(pending)
+        val restoredStore = EncryptedCustomerSessionStore(
+            context,
+            json,
+            CustomerSessionCipher(SecretKeySpec(ByteArray(32) { 0x2A }, "AES")),
+        )
+        assertThat(restoredStore.pendingRegistration(" CLIENT_01 ")).isEqualTo(pending)
+        auth.login("client_01", "test-password", rememberMe = true)
+        auth.logout()
+        assertThat(restoredStore.pendingRegistration("client_01")).isEqualTo(pending)
+        tokenSubjectId = "22222222-2222-4222-8222-222222222222"
+        profileReadResults.add(Result.success(null))
+        val viewModel = registrationViewModel()
+        runCurrent()
+
+        try {
+            auth.login("client_01", "test-password", rememberMe = true)
+            advanceUntilIdle()
+
+            assertThat(auth.state.value).isEqualTo(CustomerAuthState.SignedIn)
+            assertThat(auth.pendingRegistration()).isNull()
+            assertThat(createdProfiles).isEmpty()
+            assertThat(readyWorkflow(viewModel).registrationError)
+                .isEqualTo("Профиль клиента не найден. Обратитесь в поддержку.")
+        } finally {
+            sessionStore.forgetPendingRegistration(pending)
+        }
     }
 
     @Test
@@ -606,7 +784,13 @@ class CustomerSessionBootstrapTest {
         CustomerApi::class.java.classLoader, arrayOf(CustomerApi::class.java),
     ) { _, method, args ->
         when (method.name) {
-            "profile" -> currentProfile.also { profileCalls += 1 }
+            "profile" -> configuredProfile().also { profileCalls += 1 }
+            "createProfile" -> {
+                val requested = requireNotNull(args)[0] as CustomerProfile
+                createdProfiles += requested
+                createProfileFailure?.let { throw it }
+                requested.copy(id = "created-profile", version = 1).also { currentProfile = it }
+            }
             "warehouses" -> listOf(currentWarehouse)
             "inquiry" -> checkoutFixture?.session ?: error("Unexpected inquiry read")
             "cart" -> checkoutFixture?.cart ?: error("Unexpected cart read")
@@ -658,7 +842,25 @@ class CustomerSessionBootstrapTest {
         }
     } as CustomerApi
 
+    private fun configuredProfile(): CustomerProfile {
+        val result = profileReadResults.pollFirst() ?: return currentProfile
+        return result.fold(
+            onSuccess = { it ?: throw missingProfile() },
+            onFailure = { throw it },
+        )
+    }
+
+    private fun missingProfile(): Nothing = throw HttpException(
+        Response.error<Unit>(404, "not found".toResponseBody("application/problem+json".toMediaType())),
+    )
+
     private fun jsonResponse(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
+
+    private fun customerJwt(subjectId: String, username: String): String = listOf(
+        """{"alg":"none"}""",
+        """{"sub":"$subjectId","preferred_username":"$username"}""",
+        "signature",
+    ).joinToString(".") { part -> Base64.getUrlEncoder().withoutPadding().encodeToString(part.encodeToByteArray()) }
 
     private fun profile(id: String) = CustomerProfile(
         id = id, version = 1, entityType = CustomerEntityType.INDIVIDUAL,
@@ -668,6 +870,36 @@ class CustomerSessionBootstrapTest {
     private fun warehouse(id: String) = CustomerWarehouse(
         id = id, name = id, timezone = "Europe/Moscow", depotLatitude = 59.93, depotLongitude = 30.32,
     )
+
+    private fun registrationViewModel(): CustomerAppViewModel {
+        val repository = CustomerRepository(context, customerApi(), json, workflowStore)
+        return CustomerAppViewModel(
+            auth,
+            repository,
+            workflowStore,
+            CustomerNotifications(context, auth, repository),
+            publicRepository(),
+        ).also { viewModels.put("registration", it) }
+    }
+
+    private suspend fun registerCustomer() {
+        auth.register(
+            username = "client_01",
+            email = "client@example.test",
+            password = "password-123",
+            confirmation = "password-123",
+            phone = "+79990000000",
+            firstName = "Иван",
+            lastName = "Петров",
+        )
+    }
+
+    private suspend fun readyWorkflow(viewModel: CustomerAppViewModel): CustomerWorkflowState {
+        val ready = viewModel.state.first { state ->
+            state is CustomerAppState.Ready && !state.workflow.bootstrapping
+        }
+        return (ready as CustomerAppState.Ready).workflow
+    }
 
     private suspend fun TestScope.signedInCheckoutViewModel(): CustomerAppViewModel {
         val fixture = requireNotNull(checkoutFixture)
@@ -746,4 +978,8 @@ class CustomerSessionBootstrapTest {
         expiresAt = "2099-01-01T00:00:00Z", noticeDays = 2, deliveryDate = "2026-09-08",
         warehouseTimeZone = "Europe/Moscow", targetDeliveryDate = null, targetWindowStart = null, targetWindowEnd = null,
     )
+
+    private companion object {
+        const val CUSTOMER_SUBJECT_ID = "11111111-1111-4111-8111-111111111111"
+    }
 }

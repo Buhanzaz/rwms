@@ -404,7 +404,7 @@ internal fun CustomerStoreInputField(
     singleLine: Boolean = true,
     authStyle: Boolean = false,
 ) {
-    val shape = RoundedCornerShape(if (authStyle) 16.dp else 12.dp)
+    val shape = RoundedCornerShape(16.dp)
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
     val passwordField = visualTransformation is PasswordVisualTransformation
@@ -433,8 +433,9 @@ internal fun CustomerStoreInputField(
             .clip(shape)
             .background(if (authStyle) Color.White.copy(alpha = 0.60f) else MaterialTheme.colorScheme.surfaceContainerLow, shape)
             .then(if (authStyle) Modifier else Modifier.border(
-                if (focused) 2.dp else 1.dp,
-                if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, shape,
+                1.dp,
+                if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), shape,
             ))
             .semantics { contentDescription = placeholder },
         decorationBox = { innerTextField ->

@@ -144,6 +144,7 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.onNodeWithTag("customer-auth-logo").assertIsDisplayed()
         val keyboardLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
         assertThat(keyboardLogo.top).isAtLeast(0f)
+        assertThat(keyboardLogo.height).isLessThan(initial.height)
         composeRule.onNodeWithTag("customer-registration-phone").performScrollTo().performTextInput("+79990000000")
         dispatchKeyboardInset(0)
         composeRule.mainClock.advanceTimeBy(500)
@@ -167,18 +168,20 @@ class CustomerStoreWelcomeScreenTest {
     fun `registration submits contact fields with validated credentials`() {
         val submission = AtomicReference<List<String>?>()
         setAuthContent(
-            onRegister = { login, email, password, repeatedPassword, phone ->
-                submission.set(listOf(login, email, password, repeatedPassword, phone))
+            onRegister = { login, email, password, repeatedPassword, phone, firstName, lastName ->
+                submission.set(listOf(login, email, password, repeatedPassword, phone, firstName, lastName))
             },
         )
 
         composeRule.onNodeWithTag("customer-auth-register").performScrollTo().performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("customer-registration-login").performTextInput("client_01")
-        composeRule.onNodeWithTag("customer-registration-email").performTextInput("client@example.test")
-        composeRule.onNodeWithTag("customer-registration-password").performTextInput("password-123")
-        composeRule.onNodeWithTag("customer-registration-password-repeat").performTextInput("password-123")
-        composeRule.onNodeWithTag("customer-registration-phone").performTextInput("+79990000000")
+        composeRule.onNodeWithTag("customer-registration-first-name").performScrollTo().performTextInput("Иван")
+        composeRule.onNodeWithTag("customer-registration-last-name").performScrollTo().performTextInput("Петров")
+        composeRule.onNodeWithTag("customer-registration-login").performScrollTo().performTextInput("client_01")
+        composeRule.onNodeWithTag("customer-registration-email").performScrollTo().performTextInput("client@example.test")
+        composeRule.onNodeWithTag("customer-registration-password").performScrollTo().performTextInput("password-123")
+        composeRule.onNodeWithTag("customer-registration-password-repeat").performScrollTo().performTextInput("password-123")
+        composeRule.onNodeWithTag("customer-registration-phone").performScrollTo().performTextInput("+79990000000")
         composeRule.onNodeWithText("Зарегистрироваться").assertExists()
         composeRule.onNodeWithTag("customer-registration-submit")
             .performScrollTo()
@@ -192,6 +195,8 @@ class CustomerStoreWelcomeScreenTest {
                 "password-123",
                 "password-123",
                 "+79990000000",
+                "Иван",
+                "Петров",
             ).inOrder()
         }
     }
@@ -246,6 +251,8 @@ class CustomerStoreWelcomeScreenTest {
                 "password-123",
                 "password-123",
                 "+79990000000",
+                "Иван",
+                "Петров",
             ),
         ).isEqualTo("Введите корректный Email")
         assertThat(
@@ -255,6 +262,8 @@ class CustomerStoreWelcomeScreenTest {
                 "password-123",
                 "password-123",
                 "",
+                "Иван",
+                "Петров",
             ),
         ).isEqualTo("Введите номер телефона")
         assertThat(
@@ -264,6 +273,8 @@ class CustomerStoreWelcomeScreenTest {
                 "password-123",
                 "password-123",
                 "+79990000000",
+                "Иван",
+                "Петров",
             ),
         ).isNull()
     }
@@ -271,7 +282,7 @@ class CustomerStoreWelcomeScreenTest {
     private fun setAuthContent(
         message: String? = null,
         onLogin: (String, String, Boolean) -> Unit = { _, _, _ -> },
-        onRegister: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
+        onRegister: (String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
     ) {
         composeRule.setContent {
             CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {

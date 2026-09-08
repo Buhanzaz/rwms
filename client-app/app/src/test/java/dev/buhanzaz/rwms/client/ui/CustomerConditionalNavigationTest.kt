@@ -54,7 +54,7 @@ class CustomerConditionalNavigationTest {
     }
 
     @Test
-    fun `signed in without profile shows profile and hides login`() {
+    fun `signed in without registration data shows a real error without another profile form`() {
         composeRule.setContent {
             CustomerTheme {
                 CustomerAppContent(
@@ -63,8 +63,47 @@ class CustomerConditionalNavigationTest {
             }
         }
 
-        composeRule.onNodeWithTag("profile-screen").assertExists()
+        composeRule.onNodeWithTag("profile-screen").assertDoesNotExist()
+        composeRule.onNodeWithTag("registration-status-screen").assertExists()
+        composeRule.onNodeWithText("Данные регистрации недоступны. Обратитесь в поддержку.").assertExists()
         composeRule.onNodeWithText("Вход").assertDoesNotExist()
+    }
+
+    @Test
+    fun `interrupted registration retries saving without repeating profile fields`() {
+        var retries = 0
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(
+                    CustomerAppState.Ready(CustomerWorkflowState(
+                        bootstrapping = false,
+                        registrationPending = true,
+                        registrationError = "Не удалось сохранить регистрацию",
+                    )),
+                    onRetryRegistration = { retries += 1 },
+                )
+            }
+        }
+        composeRule.onNodeWithText("Не удалось сохранить регистрацию").assertExists()
+        composeRule.onNodeWithTag("profile-screen").assertDoesNotExist()
+        composeRule.onNodeWithTag("registration-retry").performClick()
+        assertThat(retries).isEqualTo(1)
+    }
+
+    @Test
+    fun `failed city bootstrap stays an error instead of an empty successful list`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(CustomerAppState.Ready(readyCatalogWorkflow().copy(
+                    selectedWarehouse = null,
+                    inquiryId = null,
+                    warehouses = emptyList(),
+                    registrationError = "Не удалось загрузить города",
+                )))
+            }
+        }
+        composeRule.onNodeWithText("Не удалось загрузить города").assertExists()
+        composeRule.onNodeWithText("Нет доступных городов").assertDoesNotExist()
     }
 
     @Test

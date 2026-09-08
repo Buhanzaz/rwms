@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -53,12 +54,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.buhanzaz.rwms.client.auth.RegistrationValidator
+import dev.buhanzaz.rwms.client.auth.registrationProfileValidationMessage
 
 /** Keeps the route background stable without delaying already available application content. */
 @Composable
@@ -85,7 +86,7 @@ internal fun CustomerAuthenticationScreen(
     message: String?,
     submitting: Boolean,
     onLogin: (String, String, Boolean) -> Unit,
-    onRegister: (String, String, String, String, String) -> Unit,
+    onRegister: (String, String, String, String, String, String, String) -> Unit,
     onContinueAsGuest: () -> Unit = {},
     initialPage: CustomerAuthenticationPage = CustomerAuthenticationPage.START,
     greetingPreviewProgress: Float? = null,
@@ -124,7 +125,7 @@ private fun CustomerAuthenticationContent(
     message: String?,
     submitting: Boolean,
     onLogin: (String, String, Boolean) -> Unit,
-    onRegister: (String, String, String, String, String) -> Unit,
+    onRegister: (String, String, String, String, String, String, String) -> Unit,
     onContinueAsGuest: () -> Unit,
     initialPage: CustomerAuthenticationPage,
     greetingProgress: () -> Float,
@@ -150,7 +151,12 @@ private fun CustomerAuthenticationContent(
     BoxWithConstraints(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding(),
     ) {
-        val logoHeight = (maxWidth - 76.dp) / (234f / 96f)
+        val fullLogoHeight = (maxWidth - 76.dp) / (234f / 96f)
+        val logoHeight = if (page == CustomerAuthenticationPage.START) {
+            fullLogoHeight
+        } else {
+            minOf(fullLogoHeight, maxHeight / 4, if (keyboardVisible) 64.dp else fullLogoHeight)
+        }
         val formTop = maxHeight - with(density) { formHeightPx.toDp() }
         val logoTarget = when (page) {
             CustomerAuthenticationPage.START -> maxOf(
@@ -269,7 +275,8 @@ private fun CustomerLoginForm(
         fieldSpacing = 10.dp,
         buttonSpacing = 8.dp,
         bottomPadding = 37.dp,
-        modifier = modifier.testTag("customer-login-screen"),
+        modifier = modifier,
+        screenTag = "customer-login-screen",
         auxiliaryContent = { enabled ->
             Row(Modifier.fillMaxWidth().padding(top = 7.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 CustomerRememberMeOption(rememberMe, { rememberMe = it }, enabled,
@@ -285,7 +292,7 @@ private fun CustomerLoginForm(
 private fun CustomerRegistrationForm(
     message: String?,
     submitting: Boolean,
-    onRegister: (String, String, String, String, String) -> Unit,
+    onRegister: (String, String, String, String, String, String, String) -> Unit,
     modifier: Modifier,
 ) {
     var login by rememberSaveable { mutableStateOf("") }
@@ -293,9 +300,13 @@ private fun CustomerRegistrationForm(
     var password by rememberSaveable { mutableStateOf("") }
     var repeatedPassword by rememberSaveable { mutableStateOf("") }
     var phone by rememberSaveable { mutableStateOf("") }
-    val validation = customerRegistrationValidationMessage(login, email, password, repeatedPassword, phone)
+    var firstName by rememberSaveable { mutableStateOf("") }
+    var lastName by rememberSaveable { mutableStateOf("") }
+    val validation = customerRegistrationValidationMessage(login, email, password, repeatedPassword, phone, firstName, lastName)
     CustomerAuthForm(
         fields = listOf(
+            CustomerAuthFieldSpec("Имя", firstName, { firstName = it }, "Введите имя", KeyboardType.Text, "customer-registration-first-name"),
+            CustomerAuthFieldSpec("Фамилия", lastName, { lastName = it }, "Введите фамилию", KeyboardType.Text, "customer-registration-last-name"),
             CustomerAuthFieldSpec("Логин", login, { login = it }, "Введите логин", KeyboardType.Text, "customer-registration-login"),
             CustomerAuthFieldSpec("Email", email, { email = it }, "Введите email", KeyboardType.Email, "customer-registration-email"),
             CustomerAuthFieldSpec("Пароль", password, { password = it }, "Введите пароль", KeyboardType.Password,
@@ -305,20 +316,20 @@ private fun CustomerRegistrationForm(
             CustomerAuthFieldSpec("Номер телефона", phone, { phone = it }, "Введите номер телефона", KeyboardType.Phone,
                 "customer-registration-phone"),
         ),
-        title = "Регистрация",
         submitting = submitting,
         submitLabel = "Зарегистрироваться",
         submitEnabled = validation == null,
         submitTag = "customer-registration-submit",
-        onSubmit = { onRegister(login.trim(), email.trim(), password, repeatedPassword, phone.trim()) },
+        onSubmit = { onRegister(login.trim(), email.trim(), password, repeatedPassword, phone.trim(), firstName.trim(), lastName.trim()) },
         message = message ?: validation.takeIf {
-            login.isNotEmpty() || email.isNotEmpty() || password.isNotEmpty() || repeatedPassword.isNotEmpty() || phone.isNotEmpty()
+            login.isNotEmpty() || email.isNotEmpty() || password.isNotEmpty() || repeatedPassword.isNotEmpty() || phone.isNotEmpty() ||
+                firstName.isNotEmpty() || lastName.isNotEmpty()
         },
         fieldSpacing = 11.dp,
         bottomPadding = 39.dp,
-        titleSpacing = 12.dp,
         buttonSpacing = 36.dp,
-        modifier = modifier.testTag("customer-registration-screen"),
+        modifier = modifier,
+        screenTag = "customer-registration-screen",
     )
 }
 
@@ -330,7 +341,6 @@ private fun CustomerPasswordRecoveryForm(keyboardVisible: Boolean, modifier: Mod
     CustomerAuthForm(
         fields = listOf(CustomerAuthFieldSpec("Номер телефона или email", contact, { contact = it },
             "Введите номер телефона или email", KeyboardType.Email, "customer-recovery-phone")),
-        title = "Восстановление\nПароля",
         submitting = false,
         submitLabel = "Отправить",
         lockSubmit = false,
@@ -338,11 +348,11 @@ private fun CustomerPasswordRecoveryForm(keyboardVisible: Boolean, modifier: Mod
         submitTag = "customer-recovery-submit",
         onSubmit = { message = "Восстановление пароля пока недоступно" },
         message = message,
-        titleSpacing = 15.dp,
         labelSpacing = 16.dp,
         buttonSpacing = 28.dp,
         bottomPadding = if (keyboardVisible) 16.dp else 36.dp,
-        modifier = modifier.testTag("customer-password-recovery-screen"),
+        modifier = modifier,
+        screenTag = "customer-password-recovery-screen",
     )
 }
 
@@ -354,13 +364,12 @@ private fun CustomerAuthForm(
     submitLabel: String = "Вход",
     submitEnabled: Boolean,
     submitTag: String,
+    screenTag: String,
     onSubmit: () -> Unit,
     modifier: Modifier,
-    title: String? = null,
     message: String? = null,
     fieldSpacing: Dp = 14.dp,
     labelSpacing: Dp = 11.dp,
-    titleSpacing: Dp = 8.dp,
     buttonSpacing: Dp = 8.dp,
     bottomPadding: Dp = 36.dp,
     auxiliaryContent: (@Composable (Boolean) -> Unit)? = null,
@@ -372,6 +381,8 @@ private fun CustomerAuthForm(
     var submitRequested by remember { mutableStateOf(false) }
     LaunchedEffect(submitting, message) { if (!submitting && message != null) submitRequested = false }
     val enabled = !submitting && !submitRequested
+    val actionReveal = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { actionReveal.animateTo(1f, tween(300)) }
     fun submitOnce() {
         if (!submitEnabled || !enabled) return
         submitRequested = lockSubmit
@@ -379,54 +390,55 @@ private fun CustomerAuthForm(
         keyboard?.hide()
         onSubmit()
     }
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(horizontal = 38.dp)
-            .padding(top = 20.dp, bottom = bottomPadding),
-    ) {
-        if (title != null) {
-            Text(title, Modifier.fillMaxWidth(), color = CustomerStoreNavy.copy(alpha = 0.84f),
-                fontFamily = CustomerActionFont, fontWeight = FontWeight.SemiBold,
-                fontSize = 32.sp, lineHeight = 38.sp, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(titleSpacing))
-        }
-        fields.forEachIndexed { index, field ->
-            Text(field.label, color = CustomerStoreNavy, fontFamily = CustomerActionFont,
-                fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(labelSpacing))
-            CustomerStoreInputField(
-                value = field.value,
-                onValueChange = field.onValueChange,
-                placeholder = field.placeholder,
-                enabled = enabled,
-                keyboardType = field.keyboardType,
-                imeAction = if (index == fields.lastIndex) ImeAction.Done else ImeAction.Next,
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                    onNext = { focusRequesters.getOrNull(index + 1)?.requestFocus() },
-                    onDone = { submitOnce() },
-                ),
-                visualTransformation = field.visualTransformation,
-                focusRequester = focusRequesters[index],
+    BoxWithConstraints(modifier) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = maxHeight)
+                .padding(horizontal = 38.dp).padding(top = 20.dp, bottom = bottomPadding).testTag(screenTag),
+            verticalArrangement = Arrangement.Bottom,
+        ) {
+            fields.forEachIndexed { index, field ->
+                Text(field.label, color = CustomerStoreNavy, fontFamily = CustomerActionFont,
+                    fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(labelSpacing))
+                CustomerStoreInputField(
+                    value = field.value,
+                    onValueChange = field.onValueChange,
+                    placeholder = field.placeholder,
+                    enabled = enabled,
+                    keyboardType = field.keyboardType,
+                    imeAction = if (index == fields.lastIndex) ImeAction.Done else ImeAction.Next,
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onNext = { focusRequesters.getOrNull(index + 1)?.requestFocus() },
+                        onDone = { submitOnce() },
+                    ),
+                    visualTransformation = field.visualTransformation,
+                    focusRequester = focusRequesters[index],
+                    authStyle = true,
+                    modifier = Modifier.testTag(field.testTag),
+                )
+                if (index != fields.lastIndex) Spacer(Modifier.height(fieldSpacing))
+            }
+            auxiliaryContent?.invoke(enabled)
+            if (message != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(message, Modifier.testTag("customer-auth-message"), color = MaterialTheme.colorScheme.error,
+                    fontFamily = CustomerActionFont, fontSize = 14.sp)
+            }
+            Spacer(Modifier.height(buttonSpacing))
+            CustomerStyledButton(
+                text = if (submitting || submitRequested) "Подождите…" else submitLabel,
+                normalStyle = CustomerAuthLoginButtonStyle,
+                pressedStyle = CustomerAuthRegistrationButtonStyle,
+                enabled = submitEnabled && enabled,
+                onClick = ::submitOnce,
                 authStyle = true,
-                modifier = Modifier.testTag(field.testTag),
+                modifier = Modifier.graphicsLayer {
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                    alpha = actionReveal.value
+                    translationY = 12.dp.toPx() * (1f - actionReveal.value)
+                }.testTag(submitTag),
             )
-            if (index != fields.lastIndex) Spacer(Modifier.height(fieldSpacing))
         }
-        auxiliaryContent?.invoke(enabled)
-        if (message != null) {
-            Spacer(Modifier.height(12.dp))
-            Text(message, Modifier.testTag("customer-auth-message"), color = MaterialTheme.colorScheme.error,
-                fontFamily = CustomerActionFont, fontSize = 14.sp)
-        }
-        Spacer(Modifier.height(buttonSpacing))
-        CustomerStyledButton(
-            text = if (submitting || submitRequested) "Подождите…" else submitLabel,
-            normalStyle = CustomerAuthLoginButtonStyle,
-            pressedStyle = CustomerAuthRegistrationButtonStyle,
-            enabled = submitEnabled && enabled,
-            onClick = ::submitOnce,
-            authStyle = true,
-            modifier = Modifier.testTag(submitTag),
-        )
     }
 }
 
@@ -437,11 +449,9 @@ internal fun customerRegistrationValidationMessage(
     password: String,
     repeatedPassword: String,
     phone: String,
+    firstName: String,
+    lastName: String,
 ): String? {
     RegistrationValidator.validate(login, password, repeatedPassword)?.let { return it }
-    if (!CustomerEmailPattern.matches(email.trim())) return "Введите корректный Email"
-    if (phone.isBlank()) return "Введите номер телефона"
-    return null
+    return registrationProfileValidationMessage(firstName, lastName, email, phone)
 }
-
-private val CustomerEmailPattern = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")

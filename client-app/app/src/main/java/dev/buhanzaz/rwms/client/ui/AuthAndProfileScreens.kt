@@ -57,31 +57,30 @@ import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CustomerProfile
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 
-/** Creates a customer identity or edits its mutable rental and delivery document fields. */
+/** Edits the saved registration profile and its rental and delivery document fields. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileFormScreen(
-    existing: CustomerProfile?,
+    existing: CustomerProfile,
     busy: Boolean,
     onSave: (CustomerProfile) -> Unit,
     errorMessage: String? = null,
-    registrationDraft: CustomerRegistrationProfileDraft? = null,
     onAvatarCropped: (ByteArray) -> Unit = {},
     onBack: (() -> Unit)? = null,
     onAvatarEditingChanged: (Boolean) -> Unit = {},
 ) {
-    val type = existing?.entityType ?: CustomerEntityType.INDIVIDUAL
-    var firstName by rememberSaveable(existing?.id, existing?.firstName) { mutableStateOf(existing?.firstName.orEmpty()) }
-    var lastName by rememberSaveable(existing?.id, existing?.lastName) { mutableStateOf(existing?.lastName.orEmpty()) }
-    var company by rememberSaveable(existing?.id, existing?.companyName) { mutableStateOf(existing?.companyName.orEmpty()) }
-    var phone by rememberSaveable(existing?.id, existing?.phone, registrationDraft?.phone) {
-        mutableStateOf(existing?.phone ?: registrationDraft?.phone.orEmpty())
+    val type = existing.entityType
+    var firstName by rememberSaveable(existing.id, existing.firstName) { mutableStateOf(existing.firstName.orEmpty()) }
+    var lastName by rememberSaveable(existing.id, existing.lastName) { mutableStateOf(existing.lastName.orEmpty()) }
+    var company by rememberSaveable(existing.id, existing.companyName) { mutableStateOf(existing.companyName.orEmpty()) }
+    var phone by rememberSaveable(existing.id, existing.phone) {
+        mutableStateOf(existing.phone)
     }
-    var email by rememberSaveable(existing?.id, existing?.email, registrationDraft?.email) {
-        mutableStateOf(existing?.email ?: registrationDraft?.email.orEmpty())
+    var email by rememberSaveable(existing.id, existing.email) {
+        mutableStateOf(existing.email.orEmpty())
     }
-    var info by rememberSaveable(existing?.id, existing?.additionalInfo) { mutableStateOf(existing?.additionalInfo.orEmpty()) }
-    var pendingAvatar by rememberSaveable(existing?.id) { mutableStateOf<Uri?>(null) }
+    var info by rememberSaveable(existing.id, existing.additionalInfo) { mutableStateOf(existing.additionalInfo.orEmpty()) }
+    var pendingAvatar by rememberSaveable(existing.id) { mutableStateOf<Uri?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) pendingAvatar = uri
     }
@@ -101,8 +100,8 @@ fun ProfileFormScreen(
         return
     }
     val draft = CustomerProfile(
-        id = existing?.id,
-        version = existing?.version,
+        id = existing.id,
+        version = existing.version,
         entityType = type,
         firstName = firstName.trim().takeIf { type == CustomerEntityType.INDIVIDUAL },
         lastName = lastName.trim().takeIf { type == CustomerEntityType.INDIVIDUAL },
@@ -110,7 +109,7 @@ fun ProfileFormScreen(
         phone = phone.trim(),
         email = email.trim().takeIf(String::isNotBlank),
         additionalInfo = info.trim().takeIf(String::isNotBlank),
-        avatar = existing?.avatar,
+        avatar = existing.avatar,
     )
     val valid = draft.phone.isNotBlank() && when (type) {
         CustomerEntityType.INDIVIDUAL -> !draft.firstName.isNullOrBlank() && !draft.lastName.isNullOrBlank()
@@ -120,7 +119,7 @@ fun ProfileFormScreen(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             CustomerTopBar(
-                title = if (existing == null) "Данные клиента" else "Профиль",
+                title = "Профиль",
                 onBack = onBack,
             )
         },
@@ -131,29 +130,16 @@ fun ProfileFormScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (existing != null) {
-                item {
-                    ProfileAvatar(
-                        profile = existing,
-                        busy = busy,
-                        onPick = {
-                            avatarPicker.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                            )
-                        },
-                    )
-                }
-            }
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Данные клиента", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        text = if (type == CustomerEntityType.INDIVIDUAL) "Физическое лицо" else "Юридическое лицо",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.testTag("profile-entity-type"),
-                    )
-                }
+                ProfileAvatar(
+                    profile = existing,
+                    busy = busy,
+                    onPick = {
+                        avatarPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                )
             }
             if (type == CustomerEntityType.INDIVIDUAL) {
                 item {
@@ -189,6 +175,7 @@ fun ProfileFormScreen(
                 Text(
                     "Контакты",
                     style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
@@ -237,35 +224,33 @@ fun ProfileFormScreen(
                 Button(
                     onClick = { onSave(draft) },
                     modifier = Modifier.fillMaxWidth().testTag("profile-save"),
-                    enabled = !busy && valid && (existing == null || draft != existing),
-                ) { Text(if (existing == null) "Продолжить" else "Сохранить") }
+                    enabled = !busy && valid && draft != existing,
+                ) { Text("Сохранить") }
             }
-            if (existing != null) {
-                item { CustomerNotificationPermission() }
-                item {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().testTag("profile-legal-entity-access"),
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    ) {
-                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Icon(
-                                Icons.Outlined.Apartment,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                            Text("Доступ для юрлиц", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                if (type == CustomerEntityType.LEGAL) {
-                                    "Вы используете профиль юридического лица. Данные компании и контакты можно изменить выше."
-                                } else {
-                                    "Регистрация юридических лиц пока недоступна. Сейчас вы используете личный профиль для аренды."
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+            item { CustomerNotificationPermission() }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().testTag("profile-legal-entity-access"),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(
+                            Icons.Outlined.Apartment,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Text("Доступ для юрлиц", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (type == CustomerEntityType.LEGAL) {
+                                "Вы используете профиль юридического лица. Данные компании и контакты можно изменить выше."
+                            } else {
+                                "Регистрация юридических лиц пока недоступна. Сейчас вы используете личный профиль для аренды."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
