@@ -151,6 +151,7 @@ class AuthFlywayConfigurationTest {
     }
 
     private void assertDedicatedInteractiveClients(PropertySource<?> source) {
+        assertCadClient(source);
         assertDedicatedInteractiveClient(
                 source,
                 "rwms-rental-manager-web",
@@ -166,6 +167,32 @@ class AuthFlywayConfigurationTest {
                 "rwms-admin-web",
                 "admin.manage",
                 "/admin/auth/callback");
+    }
+
+    private void assertCadClient(PropertySource<?> source) {
+        int index = clientIndex(source, "rwms-cad");
+        String prefix = "rwms.auth.oauth.clients[" + index + "]";
+        assertThat(source.getProperty(prefix + ".enabled")).isEqualTo(true);
+        assertThat(source.getProperty(prefix + ".authentication-methods[0]")).isEqualTo("none");
+        assertThat(source.getProperty(prefix + ".authentication-methods[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("authorization_code");
+        assertThat(source.getProperty(prefix + ".grant-types[1]")).isEqualTo("refresh_token");
+        assertThat(source.getProperty(prefix + ".grant-types[2]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("openid");
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("profile");
+        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("offline_access");
+        assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("cad.project");
+        assertThat(source.getProperty(prefix + ".scopes[4]")).isNull();
+        assertThat(source.getProperty(prefix + ".require-proof-key")).isEqualTo(true);
+        assertThat(source.getProperty(prefix + ".allowed-principal-types[0]")).isEqualTo("USER");
+        assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
+        assertThat(source.getProperty(prefix + ".reuse-refresh-tokens")).isEqualTo(false);
+        assertThat(String.valueOf(source.getProperty(prefix + ".redirect-uris[0]")))
+                .contains("/cabin-cad/auth/callback");
+        assertThat(source.getProperty(prefix + ".redirect-uris[1]")).isNull();
+        assertThat(String.valueOf(source.getProperty(prefix + ".post-logout-redirect-uris[0]")))
+                .contains("/cabin-cad/");
+        assertThat(source.getProperty(prefix + ".post-logout-redirect-uris[1]")).isNull();
     }
 
     private void assertDedicatedInteractiveClient(

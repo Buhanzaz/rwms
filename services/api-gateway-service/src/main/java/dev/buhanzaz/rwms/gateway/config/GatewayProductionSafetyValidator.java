@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -57,38 +58,44 @@ public class GatewayProductionSafetyValidator {
   /** Builds the complete validated private target inventory from the route configuration. */
   private List<DownstreamTarget> requireDownstreamTargets() {
     GatewayProperties.Routes routes = properties.getRoutes();
-    return List.of(
-        downstreamTarget("auth target", "rwms.gateway.routes.auth-uri", routes.getAuthUri()),
-        downstreamTarget(
-            "task-board target",
-            "rwms.gateway.routes.task-board-uri",
-            routes.getTaskBoardUri()),
-        downstreamTarget(
-            "warehouse target", "rwms.gateway.routes.warehouse-uri", routes.getWarehouseUri()),
-        downstreamTarget("asset target", "rwms.gateway.routes.asset-uri", routes.getAssetUri()),
-        downstreamTarget(
-            "maintenance target",
-            "rwms.gateway.routes.maintenance-uri",
-            routes.getMaintenanceUri()),
-        downstreamTarget("media target", "rwms.gateway.routes.media-uri", routes.getMediaUri()),
-        downstreamTarget(
-            "inventory target",
-            "rwms.gateway.routes.inventory-uri",
-            routes.getInventoryUri()),
-        downstreamTarget(
-            "logistics target",
-            "rwms.gateway.routes.logistics-uri",
-            routes.getLogisticsUri()),
-        downstreamTarget(
-            "logistics planner target",
-            "rwms.gateway.routes.logistics-planner-uri",
-            routes.getLogisticsPlannerUri()),
-        downstreamTarget(
-            "dossier target", "rwms.gateway.routes.dossier-uri", routes.getDossierUri()),
-        downstreamTarget(
-            "analytics target", "rwms.gateway.routes.analytics-uri", routes.getAnalyticsUri()),
-        downstreamTarget(
-            "assistant target", "rwms.gateway.routes.assistant-uri", routes.getAssistantUri()));
+    List<DownstreamTarget> targets =
+        new ArrayList<>(
+            List.of(
+                downstreamTarget("auth target", "rwms.gateway.routes.auth-uri", routes.getAuthUri()),
+                downstreamTarget(
+                    "task-board target",
+                    "rwms.gateway.routes.task-board-uri",
+                    routes.getTaskBoardUri()),
+                downstreamTarget(
+                    "warehouse target", "rwms.gateway.routes.warehouse-uri", routes.getWarehouseUri()),
+                downstreamTarget("asset target", "rwms.gateway.routes.asset-uri", routes.getAssetUri()),
+                downstreamTarget(
+                    "maintenance target",
+                    "rwms.gateway.routes.maintenance-uri",
+                    routes.getMaintenanceUri()),
+                downstreamTarget("media target", "rwms.gateway.routes.media-uri", routes.getMediaUri()),
+                downstreamTarget(
+                    "inventory target",
+                    "rwms.gateway.routes.inventory-uri",
+                    routes.getInventoryUri()),
+                downstreamTarget(
+                    "logistics target",
+                    "rwms.gateway.routes.logistics-uri",
+                    routes.getLogisticsUri()),
+                downstreamTarget(
+                    "logistics planner target",
+                    "rwms.gateway.routes.logistics-planner-uri",
+                    routes.getLogisticsPlannerUri()),
+                downstreamTarget(
+                    "dossier target", "rwms.gateway.routes.dossier-uri", routes.getDossierUri()),
+                downstreamTarget(
+                    "analytics target", "rwms.gateway.routes.analytics-uri", routes.getAnalyticsUri()),
+                downstreamTarget(
+                    "assistant target", "rwms.gateway.routes.assistant-uri", routes.getAssistantUri())));
+    if (routes.getCadUri() != null) {
+      targets.add(downstreamTarget("cad target", "rwms.gateway.routes.cad-uri", routes.getCadUri()));
+    }
+    return List.copyOf(targets);
   }
 
   private static DownstreamTarget downstreamTarget(String label, String property, URI uri) {

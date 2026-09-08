@@ -317,6 +317,7 @@ public class AuthorizationServerConfiguration {
         if (!OAuthClientProperties.WORKER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.DRIVER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.CAD_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.ADMIN_WEB_CLIENT_ID.equals(clientId)
@@ -978,18 +979,20 @@ public class AuthorizationServerConfiguration {
     /**
      * Enforces the authoritative role boundary for each dedicated interactive application.
      *
-     * <p>Customer subjects remain isolated to their application. Rental access is an independent
-     * entitlement for staff roles, so any staff user may use a dedicated rental-manager client;
-     * the {@code RENTAL_MANAGER} role remains isolated from unrelated applications.
+     * <p>Customer subjects remain isolated to their application except for the CAD client, whose
+     * project membership is enforced by cad-service. Rental access is an independent entitlement
+     * for staff roles, so any staff user may use a dedicated rental-manager client; the
+     * {@code RENTAL_MANAGER} role remains isolated from unrelated applications other than CAD.
      *
      * @param clientId registered OAuth client identifier
      * @param globalRole authoritative user role, or {@code null} for non-user subjects
      * @throws OAuth2AuthenticationException when an application role boundary would be crossed
      */
     void validateInteractiveClientRole(String clientId, UserGlobalRole globalRole) {
+        boolean cadClient = OAuthClientProperties.CAD_CLIENT_ID.equals(clientId);
         boolean customerClient = OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID.equals(clientId);
         boolean customerRole = globalRole == UserGlobalRole.CUSTOMER;
-        if (customerClient != customerRole) {
+        if (!cadClient && customerClient != customerRole) {
             throw new OAuth2AuthenticationException(
                     new OAuth2Error("access_denied"),
                     "Customer accounts and customer OAuth client are isolated",
@@ -1007,7 +1010,7 @@ public class AuthorizationServerConfiguration {
                     "Dedicated rental manager applications require a staff user",
                     null);
         }
-        if (!rentalManagerClient && globalRole == UserGlobalRole.RENTAL_MANAGER) {
+        if (!rentalManagerClient && !cadClient && globalRole == UserGlobalRole.RENTAL_MANAGER) {
             throw new OAuth2AuthenticationException(
                     new OAuth2Error("access_denied"),
                     "Rental managers may use only the dedicated manager applications",

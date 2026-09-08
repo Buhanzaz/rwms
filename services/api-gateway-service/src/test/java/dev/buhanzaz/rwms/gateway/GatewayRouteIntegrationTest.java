@@ -55,6 +55,7 @@ class GatewayRouteIntegrationTest {
   private static HttpServer dossier;
   private static HttpServer analytics;
   private static HttpServer assistant;
+  private static HttpServer cad;
   private static final List<CapturedRequest> AUTH_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> TASK_BOARD_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> WAREHOUSE_REQUESTS = new CopyOnWriteArrayList<>();
@@ -69,6 +70,7 @@ class GatewayRouteIntegrationTest {
   private static final List<CapturedRequest> DOSSIER_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> ANALYTICS_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> ASSISTANT_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> CAD_REQUESTS = new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
   @Autowired GatewayProperties properties;
@@ -87,6 +89,7 @@ class GatewayRouteIntegrationTest {
     dossier = server(DOSSIER_REQUESTS);
     analytics = server(ANALYTICS_REQUESTS);
     assistant = server(ASSISTANT_REQUESTS);
+    cad = server(CAD_REQUESTS);
   }
 
   @AfterAll
@@ -103,6 +106,7 @@ class GatewayRouteIntegrationTest {
     dossier.stop(0);
     analytics.stop(0);
     assistant.stop(0);
+    cad.stop(0);
   }
 
   @DynamicPropertySource
@@ -119,6 +123,7 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.dossier-uri", () -> origin(dossier));
     registry.add("rwms.gateway.routes.analytics-uri", () -> origin(analytics));
     registry.add("rwms.gateway.routes.assistant-uri", () -> origin(assistant));
+    registry.add("rwms.gateway.routes.cad-uri", () -> origin(cad));
     registry.add("rwms.gateway.public-base-uri", () -> "https://panel.example");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
@@ -652,6 +657,54 @@ class GatewayRouteIntegrationTest {
   }
 
   @Test
+  void proxiesConfiguredCadV1RequestsWithoutRewritingTheirPathOrForwardingCookies()
+      throws Exception {
+    CAD_REQUESTS.clear();
+    String requestPath = "/api/cad/v1/projects?source=panel";
+    String requestBody = "{\"name\":\"Network CAD project\"}";
+
+    mvc.perform(
+            publicPost(requestPath)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .header("Idempotency-Key", "cad-create-1")
+                .contentType("application/json")
+                .content(requestBody)
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/cad/v1/projects"));
+
+    assertThat(CAD_REQUESTS)
+        .singleElement()
+        .satisfies(
+            request -> {
+              assertThat(request.path()).isEqualTo("/api/cad/v1/projects");
+              assertThat(request.query()).isEqualTo("source=panel");
+              assertThat(request.authorization()).isEqualTo("Bearer original-token");
+              assertThat(request.cookie()).isNull();
+              assertThat(request.idempotencyKey()).isEqualTo("cad-create-1");
+              assertThat(request.body()).isEqualTo(requestBody);
+            });
+  }
+
+  @Test
+  void cadPublicRouteRequiresAuthenticationAndPrivateAliasesStayBlocked() throws Exception {
+    CAD_REQUESTS.clear();
+
+    mvc.perform(publicGet("/api/cad/v1/projects")).andExpect(status().isUnauthorized());
+    mvc.perform(
+            publicGet("/api/cad/internal/v1/projects")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            publicGet("/api/cad/private/v1/projects")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+
+    assertThat(CAD_REQUESTS).isEmpty();
+  }
+
+  @Test
   void proxiesOnlyPublicDossierPathsWithoutCookiesOrPathRewriting() throws Exception {
     DOSSIER_REQUESTS.clear();
 
@@ -975,6 +1028,7 @@ class GatewayRouteIntegrationTest {
     DOSSIER_REQUESTS.clear();
     ANALYTICS_REQUESTS.clear();
     ASSISTANT_REQUESTS.clear();
+    CAD_REQUESTS.clear();
 
     mvc.perform(
             publicGet("/api/task-board/internal/work-queues")
@@ -1041,6 +1095,7 @@ class GatewayRouteIntegrationTest {
     assertThat(DOSSIER_REQUESTS).isEmpty();
     assertThat(ANALYTICS_REQUESTS).isEmpty();
     assertThat(ASSISTANT_REQUESTS).isEmpty();
+    assertThat(CAD_REQUESTS).isEmpty();
   }
 
   @Test

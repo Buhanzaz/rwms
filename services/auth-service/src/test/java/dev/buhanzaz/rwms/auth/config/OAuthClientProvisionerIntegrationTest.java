@@ -618,6 +618,63 @@ class OAuthClientProvisionerIntegrationTest {
     }
 
     @Test
+    void cadClientRejectsScopeCallbackLogoutAndPkceDriftBeforeMutation() {
+        List<OAuthClientProperties.Client> invalidConfigurations = List.of(
+                dedicatedUserClient(
+                        OAuthClientProperties.CAD_CLIENT_ID,
+                        Set.of("openid", "profile", "offline_access", "cad.project", "rwms.read"),
+                        "http://localhost:8080/cabin-cad/auth/callback",
+                        "http://localhost:8080/cabin-cad/"),
+                dedicatedUserClient(
+                        OAuthClientProperties.CAD_CLIENT_ID,
+                        OAuthClientProperties.CAD_SCOPES,
+                        "http://localhost:8080/cabin-cad/callback",
+                        "http://localhost:8080/cabin-cad/"),
+                dedicatedUserClient(
+                        OAuthClientProperties.CAD_CLIENT_ID,
+                        OAuthClientProperties.CAD_SCOPES,
+                        "http://localhost:8080/cabin-cad/auth/callback",
+                        "http://localhost:8080/cabin-cad/?source=logout"),
+                dedicatedUserClient(
+                        OAuthClientProperties.CAD_CLIENT_ID,
+                        OAuthClientProperties.CAD_SCOPES,
+                        "http://localhost:8080/cabin-cad/auth/callback",
+                        "http://localhost:8080/cabin-cad/",
+                        false));
+
+        invalidConfigurations.forEach(configuration -> assertThatThrownBy(() -> provisioner(configuration).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(OAuthClientProperties.CAD_CLIENT_ID));
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        provisioner(dedicatedUserClient(
+                        OAuthClientProperties.CAD_CLIENT_ID,
+                        OAuthClientProperties.CAD_SCOPES,
+                        "http://localhost:8080/cabin-cad/auth/callback",
+                        "http://localhost:8080/cabin-cad/"))
+                .run(null);
+
+        assertThat(repository.findByClientId(OAuthClientProperties.CAD_CLIENT_ID))
+                .isNotNull()
+                .satisfies(client -> {
+                    assertThat(client.getScopes())
+                            .containsExactlyInAnyOrder(
+                                    "openid", "profile", "offline_access", "cad.project")
+                            .doesNotContain("rwms.read", "rwms.write", "rental.manage", "admin.manage");
+                    assertThat(client.getRedirectUris())
+                            .containsExactly("http://localhost:8080/cabin-cad/auth/callback");
+                    assertThat(client.getPostLogoutRedirectUris())
+                            .containsExactly("http://localhost:8080/cabin-cad/");
+                    assertThat(client.getClientSettings().isRequireProofKey()).isTrue();
+                    assertThat(client.getTokenSettings().getAccessTokenTimeToLive())
+                            .isEqualTo(Duration.ofMinutes(5));
+                    assertThat(client.getTokenSettings().getRefreshTokenTimeToLive())
+                            .isEqualTo(Duration.ofDays(30));
+                    assertThat(client.getTokenSettings().isReuseRefreshTokens()).isFalse();
+                });
+    }
+
+    @Test
     void sameRevisionRejectsConfigurationAndSecretDrift() throws Exception {
         provisioner(serviceClient(true, 1, "secret-one", false)).run(null);
 
@@ -1023,6 +1080,15 @@ class OAuthClientProvisionerIntegrationTest {
             Set<String> scopes,
             String redirectUri,
             String postLogoutRedirectUri) {
+        return dedicatedUserClient(clientId, scopes, redirectUri, postLogoutRedirectUri, true);
+    }
+
+    private OAuthClientProperties.Client dedicatedUserClient(
+            String clientId,
+            Set<String> scopes,
+            String redirectUri,
+            String postLogoutRedirectUri,
+            boolean requireProofKey) {
         return new OAuthClientProperties.Client(
                 clientId,
                 "Dedicated interactive client",
@@ -1033,7 +1099,7 @@ class OAuthClientProvisionerIntegrationTest {
                 Set.of(redirectUri),
                 Set.of(postLogoutRedirectUri),
                 scopes,
-                true,
+                requireProofKey,
                 Set.of(PrincipalType.USER),
                 Set.of("rwms-services"),
                 Set.of("http://localhost:8080"),

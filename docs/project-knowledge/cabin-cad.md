@@ -1,12 +1,16 @@
 # Cabin CAD Master Template Flow
 
-Status: Confirmed standalone prototype behavior as of 2026-08-19.
+Status: Confirmed browser-prototype behavior as of 2026-08-19; the
+collaboration backend stage was delivered on 2026-09-08. Browser integration
+and public release remain incomplete.
 
-`cabin-cad/` is an independent browser engineering prototype. It does not use
-the RWMS gateway, canonical OpenAPI/events, service databases, warehouse
-authorization, or server-side cabin lifecycle state. Its browser persistence
-is therefore prototype-local and must not be treated as authoritative RWMS
-product data.
+`cabin-cad/` remains an independent browser engineering prototype. Its current
+browser code does not yet use the RWMS gateway, the CAD collaboration API, or a
+server-side project. Its existing browser persistence is therefore
+prototype-local and must not be treated as authoritative RWMS product data.
+The delivered server stage described below changes that future collaboration
+boundary; it does not make the browser UI online or replace the existing
+prototype persistence until a client is explicitly wired and published.
 
 Primary evidence:
 
@@ -26,6 +30,72 @@ Primary evidence:
 - [`cabin-cad/src/viewer3d/Viewer3D.tsx`](../../cabin-cad/src/viewer3d/Viewer3D.tsx)
 - [`cabin-cad/vite.config.ts`](../../cabin-cad/vite.config.ts)
 - [`cabin-cad/README.md`](../../cabin-cad/README.md)
+
+## Network Collaboration Backend Stage
+
+[`cabin-cad/server/`](../../cabin-cad/server/) now contains a Node.js 22+
+backend that owns CAD project membership, role assignment, control fencing,
+accepted snapshot revisions, annotations, invitation state and durable
+operation receipts in its own PostgreSQL database. It owns no RWMS cabin,
+warehouse, lifecycle, STEP-source or other-service database fact. Its canonical
+public HTTP boundary is
+[`cad-service.yaml`](../../contracts/openapi/cad-service.yaml); there is no
+second browser-defined contract.
+
+The intended interactive path is deliberately same-origin:
+
+```text
+Cabin CAD browser (future client) -> /api/cad/v1/**
+    -> API gateway (private CAD_SERVICE_URL) -> cad-service
+```
+
+The browser must never receive an internal service address, `CAD_SERVICE_URL`,
+or a direct `/api/internal/**` route. `/health` is a local service check, not a
+browser collaboration endpoint. The current browser is not wired to this path,
+and no public gateway/Nginx deployment is claimed by this documentation.
+
+The interactive OIDC client is `rwms-cad`, with callback
+`/cabin-cad/auth/callback`. Every collaboration operation needs a verified USER
+Bearer JWT with `cad.project`; issuer, audience, signature, `exp`, `iat` and
+`sub` are checked before current project membership is resolved. Missing,
+revoked or inaccessible membership deliberately appears as a project-not-found
+response rather than client-side cached access.
+
+A project creator is assigned `designer`. A signed invitation is valid for 24
+hours, may be accepted once by a signed-in recipient, and always assigns that
+recipient `client`; neither create nor accept lets a caller choose the
+designer role. The raw invitation capability is HMAC-derived after its durable
+receipt is stored and is not retained in project state or the operation-receipt
+table.
+
+Project, document, template, annotation and control have separate positive
+revisions. A controller writes the document under both document and control
+fences; only a controlling designer writes the template. A non-controller may
+request hand-off, while the designer may reclaim control only after the holder
+has not refreshed presence for 60 seconds. Any member may add an annotation
+without changing the document revision; the author or designer may resolve or
+delete it, and only the author can change its text. Ordinary mutable operations
+use a project-scoped `operationId` and return the durable result only for the
+exact same actor, operation kind and body.
+
+`CADDocument` schema-version 2 and `MasterTemplate` schema-version 1 remain
+opaque versioned snapshots. `server/src/validation.ts` directly imports the
+framework-free shared `src/cad` and `src/master-template` validators and
+evaluator; it does not copy or redefine either domain model. The service
+accepts at most 1,000 CAD modules/8 MiB, a 64-MiB template with at most 10,000
+occurrences and 10,000 geometry resources, 20 members, 100 invitations and
+1,000 annotations. CPU validation uses a bounded `worker_threads` pool with
+two workers by default, a maximum of four, a bounded queue and a 30-second hard
+deadline. PostgreSQL schema changes are Flyway-only under
+[`server/db/migration/`](../../cabin-cad/server/db/migration/); the Node process
+does not perform DDL.
+
+The repository includes
+[`nginx-cad.conf.example`](../../cabin-cad/server/nginx-cad.conf.example) for a
+future publication. It raises the CAD location's `client_max_body_size` to
+80m from the current public 12m cap and sets 50-second proxy read/send
+timeouts. It is not a live Nginx edit. Browser API wiring, gateway/public-route
+publication and release verification remain later work.
 
 ## Ownership And Layering
 

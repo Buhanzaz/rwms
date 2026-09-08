@@ -42,7 +42,28 @@ public class GatewayUpstreamProblemWriter {
    * @return sanitized {@code 502} or {@code 504} response
    */
   public ServerResponse response(Throwable error, ServerRequest request) {
-    Failure failure = failure(error);
+    return response(failure(error), request);
+  }
+
+  /**
+   * Creates the stable public response used when the optional CAD downstream is not configured.
+   *
+   * <p>The response intentionally identifies the missing capability without disclosing target
+   * topology or configuration values.
+   *
+   * @param request matched public CAD request
+   * @return sanitized {@code 503} Problem Details response
+   */
+  public ServerResponse cadServiceUnconfigured(ServerRequest request) {
+    return response(
+        new Failure(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "GATEWAY_CAD_SERVICE_UNCONFIGURED",
+            "The CAD service is not configured"),
+        request);
+  }
+
+  private ServerResponse response(Failure failure, ServerRequest request) {
     UUID correlationId = correlation(request.servletRequest());
     return ServerResponse.status(failure.status())
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)

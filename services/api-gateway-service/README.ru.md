@@ -103,6 +103,7 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 | `/api/warehouse/**` | настроенный target `warehouse-service`, путь без изменений | Internal-пути запрещены; текущий маршрут зарезервирован для warehouse API W1. |
 | `/api/asset/**` | `asset-service`, путь без изменений | Internal-пути запрещены. HTML-import commit обслуживает отдельный handler. |
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
+| `/api/cad/v1/**` | optional target `CAD_SERVICE_URL`, путь без изменений | Требуется Bearer authentication; `/api/cad/internal/**` и `/api/cad/private/**` запрещены. Если CAD target не настроен, аутентифицированный вызов получает явный `503` Problem Details. |
 | `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Source/variant upload content и SSE используют отдельные handlers. |
 | `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. Пересчёт завершённого результата использует отдельный handler с тайм-аутом 60 секунд; все остальные inventory-запросы сохраняют обычный тайм-аут. |
 | `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены. Анонимно доступны точные операции client-presentation, cabin-photo-presentation и contractor-route capability, а также четыре GET-шаблона гостевого каталога ниже. Профиль, корзина и заказы клиента требуют аутентификации; logistics проверяет точную комбинацию CUSTOMER/client/scope. |
@@ -145,6 +146,10 @@ submission, но не является abuse throttling.
   downstream read deadline 60 секунд. Точная команда исключена из общего
   inventory-маршрута; её путь, заголовки авторизации и идемпотентности
   пересылаются без изменений, а cookies удаляются.
+- `/api/cad/v1/**` использует отдельный streaming proxy с downstream read
+  deadline 45 секунд. Он сохраняет public path, Bearer и idempotency headers,
+  передаёт поддерживаемые request bodies без application aggregation и удаляет
+  cookies. Настроенный target optional; локальный fallback не создаётся.
 - `POST /api/assistant/v1/conversations/*/turns` использует streaming proxy
   ассистента, поэтому корректный потоковый ответ не наследует обычный read
   deadline.
@@ -173,18 +178,19 @@ Endpoint добавляется в эту таблицу только после
   замена токеновой защите API.
 - Локально проверяются timestamp, issuer и audience JWT. JWKS берётся с
   приватного target `auth-service`, а не через видимый браузеру gateway route.
-- По умолчанию `/api/**` требует аутентификацию. Приватные маршруты явно
-  запрещены; публичные OIDC, health, Android App Links и документированные
-  подписанные logistics capability operations — узкие исключения.
+- По умолчанию `/api/**` требует аутентификацию. Приватные маршруты, включая
+  CAD `/api/cad/internal/**` и `/api/cad/private/**`, явно запрещены; публичные
+  OIDC, health, Android App Links и документированные подписанные logistics
+  capability operations — узкие исключения.
 - Namespace WorkerApp требует ровно `SCOPE_worker.tasks`, а namespace DriverApp —
   ровно `SCOPE_driver.tasks`; токен одного native-клиента не проходит в поверхность
   другого. Доменные сервисы всё равно принимают собственные решения авторизации.
 - CORS использует явный allow-list origin, явный набор методов/заголовков и
   credentials там, где они нужны. Wildcard origin отклоняется startup-проверкой.
-- Production-проверка применяет одну policy ко всем downstream: каждый target
-  является HTTP(S) origin без path, не может повторять публичный host gateway и
-  не может использовать localhost или loopback-адрес. Публичные значения
-  обязаны использовать HTTPS.
+- Production-проверка применяет одну policy ко всем настроенным downstream:
+  каждый target является HTTP(S) origin без path, не может повторять публичный
+  host gateway и не может использовать localhost или loopback-адрес. Публичные
+  значения обязаны использовать HTTPS.
 
 Это разделение принципиально: edge аутентифицирует и защищает публичную
 поверхность, а сервис-владелец авторизует бизнес-операцию. Если перенести всю
@@ -206,6 +212,10 @@ upstream-подписку при отключении клиента. Смысл
 Details: недоступный target становится `502 Bad Gateway`, timeout —
 `504 Gateway Timeout`. В ответ намеренно не попадают upstream URL, текст
 исключения и тело запроса.
+
+Optional CAD route возвращает `503 Service Unavailable` со стабильным кодом
+RWMS Problem Details, когда `CAD_SERVICE_URL` отсутствует. Он не раскрывает
+default backend или configuration value.
 
 Gateway предоставляет:
 
@@ -257,8 +267,13 @@ Dev-defaults направляют auth на `9000`, task-board на `8081`, ре
 warehouse target на `8083`, получают JWKS с внутреннего auth target на `9000`
 и поднимают gateway на `8088`. Запускайте panel/Vite последним на `8080`: он
 проксирует `/auth` и `/api` на `8088`, сохраняя `/auth/callback` в SPA. В
-production нет localhost- или secret-bearing-defaults: должны быть заданы все
-target, public issuer/base URI и разрешённый panel origin.
+dev CAD намеренно не имеет default: когда local CAD server запущен, явно
+задайте `CAD_SERVICE_URL=http://127.0.0.1:8097`. Его путь сохраняется, а proxy
+передаёт contract-supported bodies потоково; production ingress также должен
+принимать максимальный body size CAD contract до того, как запрос дойдёт до
+gateway. В production нет localhost- или secret-bearing-defaults: должны быть
+заданы все настроенные target, public issuer/base URI и разрешённый panel
+origin.
 
 ## Исполняемый parity маршрутов и безопасности
 

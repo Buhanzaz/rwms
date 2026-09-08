@@ -59,6 +59,7 @@ rwms:
       dossier-uri: ${DOSSIER_SERVICE_URL}
       analytics-uri: ${ANALYTICS_SERVICE_URL}
       assistant-uri: ${ASSISTANT_SERVICE_URL}
+      cad-uri: ${CAD_SERVICE_URL:}
     security:
       issuer: ${AUTH_ISSUER}
       audience: ${AUTH_AUDIENCE:rwms-services}

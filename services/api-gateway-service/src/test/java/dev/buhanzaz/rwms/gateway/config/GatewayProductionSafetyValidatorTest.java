@@ -40,6 +40,13 @@ class GatewayProductionSafetyValidatorTest {
     assertThatThrownBy(() -> new GatewayProductionSafetyValidator(path, new MockEnvironment()).validate())
         .isInstanceOf(IllegalStateException.class);
 
+    GatewayProperties cadPath = validProperties();
+    cadPath.getRoutes().setCadUri(URI.create("https://cad.internal/base"));
+    assertThatThrownBy(
+            () -> new GatewayProductionSafetyValidator(cadPath, new MockEnvironment()).validate())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("cad-uri");
+
     GatewayProperties wildcard = validProperties();
     wildcard.getCors().setAllowedOrigins(List.of("https://*.example"));
     assertThatThrownBy(() -> new GatewayProductionSafetyValidator(wildcard, new MockEnvironment()).validate())
@@ -177,7 +184,11 @@ class GatewayProductionSafetyValidatorTest {
         routeCase(
             "assistant target",
             routes -> routes.setAssistantUri(publicHost),
-            routes -> routes.setAssistantUri(loopback)));
+            routes -> routes.setAssistantUri(loopback)),
+        routeCase(
+            "cad target",
+            routes -> routes.setCadUri(publicHost),
+            routes -> routes.setCadUri(loopback)));
   }
 
   private static DownstreamRouteCase routeCase(

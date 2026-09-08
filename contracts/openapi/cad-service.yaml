@@ -1,0 +1,950 @@
+openapi: 3.1.0
+info:
+  title: RWMS CAD Collaboration Service API
+  version: 1.0.0
+  description: >-
+    Canonical contract for the CAD-project collaboration boundary. The browser is
+    intended to call these routes only through the same-origin gateway prefix
+    `/api/cad/v1`; a direct service address is not a browser configuration.
+    Every protected operation requires a valid OIDC USER JWT with the dedicated
+    `cad.project` scope. Project membership and the separate control fence are
+    decided by cad-service, never by browser history or local storage.
+
+    JSON-body operations require `Content-Type: application/json`; request
+    compression is not supported (`Content-Encoding` must be absent or
+    `identity`). `CADDocument` and `MasterTemplate` are intentionally opaque
+    versioned snapshots. Their complete shapes are defined and validated by the
+    shared Cabin CAD domain sources, not duplicated in this transport contract.
+    Raw JSON bodies for project creation and template replacement are limited
+    to 72 MiB + 128 KiB, document replacement to 8 MiB + 128 KiB, and every
+    other JSON-body operation to 256 KiB. At most four bodies are read at once.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+paths:
+  /health:
+    get:
+      operationId: healthCadService
+      summary: Check the local service and its project database.
+      security: []
+      responses:
+        '200':
+          description: The database query succeeded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects:
+    get:
+      operationId: listCadProjects
+      summary: List projects in which the authenticated subject is a current member.
+      description: >-
+        Requires USER and `cad.project`. Results are ordered by the server's
+        current `updatedAt` value descending and are limited to 200 projects.
+      responses:
+        '200':
+          description: Caller-visible project synchronization envelopes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      operationId: createCadProject
+      summary: Create a project with its initial document and master template.
+      description: >-
+        Requires USER and `cad.project`. The client-supplied project `id` is the
+        creation retry identity: an exact retry by the creating designer returns
+        the original project; the same ID with different initial data conflicts.
+        The creating subject is assigned `designer` and initial control version
+        1. A client cannot choose a role in this request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProjectRequest' }
+      responses:
+        '201':
+          description: Project created, or the exact durable create retry result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/invitations/accept:
+    post:
+      operationId: acceptCadProjectInvitation
+      summary: Accept a signed one-use project invitation.
+      description: >-
+        Requires USER and `cad.project`. The authenticated subject, rather than
+        a request field, is bound to the invitation. The first successful
+        acceptance assigns only the `client` role. An exact retry by that same
+        subject returns the visible project state; another subject cannot reuse
+        the invitation. Invitations expire 24 hours after creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AcceptInvitationRequest' }
+      responses:
+        '200':
+          description: Current project state after accepted or same-subject replayed invitation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getCadProject
+      summary: Read the lightweight project synchronization envelope.
+      description: >-
+        Requires current project membership. Geometry and annotations are read
+        separately so clients fetch an opaque snapshot only when its revision
+        changes.
+      responses:
+        '200':
+          description: Current caller-visible project state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/document:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getCadProjectDocument
+      summary: Read the accepted CAD document snapshot and revision.
+      responses:
+        '200':
+          description: The current document resource.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectDocumentResource' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    put:
+      operationId: replaceCadProjectDocument
+      summary: Replace the CAD document under document and control fences.
+      description: >-
+        Any current member may write only while holding the exact control version.
+        `expectedDocumentRevision` prevents lost geometry updates. The server
+        validates the submitted snapshot with the shared CAD core and verifies
+        newly introduced module dimensions against the accepted template before
+        committing either the document or acknowledgement.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceDocumentRequest' }
+      responses:
+        '200':
+          description: Accepted document counters after the committed mutation or exact operation replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/template:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getCadProjectTemplate
+      summary: Read the accepted master template snapshot and revision.
+      responses:
+        '200':
+          description: The current template resource.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectTemplateResource' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    put:
+      operationId: replaceCadProjectTemplate
+      summary: Replace the master template under template and control fences.
+      description: >-
+        Only the project's `designer` may write the template, and that designer
+        must hold the exact control version. The complete persisted document is
+        checked against the submitted template before commit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceTemplateRequest' }
+      responses:
+        '200':
+          description: Accepted template counters after the committed mutation or exact operation replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/control:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: transferCadProjectControl
+      summary: Transfer model-control ownership to another current member.
+      description: >-
+        The current controller supplies `expectedControlVersion`. A transfer
+        changes the control version and clears any pending control request; it
+        does not change either user's project role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferControlRequest' }
+      responses:
+        '200':
+          description: Accepted project and control counters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/control/request:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: requestCadProjectControl
+      summary: Ask the current controller for control.
+      description: >-
+        Any member other than the current controller can publish one pending
+        request under `expectedControlVersion`. The state exposes the requesting
+        subject through `control.requestedBy`; it does not transfer control.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RequestControlRequest' }
+      responses:
+        '200':
+          description: Accepted project counters; control owner is unchanged.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/control/reclaim:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: reclaimCadProjectControl
+      summary: Reclaim control after the holder has been absent for 60 seconds.
+      description: >-
+        Only the project's designer can reclaim control. `expectedControlVersion`
+        must match, the designer must not already hold control, and the holder's
+        last presence update must be at least 60 seconds old. An online holder
+        yields 409; a successful reclaim increments the control version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RequestControlRequest' }
+      responses:
+        '200':
+          description: Accepted project and control counters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: createCadProjectInvitation
+      summary: Issue one signed client invitation.
+      description: >-
+        Only the project's designer can issue an invitation. The server derives a
+        signed token, fixes its 24-hour expiry, and never accepts a requested
+        role. At most 100 invitation records are retained for a project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInvitationRequest' }
+      responses:
+        '201':
+          description: Invitation capability for delivery to the intended client.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectInvitation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/members/revoke:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: revokeCadProjectMember
+      summary: Revoke another member's project access.
+      description: >-
+        Only the project's designer can revoke a different current member. The
+        project `expectedVersion` fences this membership change. Revoking the
+        control holder returns control to the designer and increments the
+        control version; invitations consumed by that subject are revoked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeMemberRequest' }
+      responses:
+        '200':
+          description: Accepted project and control counters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/annotations:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listCadProjectAnnotations
+      summary: Read the current independent plan-annotation resource.
+      responses:
+        '200':
+          description: Annotation collection and its independent revision.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAnnotationsResource' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      operationId: createCadProjectAnnotation
+      summary: Add an authored annotation without changing the CAD document revision.
+      description: >-
+        Any current member may add a maximum of 1,000 annotations per project.
+        Author identity, annotation version, resolved state and timestamps are
+        assigned by the server.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAnnotationRequest' }
+      responses:
+        '201':
+          description: Accepted project and annotation counters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/annotations/{annotationId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/AnnotationId'
+    put:
+      operationId: editCadProjectAnnotation
+      summary: Edit or resolve one annotation under its own version fence.
+      description: >-
+        The annotation author or the project's designer may edit it. Only its
+        author may change `text`; either permitted actor may set `resolved`.
+        `expectedVersion` is the annotation version, not the project revision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EditAnnotationRequest' }
+      responses:
+        '200':
+          description: Accepted project and annotation counters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    delete:
+      operationId: deleteCadProjectAnnotation
+      summary: Delete one annotation under its own version fence.
+      description: >-
+        The annotation author or the project's designer may delete it. This
+        endpoint requires the JSON request body shown below.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeleteAnnotationRequest' }
+      responses:
+        '200':
+          description: Accepted project and annotation counters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectAcknowledgement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /api/cad/v1/projects/{projectId}/presence:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: updateCadProjectPresence
+      summary: Refresh the caller's advisory project presence.
+      description: >-
+        A current member updates only their server-derived name and `lastSeenAt`.
+        This operation has no request body and changes neither document,
+        template, annotation nor control revision.
+      responses:
+        '204': { description: Presence accepted. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        OIDC access token issued for a USER principal with `cad.project` in its
+        scope claim. The server verifies signature, `exp`, `iat`, `sub`, issuer
+        and audience before resolving project membership.
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AnnotationId:
+      name: annotationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    BadRequest:
+      description: Invalid identifier, counter, JSON or request field.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    Unauthorized:
+      description: Missing, expired or invalid Bearer JWT.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, const: Bearer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    Forbidden:
+      description: JWT does not represent an eligible USER, lacks cad.project, or lacks action authority.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    NotFound:
+      description: Route, project, annotation or invitation is absent; inaccessible projects also return 404.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    Conflict:
+      description: Stale revision/control fence, repeat identity mismatch, membership limit or other state conflict.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    Gone:
+      description: The invitation has expired or was already consumed by a different subject.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    RequestTooLarge:
+      description: Request or opaque snapshot exceeds an enforced size or count limit.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    UnsupportedMediaType:
+      description: The request is not uncompressed application/json.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    Unprocessable:
+      description: Shared CAD or master-template validation rejected the snapshot.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+    Unavailable:
+      description: Database, bounded upload admission or bounded geometry worker capacity is unavailable.
+      headers:
+        Retry-After:
+          schema: { type: string, const: '3' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CadProblem' }
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: UP }
+    CadProblem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Stable `urn:rwms:cad:<code>` problem type.
+        title: { type: string }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string }
+    ProjectRole:
+      type: string
+      enum: [designer, client]
+    ProjectMember:
+      type: object
+      additionalProperties: false
+      required: [subject, name, role, lastSeenAt]
+      properties:
+        subject: { type: string, maxLength: 200 }
+        name: { type: string, maxLength: 120 }
+        role: { $ref: '#/components/schemas/ProjectRole' }
+        lastSeenAt: { type: string, format: date-time }
+    ProjectControl:
+      type: object
+      additionalProperties: false
+      required: [subject, version, requestedBy]
+      properties:
+        subject: { type: string, maxLength: 200 }
+        version: { type: integer, minimum: 1 }
+        requestedBy:
+          oneOf:
+            - { type: string, maxLength: 200 }
+            - { type: 'null' }
+    ProjectState:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - version
+        - documentRevision
+        - templateRevision
+        - annotationRevision
+        - control
+        - members
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        version: { type: integer, minimum: 1 }
+        documentRevision: { type: integer, minimum: 1 }
+        templateRevision: { type: integer, minimum: 1 }
+        annotationRevision: { type: integer, minimum: 1 }
+        control: { $ref: '#/components/schemas/ProjectControl' }
+        members:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/ProjectMember' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProjectList:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/ProjectState' }
+    ProjectAcknowledgement:
+      type: object
+      additionalProperties: false
+      required: [projectId, version, documentRevision, templateRevision, annotationRevision, controlVersion]
+      properties:
+        projectId: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        documentRevision: { type: integer, minimum: 1 }
+        templateRevision: { type: integer, minimum: 1 }
+        annotationRevision: { type: integer, minimum: 1 }
+        controlVersion: { type: integer, minimum: 1 }
+    CADDocument:
+      type: object
+      additionalProperties: true
+      required: [schemaVersion]
+      properties:
+        schemaVersion: { type: integer, const: 2 }
+      description: >-
+        Opaque CAD document snapshot at shared-domain schema version 2. Its
+        complete serializable model is defined by
+        `cabin-cad/src/cad/domain/types.ts` and is accepted only when
+        `isValidCADDocument` in `cabin-cad/src/cad/domain/validation.ts` passes.
+        The server additionally limits the serialized snapshot to 8 MiB, 1,000
+        modules, and 20,000 items in each top-level array; consumers must not
+        infer a second transport-owned CAD schema from this contract.
+    MasterTemplate:
+      type: object
+      additionalProperties: true
+      required: [schemaVersion]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+      description: >-
+        Opaque Master Template snapshot at shared-domain schema version 1. Its
+        complete serializable model is defined by
+        `cabin-cad/src/master-template/domain/types.ts` and is accepted only
+        when `assertValidMasterTemplate`, default evaluation, and the document
+        dimension check in the shared template engine pass. The server limits
+        its serialized snapshot to 64 MiB and each of geometry resources and
+        occurrences to 10,000; consumers must not duplicate or extend this
+        snapshot schema here.
+    ProjectDocumentResource:
+      type: object
+      additionalProperties: false
+      required: [revision, document]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        document: { $ref: '#/components/schemas/CADDocument' }
+    ProjectTemplateResource:
+      type: object
+      additionalProperties: false
+      required: [revision, template]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        template: { $ref: '#/components/schemas/MasterTemplate' }
+    Point2D:
+      type: object
+      additionalProperties: false
+      required: [xMm, yMm]
+      properties:
+        xMm: { type: integer, minimum: -100000000, maximum: 100000000 }
+        yMm: { type: integer, minimum: -100000000, maximum: 100000000 }
+    AnnotationKind:
+      type: string
+      enum: [comment, ink, arrow, rectangle]
+    AnnotationColor:
+      type: string
+      enum: [red, blue, orange]
+    AnnotationInput:
+      description: >-
+        Authored fields only. The server derives author identity, version,
+        resolved state and timestamps. Text is trimmed; a comment requires
+        nonblank text, while the other shapes may have empty text.
+      oneOf:
+        - $ref: '#/components/schemas/CommentAnnotationInput'
+        - $ref: '#/components/schemas/InkAnnotationInput'
+        - $ref: '#/components/schemas/ArrowAnnotationInput'
+        - $ref: '#/components/schemas/RectangleAnnotationInput'
+    CommentAnnotationInput:
+      type: object
+      additionalProperties: true
+      required: [id, kind, floor, points, text, color]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, const: comment }
+        floor: { type: integer, minimum: 1, maximum: 100 }
+        points:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items: { $ref: '#/components/schemas/Point2D' }
+        text: { type: string, minLength: 1, maxLength: 2000 }
+        color: { $ref: '#/components/schemas/AnnotationColor' }
+    InkAnnotationInput:
+      type: object
+      additionalProperties: true
+      required: [id, kind, floor, points, text, color]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, const: ink }
+        floor: { type: integer, minimum: 1, maximum: 100 }
+        points:
+          type: array
+          minItems: 2
+          maxItems: 2048
+          items: { $ref: '#/components/schemas/Point2D' }
+        text: { type: string, maxLength: 2000 }
+        color: { $ref: '#/components/schemas/AnnotationColor' }
+    ArrowAnnotationInput:
+      type: object
+      additionalProperties: true
+      required: [id, kind, floor, points, text, color]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, const: arrow }
+        floor: { type: integer, minimum: 1, maximum: 100 }
+        points:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items: { $ref: '#/components/schemas/Point2D' }
+        text: { type: string, maxLength: 2000 }
+        color: { $ref: '#/components/schemas/AnnotationColor' }
+    RectangleAnnotationInput:
+      type: object
+      additionalProperties: true
+      required: [id, kind, floor, points, text, color]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, const: rectangle }
+        floor: { type: integer, minimum: 1, maximum: 100 }
+        points:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items: { $ref: '#/components/schemas/Point2D' }
+        text: { type: string, maxLength: 2000 }
+        color: { $ref: '#/components/schemas/AnnotationColor' }
+    PlanAnnotation:
+      type: object
+      additionalProperties: false
+      required: [id, version, authorSubject, authorName, kind, floor, points, text, color, resolved, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        authorSubject: { type: string, maxLength: 200 }
+        authorName: { type: string, maxLength: 120 }
+        kind: { $ref: '#/components/schemas/AnnotationKind' }
+        floor: { type: integer, minimum: 1, maximum: 100 }
+        points:
+          type: array
+          minItems: 1
+          maxItems: 2048
+          items: { $ref: '#/components/schemas/Point2D' }
+        text: { type: string, maxLength: 2000 }
+        color: { $ref: '#/components/schemas/AnnotationColor' }
+        resolved: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProjectAnnotationsResource:
+      type: object
+      additionalProperties: false
+      required: [revision, annotations]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        annotations:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/PlanAnnotation' }
+    ProjectOperation:
+      type: object
+      additionalProperties: true
+      required: [operationId]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+          description: >-
+            Project-scoped deterministic retry key. A repeated ID returns the
+            stored result only for the exact same actor, operation kind and
+            request body; any mismatch conflicts.
+    CreateProjectRequest:
+      type: object
+      additionalProperties: true
+      required: [id, name, document, template]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Client-chosen project ID and creation retry identity.
+        name: { type: string, minLength: 1, maxLength: 160 }
+        document: { $ref: '#/components/schemas/CADDocument' }
+        template: { $ref: '#/components/schemas/MasterTemplate' }
+    ReplaceDocumentRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedControlVersion, expectedDocumentRevision, document]
+          properties:
+            expectedControlVersion: { type: integer, minimum: 1 }
+            expectedDocumentRevision: { type: integer, minimum: 1 }
+            document: { $ref: '#/components/schemas/CADDocument' }
+    ReplaceTemplateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedControlVersion, expectedTemplateRevision, template]
+          properties:
+            expectedControlVersion: { type: integer, minimum: 1 }
+            expectedTemplateRevision: { type: integer, minimum: 1 }
+            template: { $ref: '#/components/schemas/MasterTemplate' }
+    TransferControlRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedControlVersion, targetSubject]
+          properties:
+            expectedControlVersion: { type: integer, minimum: 1 }
+            targetSubject: { type: string, minLength: 1, maxLength: 200 }
+    RequestControlRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedControlVersion]
+          properties:
+            expectedControlVersion: { type: integer, minimum: 1 }
+    ProjectInvitation:
+      type: object
+      additionalProperties: false
+      required: [id, token, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        token:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Signed invitation capability derived after the durable invitation
+            receipt is stored. It is not retained in the project state or
+            operation receipt; do not log or disclose it outside the intended
+            recipient.
+        expiresAt: { type: string, format: date-time }
+    CreateInvitationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [invitationId]
+          properties:
+            invitationId: { type: string, format: uuid }
+    AcceptInvitationRequest:
+      type: object
+      additionalProperties: true
+      required: [projectId, invitationId, token]
+      properties:
+        projectId: { type: string, format: uuid }
+        invitationId: { type: string, format: uuid }
+        token: { type: string, minLength: 1, maxLength: 128 }
+    RevokeMemberRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedVersion, subject]
+          properties:
+            expectedVersion: { type: integer, minimum: 1 }
+            subject: { type: string, minLength: 1, maxLength: 200 }
+    CreateAnnotationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [annotation]
+          properties:
+            annotation: { $ref: '#/components/schemas/AnnotationInput' }
+    EditAnnotationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedVersion]
+          properties:
+            expectedVersion: { type: integer, minimum: 1 }
+            text:
+              type: string
+              maxLength: 2000
+              description: >-
+                Only the annotation author may change text. A comment's text
+                must remain nonblank after trimming.
+            resolved: { type: boolean }
+    DeleteAnnotationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProjectOperation'
+        - type: object
+          additionalProperties: true
+          required: [expectedVersion]
+          properties:
+            expectedVersion: { type: integer, minimum: 1 }

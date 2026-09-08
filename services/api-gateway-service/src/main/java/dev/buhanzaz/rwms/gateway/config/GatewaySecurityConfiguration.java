@@ -59,6 +59,8 @@ public class GatewaySecurityConfiguration {
                     "/api/warehouse/internal/**",
                     "/api/asset/internal/**",
                     "/api/maintenance/internal/**",
+                    "/api/cad/internal/**",
+                    "/api/cad/private/**",
                     "/api/media/internal/**",
                     "/api/media/private/**",
                     "/api/inventory/internal/**",

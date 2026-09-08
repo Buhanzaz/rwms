@@ -14,6 +14,7 @@ rwms:
       dossier-uri: ${DOSSIER_SERVICE_URL:http://127.0.0.1:8091}
       analytics-uri: ${ANALYTICS_SERVICE_URL:http://127.0.0.1:8093}
       assistant-uri: ${ASSISTANT_SERVICE_URL:http://127.0.0.1:8092}
+      cad-uri: ${CAD_SERVICE_URL:}
     security:
       issuer: ${AUTH_ISSUER:http://localhost:8080/auth}
       audience: ${AUTH_AUDIENCE:rwms-services}

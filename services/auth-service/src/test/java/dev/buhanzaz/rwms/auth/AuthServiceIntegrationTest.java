@@ -143,6 +143,23 @@ class AuthServiceIntegrationTest {
         assertThat(panel.getTokenSettings().getRefreshTokenTimeToLive())
                 .isEqualTo(java.time.Duration.ofDays(30));
         assertThat(panel.getTokenSettings().isReuseRefreshTokens()).isFalse();
+        var cad = clients.findByClientId("rwms-cad");
+        assertThat(cad.getClientSettings().isRequireProofKey()).isTrue();
+        assertThat(cad.getClientAuthenticationMethods()).extracting(Object::toString).containsExactly("none");
+        assertThat(cad.getScopes())
+                .containsExactlyInAnyOrder("openid", "profile", "offline_access", "cad.project");
+        assertThat(cad.getRedirectUris())
+                .containsExactly("http://localhost:8080/cabin-cad/auth/callback");
+        assertThat(cad.getPostLogoutRedirectUris())
+                .containsExactly("http://localhost:8080/cabin-cad/");
+        assertThat(cad.getAuthorizationGrantTypes())
+                .extracting(org.springframework.security.oauth2.core.AuthorizationGrantType::getValue)
+                .containsExactlyInAnyOrder("authorization_code", "refresh_token");
+        assertThat(cad.getTokenSettings().getAccessTokenTimeToLive())
+                .isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(cad.getTokenSettings().getRefreshTokenTimeToLive())
+                .isEqualTo(java.time.Duration.ofDays(30));
+        assertThat(cad.getTokenSettings().isReuseRefreshTokens()).isFalse();
         var worker = clients.findByClientId("rwms-worker-android");
         assertThat(worker.getClientSettings().isRequireProofKey()).isTrue();
         assertThat(worker.getScopes()).contains("openid", "profile", "offline_access", "worker.tasks");
@@ -347,6 +364,36 @@ class AuthServiceIntegrationTest {
                 .startsWith("http://localhost:8082/auth/driver/callback")
                 .contains("error=invalid_request")
                 .contains("state=plain-driver-pkce-state");
+    }
+
+    @Test
+    void cadAuthorizationRequiresPkceS256() throws Exception {
+        MockHttpSession session = (MockHttpSession) mvc.perform(formLogin().user("admin").password("admin"))
+                .andExpect(authenticated())
+                .andReturn()
+                .getRequest()
+                .getSession(false);
+
+        String location = mvc.perform(get("/oauth2/authorize")
+                        .session(session)
+                        .queryParam("response_type", "code")
+                        .queryParam("client_id", "rwms-cad")
+                        .queryParam("redirect_uri", "http://localhost:8080/cabin-cad/auth/callback")
+                        .queryParam("scope", "openid profile offline_access cad.project")
+                        .queryParam("state", "plain-cad-pkce-state")
+                        .queryParam(
+                                "code_challenge",
+                                "plain-code-verifier-000000000000000000000000000000")
+                        .queryParam("code_challenge_method", "plain"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn()
+                .getResponse()
+                .getHeader("Location");
+
+        assertThat(location)
+                .startsWith("http://localhost:8080/cabin-cad/auth/callback")
+                .contains("error=invalid_request")
+                .contains("state=plain-cad-pkce-state");
     }
 
     @Test
@@ -587,6 +634,25 @@ class AuthServiceIntegrationTest {
         String idToken = JsonPath.read(tokenBody, "$.id_token");
         assertThat(SignedJWT.parse(idToken).getJWTClaimsSet().getStringClaim("nonce"))
                 .isEqualTo("saved-request-nonce");
+    }
+
+    @Test
+    void cadPkceAcceptsItsDedicatedScopeAndRotatesRefreshTokens() throws Exception {
+        OAuthTokens initial = authorizeWorkerClient(
+                "admin",
+                "admin",
+                "rwms-cad",
+                "http://localhost:8080/cabin-cad/auth/callback",
+                "openid profile offline_access cad.project");
+
+        var accessToken = jwtDecoder.decode(initial.accessToken());
+        assertThat(accessToken.getClaimAsString("client_id")).isEqualTo("rwms-cad");
+        assertThat(accessToken.getClaimAsStringList("scope"))
+                .containsExactlyInAnyOrder("openid", "profile", "offline_access", "cad.project");
+
+        OAuthTokens rotated = refreshPublicClient("rwms-cad", initial.refreshToken(), status().isOk());
+        assertThat(rotated.refreshToken()).isNotEqualTo(initial.refreshToken());
+        refreshPublicClient("rwms-cad", initial.refreshToken(), status().isBadRequest());
     }
 
     @Test

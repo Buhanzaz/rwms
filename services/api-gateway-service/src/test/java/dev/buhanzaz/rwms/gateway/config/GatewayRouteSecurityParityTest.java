@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 
 import dev.buhanzaz.rwms.gateway.security.GatewaySecurityProblemWriter;
 import dev.buhanzaz.rwms.gateway.web.GatewayUpstreamProblemHandler;
+import dev.buhanzaz.rwms.gateway.web.GatewayUpstreamProblemWriter;
 import dev.buhanzaz.rwms.platform.security.JwtAudienceValidatorFactory;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import dev.buhanzaz.rwms.platform.web.RwmsProblemDetailFactory;
@@ -54,6 +55,7 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class GatewayRouteSecurityParityTest {
   private static final String AUTH_OWNER = "auth-service";
+  private static final String CAD_OWNER = "cad-service";
   private static final String MEDIA_OWNER = "media-service";
   private static final Set<String> HTTP_METHODS =
       Set.of("get", "post", "put", "delete", "patch", "options", "head", "trace");
@@ -67,6 +69,8 @@ class GatewayRouteSecurityParityTest {
           new RouteKey(HttpMethod.GET, "/api/warehouse/internal/v1/probe"),
           new RouteKey(HttpMethod.GET, "/api/asset/internal/v1/probe"),
           new RouteKey(HttpMethod.GET, "/api/maintenance/internal/v1/probe"),
+          new RouteKey(HttpMethod.GET, "/api/cad/internal/v1/probe"),
+          new RouteKey(HttpMethod.GET, "/api/cad/private/v1/probe"),
           new RouteKey(HttpMethod.GET, "/api/media/internal/v1/probe"),
           new RouteKey(HttpMethod.GET, "/api/media/private/v1/probe"),
           new RouteKey(HttpMethod.GET, "/api/inventory/internal/v1/probe"),
@@ -153,6 +157,29 @@ class GatewayRouteSecurityParityTest {
                 new RouteKey(
                     HttpMethod.POST,
                     "/api/inventory/private/v1/sessions/{}/outcome/recalculate")))
+        .isEmpty();
+  }
+
+  @Test
+  void cadV1HasOneSafeConfiguredRouteWithoutPrivateAliases() {
+    List<RouteCandidate> routes = domainRoutes();
+    RouteKey cadProject = new RouteKey(HttpMethod.GET, "/api/cad/v1/projects/{}");
+
+    assertThat(matchingRoutes(routes, cadProject))
+        .singleElement()
+        .extracting(RouteCandidate::name)
+        .isEqualTo("cadRoutes");
+    assertThat(
+            matchingRoutes(
+                routes, new RouteKey(HttpMethod.GET, "/api/cad/v1/projects/cad%2fproject")))
+        .isEmpty();
+    assertThat(
+            matchingRoutes(
+                routes, new RouteKey(HttpMethod.GET, "/api/cad/internal/v1/projects/{}")))
+        .isEmpty();
+    assertThat(
+            matchingRoutes(
+                routes, new RouteKey(HttpMethod.GET, "/api/cad/private/v1/projects/{}")))
         .isEmpty();
   }
 
@@ -309,7 +336,7 @@ class GatewayRouteSecurityParityTest {
   }
 
   @Test
-  void delegatedAuthAndServiceLocalMediaHealthAreExplicitlyOutsideDomainInventory()
+  void delegatedAuthAndServiceLocalHealthAreExplicitlyOutsideDomainInventory()
       throws Exception {
     ContractInventory inventory = contractInventory();
     GatewayRouteConfiguration configuration = new GatewayRouteConfiguration();
@@ -332,10 +359,10 @@ class GatewayRouteSecurityParityTest {
           .isEmpty();
     }
 
-    assertThat(inventory.mediaHealth()).isNotEmpty();
-    for (GatewayOperation operation : inventory.mediaHealth()) {
+    assertThat(inventory.serviceLocalHealth()).isNotEmpty();
+    for (GatewayOperation operation : inventory.serviceLocalHealth()) {
       assertThat(matchingRoutes(domainRoutes, operation.canonicalRoute()))
-          .as("service-local media health is not gateway-routable: %s", operation.canonicalRoute())
+          .as("service-local health is not gateway-routable: %s", operation.canonicalRoute())
           .isEmpty();
     }
   }
@@ -368,7 +395,7 @@ class GatewayRouteSecurityParityTest {
     List<GatewayOperation> publicDomain = new ArrayList<>();
     List<GatewayOperation> internal = new ArrayList<>();
     List<GatewayOperation> auth = new ArrayList<>();
-    List<GatewayOperation> mediaHealth = new ArrayList<>();
+    List<GatewayOperation> serviceLocalHealth = new ArrayList<>();
     List<GatewayOperation> plannerApplication = new ArrayList<>();
     try (var files = Files.list(openApiDirectory)) {
       for (Path contract :
@@ -402,27 +429,32 @@ class GatewayRouteSecurityParityTest {
                     HttpMethod.valueOf(methodName.toUpperCase(Locale.ROOT)), canonicalPath);
             SecurityRequirement requirement =
                 securityRequirement(security, securitySchemes, owner + " " + canonicalRoute);
-            if (owner.equals(AUTH_OWNER)) {
+            if (canonicalPath.startsWith("/api/internal/")) {
+              String gatewayAlias =
+                  owner.equals(AUTH_OWNER)
+                      ? "/auth" + canonicalPath
+                      : internalAlias(owner, canonicalPath);
+              internal.add(
+                  new GatewayOperation(
+                      owner,
+                      canonicalRoute,
+                      new RouteKey(canonicalRoute.method(), gatewayAlias),
+                      requirement));
+            } else if (owner.equals(AUTH_OWNER)) {
               auth.add(
                   new GatewayOperation(
                       owner,
                       canonicalRoute,
                       new RouteKey(canonicalRoute.method(), "/auth" + canonicalRoute.path()),
                       requirement));
-            } else if (owner.equals(MEDIA_OWNER) && canonicalPath.startsWith("/health/")) {
-              mediaHealth.add(
+            } else if ((owner.equals(MEDIA_OWNER) && canonicalPath.startsWith("/health/"))
+                || (owner.equals(CAD_OWNER) && canonicalPath.equals("/health"))) {
+              serviceLocalHealth.add(
                   new GatewayOperation(owner, canonicalRoute, canonicalRoute, requirement));
             } else if (owner.equals("logistics-planner-service")
                 && canonicalPath.startsWith("/logistics-panel/api/")) {
               plannerApplication.add(
                   new GatewayOperation(owner, canonicalRoute, canonicalRoute, requirement));
-            } else if (canonicalPath.startsWith("/api/internal/")) {
-              internal.add(
-                  new GatewayOperation(
-                      owner,
-                      canonicalRoute,
-                      new RouteKey(canonicalRoute.method(), internalAlias(owner, canonicalPath)),
-                      requirement));
             } else {
               assertThat(canonicalPath)
                   .as("supported public gateway namespace for %s", owner)
@@ -446,7 +478,7 @@ class GatewayRouteSecurityParityTest {
         publicDomain.stream().sorted(order).toList(),
         internal.stream().sorted(order).toList(),
         auth.stream().sorted(order).toList(),
-        mediaHealth.stream().sorted(order).toList(),
+        serviceLocalHealth.stream().sorted(order).toList(),
         plannerApplication.stream().sorted(order).toList());
   }
 
@@ -454,12 +486,14 @@ class GatewayRouteSecurityParityTest {
     GatewayRouteConfiguration configuration = new GatewayRouteConfiguration();
     GatewayProperties properties = routeProperties();
     GatewayUpstreamProblemHandler upstream = mock(GatewayUpstreamProblemHandler.class);
+    GatewayUpstreamProblemWriter upstreamWriter = mock(GatewayUpstreamProblemWriter.class);
     SseProxyHandler sse = mock(SseProxyHandler.class);
     HtmlImportCommitProxyHandler htmlImport = mock(HtmlImportCommitProxyHandler.class);
     MediaUploadContentProxyHandler mediaUpload = mock(MediaUploadContentProxyHandler.class);
     InventoryOutcomeRecalculateProxyHandler inventoryRecalculate =
         mock(InventoryOutcomeRecalculateProxyHandler.class);
     AssistantTurnsProxyHandler assistantTurns = mock(AssistantTurnsProxyHandler.class);
+    CadProxyHandler cadProxy = mock(CadProxyHandler.class);
     List<RouteCandidate> routes =
         List.of(
             candidate(
@@ -526,6 +560,10 @@ class GatewayRouteSecurityParityTest {
                 "assistant-service",
                 "assistantRoutes",
                 configuration.assistantRoutes(properties, upstream)),
+            candidate(
+                "cad-service",
+                "cadRoutes",
+                configuration.cadRoutes(properties, upstream, upstreamWriter, cadProxy)),
             candidate(
                 "dossier-service",
                 "dossierRoutes",
@@ -609,6 +647,7 @@ class GatewayRouteSecurityParityTest {
     properties.getRoutes().setDossierUri(URI.create("http://dossier.test"));
     properties.getRoutes().setAnalyticsUri(URI.create("http://analytics.test"));
     properties.getRoutes().setAssistantUri(URI.create("http://assistant.test"));
+    properties.getRoutes().setCadUri(URI.create("http://cad.test"));
     return properties;
   }
 
@@ -798,7 +837,7 @@ class GatewayRouteSecurityParityTest {
       List<GatewayOperation> publicDomain,
       List<GatewayOperation> internal,
       List<GatewayOperation> auth,
-      List<GatewayOperation> mediaHealth,
+      List<GatewayOperation> serviceLocalHealth,
       List<GatewayOperation> plannerApplication) {}
 
   /** One executable gateway router bean together with its owner and effective Spring order. */

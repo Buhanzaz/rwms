@@ -325,6 +325,9 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             validateManagerAndroidClientContract(
                     client, authenticationMethods, grantTypes);
         }
+        if (client.cadClient()) {
+            validateCadClientContract(client, authenticationMethods, grantTypes);
+        }
         if (client.rentalManagerWebClient()) {
             validateDedicatedUserClientContract(
                     client,
@@ -537,6 +540,34 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 || !sameOrigin(origin, postLogout)) {
             throw new IllegalStateException(
                     client.clientId() + " redirect and logout URI must use its declared origin");
+        }
+    }
+
+    /**
+     * Rejects CAD client drift before registration can broaden its browser or token boundary.
+     *
+     * <p>CAD project membership is deliberately not an OAuth role. The client therefore admits
+     * USER subjects and carries only {@code cad.project}; cad-service authorizes each project
+     * member after validating the token.</p>
+     *
+     * @param client configured CAD declaration
+     * @param authenticationMethods normalized client authentication methods
+     * @param grantTypes normalized authorization grants
+     */
+    private void validateCadClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateDedicatedUserClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.CAD_SCOPES,
+                "/cabin-cad/auth/callback");
+        URI postLogout = URI.create(client.postLogoutRedirectUris().iterator().next());
+        if (!"/cabin-cad/".equals(postLogout.getPath()) || postLogout.getQuery() != null) {
+            throw new IllegalStateException(
+                    "rwms-cad post-logout URI must use the exact /cabin-cad/ path");
         }
     }
 

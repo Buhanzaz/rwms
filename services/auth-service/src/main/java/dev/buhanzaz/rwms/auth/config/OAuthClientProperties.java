@@ -46,6 +46,9 @@ public record OAuthClientProperties(List<Client> clients) {
     static final String WORKER_ANDROID_CLIENT_ID = "rwms-worker-android";
     static final String DRIVER_ANDROID_CLIENT_ID = "rwms-driver-android";
     public static final String PANEL_CLIENT_ID = "rwms-panel";
+    public static final String CAD_CLIENT_ID = "rwms-cad";
+    static final Set<String> CAD_SCOPES =
+            Set.of("openid", "profile", "offline_access", "cad.project");
     public static final String MANAGER_ANDROID_CLIENT_ID = "rwms-manager-android";
     static final Set<String> MANAGER_ANDROID_SCOPES = Set.of(
             "openid",
@@ -250,6 +253,15 @@ public record OAuthClientProperties(List<Client> clients) {
          */
         boolean managerAndroidClient() {
             return MANAGER_ANDROID_CLIENT_ID.equals(clientId);
+        }
+
+        /**
+         * Identifies the CAD public client whose project membership remains owned by cad-service.
+         *
+         * @return whether this is the reserved CAD client
+         */
+        boolean cadClient() {
+            return CAD_CLIENT_ID.equals(clientId);
         }
 
         /**

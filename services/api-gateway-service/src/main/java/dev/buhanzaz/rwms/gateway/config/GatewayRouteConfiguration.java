@@ -10,6 +10,7 @@ import static org.springframework.web.servlet.function.RequestPredicates.method;
 import static org.springframework.web.servlet.function.RequestPredicates.path;
 
 import dev.buhanzaz.rwms.gateway.web.GatewayUpstreamProblemHandler;
+import dev.buhanzaz.rwms.gateway.web.GatewayUpstreamProblemWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.springframework.context.annotation.Bean;
@@ -428,6 +429,34 @@ public class GatewayRouteConfiguration {
     return route("assistant-service")
         .route(publicAssistantPath, http())
         .before(uri(properties.getRoutes().getAssistantUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  /**
+   * Relays the configured CAD public API without rewriting its externally documented path.
+   *
+   * <p>CAD request bodies use the dedicated streaming proxy and a forty-five-second downstream
+   * deadline. The optional downstream never falls back to an invented local target: when it is
+   * absent, authenticated callers receive an explicit {@code 503} Problem Details response.
+   */
+  @Bean
+  RouterFunction<ServerResponse> cadRoutes(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      GatewayUpstreamProblemWriter upstreamProblemWriter,
+      CadProxyHandler cadProxyHandler) {
+    RequestPredicate publicCadPath =
+        path("/api/cad/v1/**").and(request -> safePath(request.path()));
+    if (properties.getRoutes().getCadUri() == null) {
+      return route("cad-service-unconfigured")
+          .route(publicCadPath, upstreamProblemWriter::cadServiceUnconfigured)
+          .build();
+    }
+    return route("cad-service")
+        .route(publicCadPath, cadProxyHandler)
+        .before(uri(properties.getRoutes().getCadUri()))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)
         .build();

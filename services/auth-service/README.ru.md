@@ -90,16 +90,25 @@ query-free HTTPS `/auth/worker/callback` и получает `worker.tasks`;
 в памяти, поэтому ни один Android manifest не открывает custom-scheme или App
 Link receiver. Оба client ID выбирают login surface для worker credentials.
 
+`rwms-cad` — public client для `USER` с S256 PKCE, точными scopes `openid`,
+`profile`, `offline_access` и `cad.project`, callback
+`/cabin-cad/auth/callback` и post-logout path `/cabin-cad/` на `PANEL_ORIGIN`.
+Он допускает каждую существующую роль `USER` только для аутентификации.
+`cad-service` владеет membership проекта и permissions designer/client, поэтому
+client не выдаёт project role и не открывает anonymous access.
+
 ClientApp сначала получает CSRF cookie/header pair через `GET /api/auth/csrf`,
 а затем вызывает `POST /api/customer/v1/registrations`. Регистрация атомарно
 создаёт активного пользователя `CUSTOMER`, его private encoded credential,
 начальный authorization fact и outbox row. До password hashing auth-service
 атомарно расходует долговечные per-source и глобальный fixed-window budgets
 регистрации. Учётная запись не имеет warehouse
-grants, manager-mobile access или rental-manager entitlement. Она может
-использовать только `rwms-customer-android` с query-free HTTPS callback
-`/auth/customer/callback` и единственным бизнес-scope `customer.rental`; другие
-пользователи не могут применять этот client.
+grants, manager-mobile access или rental-manager entitlement. Для customer-rental
+flow она может использовать только `rwms-customer-android` с query-free HTTPS
+callback `/auth/customer/callback` и единственным бизнес-scope
+`customer.rental`. `rwms-cad` — отдельная membership-controlled CAD-точка входа
+для существующих USER accounts; другие пользователи не могут применять customer
+client.
 
 User access и ID tokens содержат канонические claims `sub`,
 `preferred_username`, `principal_type=USER`, `global_role` и camel-case
@@ -216,12 +225,15 @@ warehouse accesses используют optimistic concurrency. `409` означ
   Production ingress rate limiting остаётся дополнительным слоем защиты, а не
   единственным механизмом.
 - Пользователи `CUSTOMER` и `rwms-customer-android` взаимно изолированы от всех
-  остальных user clients при authorization-code и refresh-token exchange.
+  остальных user clients при authorization-code и refresh-token exchange, кроме
+  membership-controlled client `rwms-cad`.
 - Любой не-клиентский `USER` с `rentalAccess=true` получает interactive token через
   `rwms-rental-manager-web` или `rwms-rental-manager-android`. Оба client имеют
   только `rental.manage`. Роль `RENTAL_MANAGER` по-прежнему ограничена этими
-  client и не может выпустить panel, logistics или admin token. `rwms-admin-web`
-  доступен только `SYSTEM_ADMIN` и `WMS_ADMIN` и имеет только `admin.manage`.
+  client и не может выпустить panel, logistics или admin token. `rwms-cad`
+  остаётся доступен для аутентификации этой роли, но не выдаёт rental или CAD
+  project authority. `rwms-admin-web` доступен только `SYSTEM_ADMIN` и
+  `WMS_ADMIN` и имеет только `admin.manage`.
 
 Так durable access invariants находятся там, где владелец credentials и токенов
 может обеспечить их в транзакции, а не зависят от UI-проверки или дублирования
@@ -257,11 +269,12 @@ identity. Повторный запуск с той же revision и секре�
 
 Managed interactive inventory раздельно хранит существующий client руководителя
 склада, отдельные web/Android clients менеджера аренды, admin web client,
-CUSTOMER-only ClientApp client и два WORKER-only WorkerApp/DriverApp clients.
-Dedicated clients требуют S256 PKCE, access token на пять минут и rotating
-refresh token на 30 дней. Изменение callback, scope или principal type требует
-собственной revision и согласованного client release; refresh token одного
-client нельзя обменять через client ID другого.
+membership-controlled client `rwms-cad`, CUSTOMER-only ClientApp client и два
+WORKER-only WorkerApp/DriverApp clients. Dedicated clients требуют S256 PKCE,
+access token на пять минут и rotating refresh token на 30 дней. Изменение
+callback, scope или principal type требует собственной revision и согласованного
+client release; refresh token одного client нельзя обменять через client ID
+другого.
 
 Managed machine client `inventory-service` запрашивает ровно один downstream
 scope на токен. Revision 5 добавила `media.inventory` для передачи фотографий
@@ -380,6 +393,10 @@ persistent signing key, client secrets и public HTTPS issuer/origins/redirects
 - `AUTH_DB_URL`, `AUTH_DB_USERNAME` и `AUTH_DB_PASSWORD` с non-loopback
   PostgreSQL endpoint и отдельными deployment credentials;
 - public HTTPS issuer/base, allowed origins и registered redirect URIs;
+- `PANEL_ORIGIN` и, когда он отличается от nested default, `CAD_REDIRECT_URI`
+  как same-origin HTTPS CAD значения, где последний оканчивается query-free
+  путём `/cabin-cad/auth/callback`; CAD post-logout redirect равен
+  `${PANEL_ORIGIN}/cabin-cad/`;
 - `CUSTOMER_ORIGIN` и `CUSTOMER_REDIRECT_URI` как same-origin HTTPS значения,
   причём последнее оканчивается query-free путём `/auth/customer/callback`;
 - `WORKER_ORIGIN`, `WORKER_REDIRECT_URI`, `WORKER_POST_LOGOUT_REDIRECT_URI`,

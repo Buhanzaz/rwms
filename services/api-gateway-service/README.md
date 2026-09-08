@@ -105,6 +105,7 @@ replacement for the owning service's OpenAPI contract.
 | `/api/warehouse/**` | configured warehouse-service target, unchanged | Internal paths are denied; the current route is reserved for the W1 warehouse API. |
 | `/api/asset/**` | asset-service, unchanged | Internal paths are denied. HTML-import commit uses a dedicated handler. |
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
+| `/api/cad/v1/**` | optional `CAD_SERVICE_URL` target, unchanged | Bearer authentication is required; `/api/cad/internal/**` and `/api/cad/private/**` are denied. When no CAD target is configured, authenticated callers receive an explicit `503` Problem Details response. |
 | `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Source/variant upload content and SSE use dedicated handlers. |
 | `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. Completed-outcome recalculation uses a dedicated 60-second handler; every other inventory request keeps the ordinary timeout. |
 | `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied. Anonymous access permits exact client-presentation, cabin-photo-presentation and contractor-route capability operations, plus the four guest-catalog GET patterns below. Customer profile, cart and booking routes remain authenticated; logistics enforces their exact CUSTOMER/client/scope combination. |
@@ -148,6 +149,10 @@ routes:
   60-second downstream read deadline. The exact command is excluded from the
   generic inventory route, while its path, authorization and idempotency
   headers are forwarded unchanged and cookies are removed.
+- `/api/cad/v1/**` uses a dedicated streaming proxy with a 45-second downstream
+  read deadline. It preserves the public path, Bearer and idempotency headers,
+  streams supported request bodies without application aggregation, and removes
+  cookies. Its configured target is optional; no local fallback is invented.
 - `POST /api/assistant/v1/conversations/*/turns` uses the assistant streaming
   proxy so a valid streamed answer does not inherit the ordinary read deadline.
 - Exact contractor-route capability paths allow anonymous route reads, entry
@@ -176,7 +181,8 @@ implements the following policy:
 - JWT timestamp, issuer, and audience are validated locally. The JWKS is read
   from the private auth-service target, never through the browser-visible
   gateway route.
-- `/api/**` is authenticated by default. Private routes are denied explicitly;
+- `/api/**` is authenticated by default. Private routes, including CAD
+  `/api/cad/internal/**` and `/api/cad/private/**`, are denied explicitly;
   public OIDC, health, Android App Links, and the documented signed logistics
   capability operations are narrow exceptions.
 - The WorkerApp task-board namespace requires exactly `SCOPE_worker.tasks` and
@@ -186,9 +192,10 @@ implements the following policy:
 - CORS uses an explicit configured origin allow-list, an explicit method/header
   set, and credentials where needed. Wildcard origins are rejected by startup
   safety validation.
-- Production validation applies one policy to every downstream: each target is
-  a path-free HTTP(S) origin, cannot reuse the public gateway host, and cannot
-  use localhost or a loopback address. Public values must use HTTPS.
+- Production validation applies one policy to every configured downstream:
+  each target is a path-free HTTP(S) origin, cannot reuse the public gateway
+  host, and cannot use localhost or a loopback address. Public values must use
+  HTTPS.
 
 This division is important: the edge authenticates and protects the public
 surface, while the owner service authorizes the business operation. Copying all
@@ -210,6 +217,10 @@ For ordinary proxy calls, connectivity failures are mapped to the shared
 Problem Details shape: unavailable targets become `502 Bad Gateway` and
 timeouts become `504 Gateway Timeout`. The response intentionally omits an
 upstream URL, exception message, and request body.
+
+The optional CAD route reports `503 Service Unavailable` with a stable RWMS
+Problem Details code when `CAD_SERVICE_URL` is absent. It does not disclose a
+default backend or configuration value.
 
 The gateway exposes:
 
@@ -261,8 +272,13 @@ Development defaults route auth to `9000`, task-board to `8081`, reserve the
 warehouse target at `8083`, derive JWKS from the internal auth target on
 `9000`, and expose the gateway on `8088`. Start the panel/Vite server last on
 `8080`; it proxies `/auth` and `/api` to `8088` while keeping `/auth/callback`
-in the SPA. Production has no localhost or secret-bearing defaults and must
-provide every target, public issuer/base URI, and allowed panel origin.
+in the SPA. CAD is deliberately not a development default: set
+`CAD_SERVICE_URL=http://127.0.0.1:8097` explicitly when the local CAD server is
+running. Its path is preserved and its proxy streams contract-supported bodies;
+production ingress must also accept the CAD contract's maximum body size before
+the request can reach the gateway. Production has no localhost or
+secret-bearing defaults and must provide every configured target, public
+issuer/base URI, and allowed panel origin.
 
 ## Executable route and security parity
 

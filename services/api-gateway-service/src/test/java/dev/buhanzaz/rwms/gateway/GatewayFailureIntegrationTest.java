@@ -120,6 +120,21 @@ class GatewayFailureIntegrationTest {
   }
 
   @Test
+  void returnsExplicitServiceUnavailableWhenCadTargetIsNotConfigured() throws Exception {
+    HttpResponse<String> response = request("/api/cad/v1/projects");
+
+    org.assertj.core.api.Assertions.assertThat(response.statusCode())
+        .withFailMessage("Expected 503, got %s with %s", response.statusCode(), response.body())
+        .isEqualTo(503);
+    org.assertj.core.api.Assertions.assertThat(response.headers().firstValue("X-Correlation-Id"))
+        .isPresent();
+    org.assertj.core.api.Assertions.assertThat(response.body())
+        .contains("GATEWAY_CAD_SERVICE_UNCONFIGURED")
+        .contains("The CAD service is not configured")
+        .doesNotContain("CAD_SERVICE_URL", "127.0.0.1:9");
+  }
+
+  @Test
   void workerEventStreamIsNotCutOffByOrdinaryReadDeadline() throws Exception {
     HttpResponse<String> response = request("/api/task-board/worker/v1/events");
 

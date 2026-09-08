@@ -59,7 +59,20 @@ class AuthServicePostgresIntegrationTest {
                         Integer.class))
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(12);
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(13);
+        assertThat(clients.findByClientId("rwms-cad"))
+                .isNotNull()
+                .satisfies(cad -> {
+                    assertThat(cad.getScopes())
+                            .containsExactlyInAnyOrder("openid", "profile", "offline_access", "cad.project")
+                            .doesNotContain("rwms.read", "rwms.write", "rental.manage", "admin.manage");
+                    assertThat(cad.getRedirectUris())
+                            .containsExactly("http://localhost:8080/cabin-cad/auth/callback");
+                    assertThat(cad.getPostLogoutRedirectUris())
+                            .containsExactly("http://localhost:8080/cabin-cad/");
+                    assertThat(cad.getClientSettings().isRequireProofKey()).isTrue();
+                    assertThat(cad.getTokenSettings().isReuseRefreshTokens()).isFalse();
+                });
         assertThat(clients.findByClientId("rwms-rental-manager-web"))
                 .isNotNull()
                 .satisfies(manager -> assertThat(manager.getScopes())

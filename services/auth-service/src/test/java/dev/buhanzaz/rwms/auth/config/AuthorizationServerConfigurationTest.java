@@ -66,6 +66,15 @@ class AuthorizationServerConfigurationTest {
     }
 
     @Test
+    void cadClientAllowsEveryExistingUserRoleWithoutRentalEntitlement() {
+        for (UserGlobalRole role : UserGlobalRole.values()) {
+            assertThatCode(() -> configuration.validateInteractiveClientAccess(
+                            OAuthClientProperties.CAD_CLIENT_ID, role, false))
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Test
     void rentalEntitlementAndAdministrationClientsEnforceRoleBoundaries() {
         for (UserGlobalRole role : List.of(
                 UserGlobalRole.SYSTEM_ADMIN,

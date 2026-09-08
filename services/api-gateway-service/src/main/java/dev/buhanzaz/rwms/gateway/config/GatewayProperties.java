@@ -54,6 +54,12 @@ public class GatewayProperties {
     @NotNull private URI dossierUri;
     @NotNull private URI analyticsUri;
     @NotNull private URI assistantUri;
+
+    /**
+     * Optional private CAD service origin. When absent, the public CAD surface reports a stable
+     * service-unavailable Problem Details response instead of selecting a fallback target.
+     */
+    private URI cadUri;
   }
 
   /** JWT issuer and audience accepted at the public edge. */

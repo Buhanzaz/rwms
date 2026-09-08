@@ -90,15 +90,24 @@ query-free HTTPS `/auth/worker/callback` and receives `worker.tasks`;
 Location in memory, so neither Android manifest exposes a custom-scheme or App
 Link receiver. Both client IDs select the worker credential login surface.
 
+`rwms-cad` is a public `USER` client with S256 PKCE, the exact scopes `openid`,
+`profile`, `offline_access`, and `cad.project`, the callback
+`/cabin-cad/auth/callback`, and the post-logout path `/cabin-cad/` on
+`PANEL_ORIGIN`. It admits every existing `USER` role only to authenticate.
+`cad-service` owns project membership and its designer/client permissions, so
+the client grants neither a project role nor anonymous access.
+
 ClientApp first obtains a CSRF cookie/header pair from `GET /api/auth/csrf` and
 submits `POST /api/customer/v1/registrations`. Registration creates one active
 `CUSTOMER` user, its private encoded credential, initial authorization fact,
 and outbox row atomically. Before password hashing, auth-service consumes both
 a durable per-source and a durable global fixed-window registration budget.
 The account has no warehouse grants, manager-mobile
-access, or rental-manager entitlement. It can use only `rwms-customer-android`,
-whose query-free HTTPS callback is `/auth/customer/callback` and whose only
-business scope is `customer.rental`; other users cannot use that client.
+access, or rental-manager entitlement. It can use only `rwms-customer-android`
+for the customer-rental flow, whose query-free HTTPS callback is
+`/auth/customer/callback` and whose only business scope is `customer.rental`.
+`rwms-cad` is the separate membership-controlled CAD entry point available to
+existing USER accounts; other users cannot use the customer client.
 
 User access and ID tokens include the canonical claims `sub`,
 `preferred_username`, `principal_type=USER`, `global_role`, and camel-case
@@ -216,11 +225,14 @@ update preserves its current persisted value.
   on `429`, and records rejection/unavailable metrics. Production ingress rate
   limiting remains defence in depth rather than the only protection.
 - `CUSTOMER` users and `rwms-customer-android` are mutually exclusive with all
-  other user clients during authorization-code and refresh-token exchange.
+  other user clients during authorization-code and refresh-token exchange,
+  except for the membership-controlled `rwms-cad` client.
 - Any non-customer `USER` with `rentalAccess=true` can mint an interactive token
   through `rwms-rental-manager-web` or `rwms-rental-manager-android`. Both clients
   have only `rental.manage`. The `RENTAL_MANAGER` role remains confined to those
-  clients and cannot mint panel, logistics, or administration tokens.
+  clients and cannot mint panel, logistics, or administration tokens. `rwms-cad`
+  remains available to authenticate that role but does not grant rental or CAD
+  project authority.
   `rwms-admin-web` is restricted to `SYSTEM_ADMIN` and `WMS_ADMIN` and has only
   `admin.manage`.
 
@@ -259,12 +271,12 @@ until their own `exp`; the configured default lifetime is five minutes.
 
 The managed interactive inventory keeps the existing operations-manager client,
 the dedicated rental-manager web and Android clients, the administration web
-client, the CUSTOMER-only ClientApp client, and the two WORKER-only
-WorkerApp/DriverApp clients separate. Dedicated clients require S256 PKCE, a
-five-minute access token and a rotating 30-day refresh token. Changing a
-callback, scope, or principal type requires its own revision and coordinated
-client release; one client's refresh token cannot be exchanged through another
-client ID.
+client, the membership-controlled `rwms-cad` client, the CUSTOMER-only ClientApp
+client, and the two WORKER-only WorkerApp/DriverApp clients separate. Dedicated
+clients require S256 PKCE, a five-minute access token and a rotating 30-day
+refresh token. Changing a callback, scope, or principal type requires its own
+revision and coordinated client release; one client's refresh token cannot be
+exchanged through another client ID.
 
 The managed `inventory-service` machine client requests exactly one downstream
 scope per token. Revision 5 added `media.inventory` for the completed-inventory
@@ -386,6 +398,10 @@ Provide at least:
 - `AUTH_DB_URL`, `AUTH_DB_USERNAME`, and `AUTH_DB_PASSWORD` with a non-loopback
   PostgreSQL endpoint and deployment-specific credentials;
 - a public HTTPS issuer/base, allowed origins, and registered redirect URIs;
+- `PANEL_ORIGIN` and, when it differs from the nested default,
+  `CAD_REDIRECT_URI` as same-origin HTTPS CAD values ending in the query-free
+  `/cabin-cad/auth/callback` path; the CAD post-logout redirect is
+  `${PANEL_ORIGIN}/cabin-cad/`;
 - `CUSTOMER_ORIGIN` and `CUSTOMER_REDIRECT_URI` as same-origin HTTPS values,
   with the latter ending in the query-free `/auth/customer/callback` path;
 - `WORKER_ORIGIN`, `WORKER_REDIRECT_URI`, `WORKER_POST_LOGOUT_REDIRECT_URI`,
