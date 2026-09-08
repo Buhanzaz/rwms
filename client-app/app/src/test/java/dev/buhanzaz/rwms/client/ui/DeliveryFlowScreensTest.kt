@@ -369,14 +369,71 @@ class DeliveryFlowScreensTest {
     }
 
     @Test
-    fun `slot calculation overlay shows blocking progress above the exact status`() {
+    fun `slot calculation uses an inline status and prevents editing the pending address`() {
         composeRule.setContent {
-            CustomerTheme { DeliverySlotCalculationOverlay() }
+            CustomerTheme {
+                DeliveryAddressPanel(
+                    address = "Невский проспект, 1",
+                    geocoding = false,
+                    loading = true,
+                    enabled = false,
+                    status = "Идёт расчёт свободных слотов",
+                    suggestions = emptyList(),
+                    continueEnabled = true,
+                    onAddress = {},
+                    onSearch = {},
+                    onSuggestion = {},
+                    onVoice = {},
+                    onContinue = {},
+                )
+            }
         }
-
-        composeRule.onNodeWithTag("delivery-slot-calculation-overlay").assertExists()
-        composeRule.onNodeWithTag("delivery-slot-calculation-progress").assertExists()
+        composeRule.onNodeWithTag("delivery-address-loading").assertExists()
         composeRule.onNodeWithText("Идёт расчёт свободных слотов").assertExists()
+        composeRule.onNodeWithTag("delivery-address-field").assertIsNotEnabled()
+        composeRule.onNodeWithTag("delivery-map-continue").assertIsNotEnabled()
+        composeRule.onAllNodes(androidx.compose.ui.test.isDialog()).assertCountEquals(0)
+    }
+
+    @Test
+    fun `date lookup replaces loading with its empty result`() {
+        var busy by mutableStateOf(true)
+        composeRule.setContent {
+            CustomerTheme {
+                DeliveryDatesScreen(
+                    state = CustomerWorkflowState(busy = busy, slotSearchCompleted = true),
+                    onBack = {},
+                    onDate = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("delivery-dates-loading").assertExists()
+        composeRule.onNodeWithText("Для этого адреса пока нет свободных дат").assertDoesNotExist()
+        composeRule.runOnIdle { busy = false }
+        composeRule.onNodeWithTag("delivery-dates-loading").assertDoesNotExist()
+        composeRule.onNodeWithText("Для этого адреса пока нет свободных дат").assertExists()
+    }
+
+    @Test
+    fun `time lookup replaces loading with its empty result`() {
+        var busy by mutableStateOf(true)
+        composeRule.setContent {
+            CustomerTheme {
+                DeliverySlotsScreen(
+                    state = CustomerWorkflowState(busy = busy),
+                    date = "2026-09-08",
+                    onBack = {},
+                    onSelectSlot = {},
+                    onHoldSlot = {},
+                    onHeld = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("delivery-slots-loading").assertExists()
+        composeRule.onNodeWithText("На эту дату свободных слотов больше нет").assertDoesNotExist()
+        composeRule.runOnIdle { busy = false }
+        composeRule.onNodeWithTag("delivery-slots-loading").assertDoesNotExist()
+        composeRule.onNodeWithText("На эту дату свободных слотов больше нет").assertExists()
     }
 
     @Test

@@ -127,9 +127,23 @@ fun ProfileFormScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
                 .padding(horizontal = 16.dp).testTag("profile-screen"),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (busy) {
+                item { CustomerLoadingLine(tag = "profile-loading") }
+            } else {
+                errorMessage?.let { message ->
+                    item {
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.testTag("profile-error"),
+                        )
+                    }
+                }
+            }
             item {
                 ProfileAvatar(
                     profile = existing,
@@ -209,16 +223,7 @@ fun ProfileFormScreen(
                     testTag = "profile-additional-info",
                 )
             }
-            errorMessage?.let { message ->
-                item {
-                    Text(
-                        text = message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.testTag("profile-error"),
-                    )
-                }
-            }
+
             item {
                 Spacer(Modifier.height(4.dp))
                 Button(
@@ -349,9 +354,12 @@ fun WarehouseScreen(
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("warehouse-screen"),
-            contentPadding = PaddingValues(top = 20.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (busy) {
+                item { CustomerLoadingLine(tag = "warehouse-loading") }
+            }
             errorMessage?.let { error ->
                 item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("guest-catalog-error")) }
             }
@@ -396,10 +404,10 @@ fun WarehouseScreen(
                     }
                 }
             }
-            if (warehouses.isEmpty() && errorMessage == null) {
+            if (warehouses.isEmpty() && !busy && errorMessage == null) {
                 item {
                     Text(
-                        if (busy) "Загружаем города…" else "Нет доступных городов",
+                        "Нет доступных городов",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

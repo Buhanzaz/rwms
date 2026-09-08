@@ -39,8 +39,10 @@ class CustomerInitialPaymentReceiptTest {
             }
         }
         compose.onNodeWithText("СЧЁТ НА ОПЛАТУ · НЕ ФИСКАЛЬНЫЙ ЧЕК").assertIsDisplayed()
-        compose.onNodeWithText("3 шт. × 350 ₽/мес. × 2 мес.").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("3 шт. × 350 ₽/мес. × 2 мес.").assertDoesNotExist()
         compose.onNodeWithText("14 100 ₽").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("initial-payment-receipt-details-toggle").performScrollTo().performClick()
+        compose.onNodeWithText("3 шт. × 350 ₽/мес. × 2 мес.").performScrollTo().assertIsDisplayed()
         assertThat(confirms).isEqualTo(0)
         compose.onNodeWithTag("confirm-initial-payment").performScrollTo().assertIsEnabled().performClick()
         assertThat(confirms).isEqualTo(1)
@@ -91,6 +93,22 @@ class CustomerInitialPaymentReceiptTest {
         assertThat(observed.remainingMillis(1)).isEqualTo(300_000)
         assertThat(receiptRubles("1106804644422573096840")).isEqualTo("1 106 804 644 422 573 096 840 ₽")
         assertThat(CustomerInquiryRecoveryPolicy.requiresFreshInquiry("CANCELLED")).isTrue()
+    }
+
+    @Test
+    fun `details collapse keeps total and payment action immediately available`() {
+        compose.setContent {
+            ScrollableReceipt {
+                CustomerInitialPaymentReceipt(CustomerObservedPayment(initialPaymentFixture(), SystemClock.elapsedRealtime()), false) {}
+            }
+        }
+
+        compose.onNodeWithText("14 100 ₽").assertIsDisplayed()
+        compose.onNodeWithTag("confirm-initial-payment").assertIsEnabled()
+        compose.onNodeWithTag("initial-payment-receipt-details-toggle").performScrollTo().performClick()
+        compose.onNodeWithText("Скрыть детали счёта").assertIsDisplayed()
+        compose.onNodeWithText("14 100 ₽").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("confirm-initial-payment").performScrollTo().assertIsEnabled()
     }
 
     @Composable

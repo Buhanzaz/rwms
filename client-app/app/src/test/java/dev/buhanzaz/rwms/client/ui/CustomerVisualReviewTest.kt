@@ -176,6 +176,24 @@ class CustomerVisualReviewTest {
 
     @Test
     @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `auth login follows each intermediate keyboard inset`() {
+        assertAuthImeGeometry(CustomerAuthenticationPage.LOGIN, "login-ime")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `auth registration follows each intermediate keyboard inset`() {
+        assertAuthImeGeometry(CustomerAuthenticationPage.REGISTRATION, "registration-ime-sequence")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `auth recovery follows each intermediate keyboard inset`() {
+        assertAuthImeGeometry(CustomerAuthenticationPage.PASSWORD_RECOVERY, "recovery-ime")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders profile in light appearance`() {
         setProfile(CustomerAppearanceMode.LIGHT)
         composeRule.onNodeWithTag("profile-screen").assertIsDisplayed()
@@ -188,6 +206,20 @@ class CustomerVisualReviewTest {
         setProfile(CustomerAppearanceMode.DARK)
         composeRule.onNodeWithTag("profile-screen").assertIsDisplayed()
         captureRoot("profile-dark")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders delivery address panel in light appearance`() {
+        setAddressPanel(CustomerAppearanceMode.LIGHT)
+        captureRoot("delivery-address-panel-light")
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `renders delivery address panel in dark appearance`() {
+        setAddressPanel(CustomerAppearanceMode.DARK)
+        captureRoot("delivery-address-panel-dark")
     }
 
     @Test
@@ -268,6 +300,9 @@ class CustomerVisualReviewTest {
         composeRule.onNodeWithTag("delivery-responsibility-dialog").assertIsDisplayed()
         val dialogWindow = requireNotNull(requireNotNull(ShadowDialog.getLatestDialog()).window)
         captureView("delivery-responsibility-dialog-light", dialogWindow.decorView)
+        composeRule.onNodeWithTag("failed-trip-charge-acknowledgement").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm-delivery-responsibility").assertIsDisplayed()
+        captureView("delivery-responsibility-dialog-light-scrolled", dialogWindow.decorView)
     }
 
     private fun setAuth(appearanceMode: CustomerAppearanceMode) {
@@ -297,6 +332,89 @@ class CustomerVisualReviewTest {
                         onRegister = onRegister,
                         initialPage = CustomerAuthenticationPage.REGISTRATION,
                     )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun setAuthPage(page: CustomerAuthenticationPage) {
+        composeRule.setContent {
+            CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
+                CustomerAuthenticationScreen(
+                    message = null,
+                    submitting = false,
+                    onLogin = { _, _, _ -> },
+                    onRegister = { _, _, _, _, _, _, _ -> },
+                    initialPage = page,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun assertAuthImeGeometry(page: CustomerAuthenticationPage, capturePrefix: String) {
+        setAuthPage(page)
+        val insets = listOf(0, 80, 160, 240, 338, 240, 160, 80, 0)
+        val initialLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        val initialViewport = composeRule.onNodeWithTag("customer-auth-form-viewport").fetchSemanticsNode().boundsInRoot
+        val previousAutoAdvance = composeRule.mainClock.autoAdvance
+        composeRule.mainClock.autoAdvance = false
+        try {
+            var previousInset = insets.first()
+            var previousLogoBottom = initialLogo.bottom
+            var previousViewportBottom = initialViewport.bottom
+            insets.forEachIndexed { index, bottom ->
+                dispatchKeyboardInset(bottom)
+                composeRule.mainClock.advanceTimeByFrame()
+                composeRule.waitForIdle()
+                val logo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+                val viewport = composeRule.onNodeWithTag("customer-auth-form-viewport").fetchSemanticsNode().boundsInRoot
+                assertThat(viewport.top - logo.bottom).isWithin(1f).of(8f)
+                assertThat(viewport.top).isAtLeast(logo.bottom)
+                if (bottom > previousInset) {
+                    assertThat(logo.bottom).isLessThan(previousLogoBottom)
+                    assertThat(viewport.bottom).isLessThan(previousViewportBottom)
+                } else if (bottom < previousInset) {
+                    assertThat(logo.bottom).isGreaterThan(previousLogoBottom)
+                    assertThat(viewport.bottom).isGreaterThan(previousViewportBottom)
+                }
+                if (bottom > 0) assertThat(viewport.bottom).isLessThan(initialViewport.bottom)
+                if (index == insets.lastIndex) {
+                    assertThat(viewport.bottom).isWithin(1f).of(initialViewport.bottom)
+                    assertThat(logo.top).isWithin(1f).of(initialLogo.top)
+                    assertThat(logo.bottom).isWithin(1f).of(initialLogo.bottom)
+                }
+                if (bottom > 0) captureRoot("$capturePrefix-${index}-${bottom}")
+                previousInset = bottom
+                previousLogoBottom = logo.bottom
+                previousViewportBottom = viewport.bottom
+            }
+        } finally {
+            composeRule.mainClock.autoAdvance = previousAutoAdvance
+        }
+    }
+
+    private fun setAddressPanel(appearanceMode: CustomerAppearanceMode) {
+        composeRule.setContent {
+            CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
+                CustomerTheme(appearanceMode) {
+                    CustomerStoreLaunchGate {
+                        DeliveryAddressPanel(
+                            address = "Санкт-Петербург, Белградская улица, 54к1",
+                            geocoding = false,
+                            status = null,
+                            suggestions = emptyList(),
+                            continueEnabled = false,
+                            onAddress = {},
+                            onSearch = {},
+                            onSuggestion = {},
+                            onVoice = {},
+                            onContinue = {},
+                            enabled = true,
+                            loading = false,
+                        )
+                    }
                 }
             }
         }

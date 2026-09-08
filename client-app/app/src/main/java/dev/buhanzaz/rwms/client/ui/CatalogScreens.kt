@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -66,13 +68,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -110,6 +117,7 @@ fun CustomerTopBar(
     selectedWarehouse: CustomerWarehouse? = null,
     warehouses: List<CustomerWarehouse> = emptyList(),
     onWarehouseSelected: ((CustomerWarehouse) -> Unit)? = null,
+    warehouseSelectionEnabled: Boolean = true,
     avatarUrl: String? = null,
     avatarInitials: String? = null,
     onBack: (() -> Unit)? = null,
@@ -152,7 +160,7 @@ fun CustomerTopBar(
                         } else {
                             TextButton(
                                 onClick = { warehouseMenuExpanded = !warehouseMenuExpanded },
-                                enabled = alternativeWarehouses.isNotEmpty(),
+                                enabled = warehouseSelectionEnabled && alternativeWarehouses.isNotEmpty(),
                                 contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
                                 modifier = Modifier.testTag("warehouse-selector"),
                             ) {
@@ -233,6 +241,7 @@ fun CustomerTopBar(
                                     warehouseMenuExpanded = false
                                     onWarehouseSelected?.invoke(warehouse)
                                 },
+                                enabled = warehouseSelectionEnabled,
                                 modifier = Modifier.fillMaxWidth().testTag("warehouse-option-${warehouse.id}"),
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -288,6 +297,7 @@ fun CabinCatalogScreen(
             quantities = state.equipmentDraft.filterKeys { it.cabinUnitId == cabinId },
             onQuantity = { item, quantity -> onEquipment(cabinId, item, quantity) },
             onDismiss = { furnitureCabin = null },
+            busy = state.busy,
         )
     }
 }
@@ -358,6 +368,7 @@ private fun CustomerCatalogContent(
                 selectedWarehouse = state.selectedWarehouse,
                 warehouses = state.warehouses,
                 onWarehouseSelected = onWarehouse,
+                warehouseSelectionEnabled = !state.busy,
                 avatarUrl = avatarUrl,
                 avatarInitials = avatarInitials,
                 onBack = onBack,
@@ -391,19 +402,37 @@ private fun CustomerCatalogContent(
                     )
                 }
             }
-            if (requiresLogin && state.busy) {
-                item { LinearProgressIndicator(Modifier.fillMaxWidth().testTag("guest-catalog-loading")) }
+            if (state.busy) {
+                item {
+                    CustomerLoadingLine(
+                        modifier = Modifier.fillMaxWidth(),
+                        tag = if (requiresLogin) "guest-catalog-loading" else "catalog-loading",
+                    )
+                }
             }
             state.error?.let { error ->
                 item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp).testTag("guest-catalog-error")) }
             }
             if (state.cabins.isEmpty() && !state.busy && state.error == null) {
                 item {
-                    Text(
-                        "Свободных бытовок по выбранным условиям нет",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(32.dp),
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth().testTag("catalog-empty"),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            "Свободных бытовок по выбранным условиям нет",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            textAlign = TextAlign.Center,
+                        )
+                        if (state.filters.activeCount > 0) {
+                            TextButton(
+                                onClick = { onFilters(CabinFilters()) },
+                                modifier = Modifier.testTag("catalog-empty-clear-filters"),
+                            ) { Text("Сбросить фильтры") }
+                        }
+                    }
                 }
             }
             items(state.cabins, key = CustomerCabin::unitId) { cabin ->
@@ -414,6 +443,7 @@ private fun CustomerCatalogContent(
                     onToggle = { onToggleCabin(cabin.unitId) },
                     onFurniture = onFurniture?.let { action -> { action(cabin.unitId) } },
                     requiresLogin = requiresLogin,
+                    busy = state.busy,
                     onPhoto = { page -> onPhoto(cabin.unitId, page) },
                 )
             }
@@ -469,6 +499,7 @@ private fun CabinCard(
     onFurniture: (() -> Unit)?,
     onPhoto: (Int) -> Unit,
     requiresLogin: Boolean = false,
+    busy: Boolean,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("cabin-${cabin.unitId}"),
@@ -492,6 +523,7 @@ private fun CabinCard(
                         onToggle = onToggle,
                         onFurniture = onFurniture,
                         requiresLogin = requiresLogin,
+                        busy = busy,
                         wide = true,
                         modifier = Modifier.weight(1f),
                     )
@@ -511,6 +543,7 @@ private fun CabinCard(
                         onToggle = onToggle,
                         onFurniture = onFurniture,
                         requiresLogin = requiresLogin,
+                        busy = busy,
                         wide = false,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -527,6 +560,7 @@ private fun CabinCardBody(
     onToggle: () -> Unit,
     onFurniture: (() -> Unit)?,
     requiresLogin: Boolean,
+    busy: Boolean,
     wide: Boolean,
     modifier: Modifier,
 ) {
@@ -550,6 +584,7 @@ private fun CabinCardBody(
                 onFurniture = onFurniture,
                 cabinUnitId = cabin.unitId,
                 requiresLogin = requiresLogin,
+                busy = busy,
                 modifier = Modifier.width(205.dp),
             )
         }
@@ -562,6 +597,7 @@ private fun CabinCardBody(
                 onFurniture = onFurniture,
                 cabinUnitId = cabin.unitId,
                 requiresLogin = requiresLogin,
+                busy = busy,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -576,6 +612,7 @@ private fun CabinCardAction(
     onFurniture: (() -> Unit)?,
     cabinUnitId: String,
     requiresLogin: Boolean,
+    busy: Boolean,
     modifier: Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -586,18 +623,22 @@ private fun CabinCardAction(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 onFurniture?.let { action ->
-                    TextButton(onClick = action, modifier = Modifier.testTag("cabin-additional-$cabinUnitId")) {
+                    TextButton(
+                        onClick = action,
+                        enabled = !busy,
+                        modifier = Modifier.testTag("cabin-additional-$cabinUnitId"),
+                    ) {
                         Text("+ Дополнительно")
                     }
                 }
-                TextButton(onClick = onToggle, modifier = Modifier.testTag("cabin-remove")) {
+                TextButton(onClick = onToggle, enabled = !busy, modifier = Modifier.testTag("cabin-remove")) {
                     Icon(Icons.Default.CheckCircle, contentDescription = "Убрать из заказа", modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("В заказе")
                 }
             }
         } else {
-            Button(onClick = onToggle, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onToggle, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                 Icon(if (requiresLogin) Icons.Default.Person else Icons.Default.ShoppingCart, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(if (requiresLogin) "Войти для заказа" else "В заказ")
@@ -934,6 +975,8 @@ private fun CatalogFacetField(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 240.dp)
+                        .verticalScroll(rememberScrollState())
                         .testTag("filter-options-$title"),
                 ) {
                     TextButton(
@@ -958,10 +1001,18 @@ private fun CatalogFacetField(
                             },
                             modifier = Modifier.fillMaxWidth().testTag("filter-option-$title-$value"),
                         ) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(value, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    value,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp),
+                                    textAlign = TextAlign.Center,
+                                )
                                 if (selected.any { facetValuesMatch(it, value) }) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = "Выбрано")
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = "Выбрано",
+                                        modifier = Modifier.align(Alignment.CenterEnd).size(20.dp),
+                                    )
                                 }
                             }
                         }
@@ -1023,36 +1074,50 @@ private fun FurnitureSheet(
     quantities: Map<EquipmentKey, Long>,
     onQuantity: (AvailableEquipment, Long) -> Unit,
     onDismiss: () -> Unit,
+    busy: Boolean,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(20.dp)) {
+    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .navigationBarsPadding()
+                .padding(20.dp),
+        ) {
             Text("Мебель · ${cabin?.accountingNo.orEmpty()}", style = MaterialTheme.typography.headlineSmall)
             Text("Отображаются только позиции в наличии на выбранном складе.")
             Spacer(Modifier.height(12.dp))
-            if (items.isEmpty()) Text("Свободной мебели на складе нет")
-            items.forEach { item ->
-                val key = EquipmentKey(requireNotNull(cabin).unitId, item.inventoryItemId)
-                val quantity = quantities[key] ?: 0L
-                val maximum = minOf(item.availableQuantity, item.maximumPerCabin?.toLong() ?: Long.MAX_VALUE)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(item.name, fontWeight = FontWeight.Medium)
-                        Text("Доступно: ${item.availableQuantity} · максимум: $maximum", style = MaterialTheme.typography.bodySmall)
+            Column(
+                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            ) {
+                if (items.isEmpty()) Text("Свободной мебели на складе нет")
+                items.forEach { item ->
+                    val key = EquipmentKey(requireNotNull(cabin).unitId, item.inventoryItemId)
+                    val quantity = quantities[key] ?: 0L
+                    val maximum = minOf(item.availableQuantity, item.maximumPerCabin?.toLong() ?: Long.MAX_VALUE)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(item.name, fontWeight = FontWeight.Medium)
+                            Text("Доступно: ${item.availableQuantity} · максимум: $maximum", style = MaterialTheme.typography.bodySmall)
+                        }
+                        IconButton(
+                            onClick = { onQuantity(item, (quantity - 1).coerceAtLeast(0)) },
+                            enabled = !busy && quantity > 0,
+                        ) {
+                            Icon(Icons.Default.Remove, contentDescription = "Уменьшить ${item.name}")
+                        }
+                        Text(quantity.toString(), modifier = Modifier.width(28.dp))
+                        IconButton(
+                            onClick = { onQuantity(item, quantity + 1) },
+                            enabled = !busy && quantity < maximum,
+                        ) { Icon(Icons.Default.Add, contentDescription = "Добавить ${item.name}") }
                     }
-                    IconButton(onClick = { onQuantity(item, (quantity - 1).coerceAtLeast(0)) }, enabled = quantity > 0) {
-                        Icon(Icons.Default.Remove, contentDescription = "Уменьшить ${item.name}")
-                    }
-                    Text(quantity.toString(), modifier = Modifier.width(28.dp))
-                    IconButton(
-                        onClick = { onQuantity(item, quantity + 1) },
-                        enabled = quantity < maximum,
-                    ) { Icon(Icons.Default.Add, contentDescription = "Добавить ${item.name}") }
                 }
             }
-            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Готово") }
+            Button(onClick = onDismiss, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Готово") }
         }
     }
 }
@@ -1071,20 +1136,23 @@ fun FullscreenCabinGallery(cabin: CustomerCabin?, initialPage: Int, onClose: () 
         Surface(Modifier.fillMaxSize(), color = Color.Black) {
             GallerySystemBars()
             val pager = rememberPagerState(initialPage = initialPage.coerceIn(cabin.photos.indices)) { cabin.photos.size }
+            var zoomedPhotoId by remember(cabin.unitId, cabin.photos) { mutableStateOf<String?>(null) }
             Box(Modifier.fillMaxSize()) {
-                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                HorizontalPager(
+                    state = pager,
+                    userScrollEnabled = zoomedPhotoId != cabin.photos[pager.currentPage].photoId,
+                    modifier = Modifier.fillMaxSize(),
+                ) { page ->
                     val photo = cabin.photos[page]
-                    var failed by remember(photo.photoId, photo.generation, photo.url) { mutableStateOf(false) }
-                    Box(Modifier.fillMaxSize()) {
-                        AsyncImage(
-                            model = customerMediaUrl(photo.url),
-                            contentDescription = "Фото ${page + 1} из ${cabin.photos.size}",
-                            contentScale = ContentScale.Fit,
-                            onError = { failed = true },
-                            onSuccess = { failed = false },
-                            modifier = Modifier.fillMaxSize(),
+                    key(photo.photoId, photo.generation, photo.url) {
+                        GalleryPhoto(
+                            photoId = photo.photoId,
+                            photoUrl = photo.url,
+                            description = "Фото ${page + 1} из ${cabin.photos.size}",
+                            onZoomedChange = { zoomed ->
+                                zoomedPhotoId = if (zoomed) photo.photoId else zoomedPhotoId.takeUnless { it == photo.photoId }
+                            },
                         )
-                        if (failed) Text("Фотография недоступна", Modifier.align(Alignment.Center), color = Color.White)
                     }
                 }
                 IconButton(
@@ -1110,6 +1178,114 @@ fun FullscreenCabinGallery(cabin: CustomerCabin?, initialPage: Int, onClose: () 
                         .padding(20.dp),
                 )
             }
+        }
+    }
+}
+
+/** Keeps each gallery page independently zoomable while a transformed photo blocks pager swipes. */
+@Composable
+private fun GalleryPhoto(
+    photoId: String,
+    photoUrl: String,
+    description: String,
+    onZoomedChange: (Boolean) -> Unit,
+) {
+    var loading by remember(photoId, photoUrl) { mutableStateOf(true) }
+    var failed by remember(photoId, photoUrl) { mutableStateOf(false) }
+    var loaded by remember(photoId, photoUrl) { mutableStateOf(false) }
+    var scale by remember(photoId, photoUrl) { mutableStateOf(1f) }
+    var offset by remember(photoId, photoUrl) { mutableStateOf(Offset.Zero) }
+    var viewportWidth by remember(photoId, photoUrl) { mutableStateOf(0) }
+    var viewportHeight by remember(photoId, photoUrl) { mutableStateOf(0) }
+
+    DisposableEffect(photoId, photoUrl) {
+        onDispose { onZoomedChange(false) }
+    }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val nextScale = (scale * zoomChange).coerceIn(1f, 4f)
+        val maximumX = viewportWidth * (nextScale - 1f) / 2f
+        val maximumY = viewportHeight * (nextScale - 1f) / 2f
+        scale = nextScale
+        offset = if (nextScale == 1f) {
+            Offset.Zero
+        } else {
+            Offset(
+                (offset.x + panChange.x).coerceIn(-maximumX, maximumX),
+                (offset.y + panChange.y).coerceIn(-maximumY, maximumY),
+            )
+        }
+        onZoomedChange(nextScale > 1f)
+    }
+    Box(Modifier.fillMaxSize().clipToBounds().onSizeChanged { size ->
+        viewportWidth = size.width
+        viewportHeight = size.height
+    }) {
+        AsyncImage(
+            model = customerMediaUrl(photoUrl),
+            contentDescription = description,
+            contentScale = ContentScale.Fit,
+            onLoading = {
+                loading = true
+                failed = false
+                loaded = false
+            },
+            onError = {
+                loading = false
+                failed = true
+                loaded = false
+            },
+            onSuccess = {
+                loading = false
+                failed = false
+                loaded = true
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                }
+                .transformable(
+                    state = transformState,
+                    canPan = { scale > 1f },
+                    enabled = loaded,
+                ),
+        )
+        if (loading) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(horizontal = 48.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .testTag("gallery-photo-loading-$photoId"),
+                color = Color.White,
+                trackColor = Color.White.copy(alpha = 0.24f),
+            )
+        }
+        if (failed) {
+            Text(
+                "Фотография недоступна",
+                modifier = Modifier.align(Alignment.Center).testTag("gallery-photo-error-$photoId"),
+                color = Color.White,
+            )
+        }
+        if (scale > 1f) {
+            TextButton(
+                onClick = {
+                    scale = 1f
+                    offset = Offset.Zero
+                    onZoomedChange(false)
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
+                    .padding(12.dp)
+                    .testTag("gallery-reset-zoom-$photoId"),
+            ) { Text("Сбросить масштаб", color = Color.White) }
         }
     }
 }

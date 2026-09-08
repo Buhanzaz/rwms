@@ -1,20 +1,26 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CabinFacetWarehouse
 import dev.buhanzaz.rwms.client.data.CabinFacets
 import dev.buhanzaz.rwms.client.data.CabinFilters
+import dev.buhanzaz.rwms.client.data.CabinPhoto
 import dev.buhanzaz.rwms.client.data.CabinTypeDimensions
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
@@ -172,8 +178,8 @@ class CatalogScreensTest {
         composeRule.onNodeWithText(compatibleDimension).assertExists()
         composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
         val dimensionOptionTag = "filter-option-Размер-$compatibleDimension"
-        composeRule.onNodeWithTag("catalog-screen").performScrollToNode(hasTestTag(dimensionOptionTag))
-        composeRule.onNodeWithTag(dimensionOptionTag).assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("catalog-screen").performScrollToNode(hasTestTag("filter-options-Размер"))
+        composeRule.onNodeWithTag(dimensionOptionTag).performScrollTo().assertIsDisplayed().performClick()
 
         composeRule.runOnIdle {
             assertThat(appliedFilters).containsExactly(
@@ -181,6 +187,36 @@ class CatalogScreensTest {
                 CabinFilters(cabinType = "БК-1", dimensions = compatibleDimension),
             ).inOrder()
         }
+    }
+
+    @Test
+    fun `expanded options stay below their field, scroll internally, and center labels`() {
+        val values = (1..12).map { "БК-$it" }
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(
+                        facets = CabinFacets(
+                            warehouses = listOf(
+                                CabinFacetWarehouse(warehouseId = "warehouse-spb", name = "СПБ", cabinTypes = values),
+                            ),
+                        ),
+                    ),
+                    onMenu = {}, onProfile = {}, onFilters = {}, onLoadMore = {}, onToggleCabin = {},
+                    onEquipment = { _, _, _ -> }, onPhoto = { _, _ -> }, onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("catalog-filter-button").performClick()
+        val fieldBounds = composeRule.onNodeWithTag("filter-field-Тип").fetchSemanticsNode().boundsInRoot
+        composeRule.onNodeWithTag("filter-field-Тип").performClick()
+
+        val optionBounds = composeRule.onNodeWithTag("filter-options-Тип").fetchSemanticsNode().boundsInRoot
+        val labelBounds = composeRule.onNodeWithText("БК-1").fetchSemanticsNode().boundsInRoot
+        assertThat(optionBounds.top).isAtLeast(fieldBounds.bottom)
+        assertThat(optionBounds.height).isAtMost(240f * composeRule.density.density)
+        assertThat(labelBounds.center.x).isWithin(1f).of(optionBounds.center.x)
     }
 
     @Test
@@ -243,6 +279,92 @@ class CatalogScreensTest {
         composeRule.onNodeWithTag("catalog-filter-button").performClick()
         composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
         assertThat(appliedFilters).isEqualTo(CabinFilters(linoleum = true))
+    }
+
+    @Test
+    fun `catalog keeps state visible while busy and disables mutations`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(cabins = listOf(catalogCabin()), busy = true),
+                    onMenu = {}, onProfile = {}, onFilters = {}, onLoadMore = {}, onToggleCabin = {},
+                    onEquipment = { _, _, _ -> }, onPhoto = { _, _ -> }, onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("catalog-loading").assertExists()
+        composeRule.onNodeWithTag("catalog-empty").assertDoesNotExist()
+        composeRule.onNodeWithText("В заказ").assertIsNotEnabled()
+        composeRule.onNodeWithTag("warehouse-selector").assertIsNotEnabled()
+    }
+
+    @Test
+    fun `guest loading and errors never render a false empty catalog`() {
+        val guestState = mutableStateOf(
+            CustomerGuestCatalogState(
+                warehouses = catalogState().warehouses,
+                selectedWarehouse = catalogState().selectedWarehouse,
+                busy = true,
+            ),
+        )
+        composeRule.setContent {
+            CustomerTheme {
+                GuestCabinCatalogScreen(
+                    state = guestState.value,
+                    onBack = {}, onLogin = {}, onFilters = {}, onLoadMore = {}, onPhoto = { _, _ -> }, onWarehouse = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("guest-catalog-loading").assertExists()
+        composeRule.onNodeWithTag("catalog-empty").assertDoesNotExist()
+
+        composeRule.runOnIdle { guestState.value = CustomerGuestCatalogState(error = "Каталог временно недоступен") }
+        composeRule.onNodeWithTag("guest-catalog-error").assertExists()
+        composeRule.onNodeWithTag("catalog-empty").assertDoesNotExist()
+    }
+
+    @Test
+    fun `empty filtered catalog offers an immediate reset without oversized spacing`() {
+        var appliedFilters: CabinFilters? = null
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(filters = CabinFilters(finish = "Графит")),
+                    onMenu = {}, onProfile = {}, onFilters = { appliedFilters = it }, onLoadMore = {}, onToggleCabin = {},
+                    onEquipment = { _, _, _ -> }, onPhoto = { _, _ -> }, onWarehouse = {},
+                )
+            }
+        }
+
+        val headerBounds = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
+        val messageBounds = composeRule.onNodeWithText("Свободных бытовок по выбранным условиям нет").fetchSemanticsNode().boundsInRoot
+        assertThat(messageBounds.top - headerBounds.bottom).isAtMost(24f * composeRule.density.density)
+        composeRule.onNodeWithTag("catalog-empty-clear-filters").performClick()
+        composeRule.runOnIdle { assertThat(appliedFilters).isEqualTo(CabinFilters()) }
+    }
+
+    @Test
+    fun `gallery pages with a one finger swipe at its unzoomed scale`() {
+        composeRule.setContent {
+            CustomerTheme {
+                FullscreenCabinGallery(
+                    cabin = catalogCabin().copy(
+                        photos = listOf(
+                            CabinPhoto("photo-1", 1, "unsupported-1", "unsupported-1"),
+                            CabinPhoto("photo-2", 1, "unsupported-2", "unsupported-2"),
+                        ),
+                    ),
+                    initialPage = 0,
+                    onClose = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("1 / 2").assertExists()
+        composeRule.onNodeWithContentDescription("Фото 1 из 2").performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("2 / 2").assertExists()
     }
 
     @Test

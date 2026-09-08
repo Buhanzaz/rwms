@@ -54,7 +54,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -318,7 +317,7 @@ fun DeliveryMapScreen(
             depotLatitude = selectedWarehouse.depotLatitude,
             depotLongitude = selectedWarehouse.depotLongitude,
             onPoint = { latitude, longitude, zoom ->
-                resolvePoint(
+                if (!state.busy) resolvePoint(
                     latitude = latitude,
                     longitude = longitude,
                     zoom = zoom,
@@ -326,6 +325,7 @@ fun DeliveryMapScreen(
                 )
             },
             onCurrentLocation = {
+                if (state.busy) return@DeliveryMapPointPicker
                 if (shouldRequestDeliveryLocationPermission(hasDeliveryLocationPermission(context))) {
                     locationPermissionLauncher.launch(DELIVERY_LOCATION_PERMISSIONS)
                 } else {
@@ -346,7 +346,11 @@ fun DeliveryMapScreen(
         DeliveryAddressPanel(
             address = state.address,
             geocoding = geocoding,
-            status = locationMessage,
+            enabled = !state.busy,
+            loading = geocoding || state.busy,
+            status = if (state.busy && awaitingSlotGeneration != null) {
+                "Идёт расчёт свободных слотов"
+            } else locationMessage,
             suggestions = suggestions,
             continueEnabled = canContinue,
             onAddress = { address ->
@@ -385,9 +389,6 @@ fun DeliveryMapScreen(
             modifier = Modifier.align(Alignment.BottomCenter).imePadding()
                 .onSizeChanged { addressPanelHeight = it.height },
         )
-        if (state.busy && awaitingSlotGeneration != null) {
-            DeliverySlotCalculationOverlay()
-        }
         if (showResponsibilityDialog) {
             DeliveryResponsibilityDialog(
                 selectedCabinCount = state.selectedCabinIds.size,
@@ -417,35 +418,6 @@ fun DeliveryMapScreen(
         }
     }
 
-}
-
-/** Blocks repeated input while logistics recalculates authoritative delivery availability. */
-@Composable
-internal fun DeliverySlotCalculationOverlay() {
-    Dialog(
-        onDismissRequest = {},
-        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-    ) {
-        Surface(
-            modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth().testTag("delivery-slot-calculation-overlay"),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Column(
-                modifier = Modifier.padding(28.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(40.dp).testTag("delivery-slot-calculation-progress"),
-                    color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 3.dp,
-                )
-                Text("Идёт расчёт свободных слотов", style = MaterialTheme.typography.titleMedium)
-            }
-        }
-    }
 }
 
 /** Second delivery step that exposes server-returned dates and expandable slot previews. */
@@ -494,20 +466,32 @@ fun DeliveryDatesScreen(
                     )
                 }
             }
+            if (state.busy) {
+                item { CustomerLoadingLine(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), tag = "delivery-dates-loading") }
+            } else if (state.error != null) {
+                item {
+                    Text(
+                        state.error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
             items(dates, key = DeliveryDateAvailability::date) { availability ->
                 DeliveryDateCard(
                     availability = availability,
                     expanded = expandedDate == availability.date,
+                    enabled = !state.busy,
                     onExpand = {
                         expandedDate = if (expandedDate == availability.date) null else availability.date
                     },
                     onSelect = { onDate(availability.date) },
                 )
             }
-            if (dates.isEmpty() && !state.busy) {
+            if (dates.isEmpty() && !state.busy && state.error == null) {
                 item {
                     Column(
-                        Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(24.dp),
+                        Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 4.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -515,8 +499,9 @@ fun DeliveryDatesScreen(
                             if (state.slotSearchCompleted) {
                                 "Для этого адреса пока нет свободных дат"
                             } else {
-                                "Получаем свободные даты…"
+                                "Даты доставки ещё не рассчитаны"
                             },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.titleMedium,
                         )
                         OutlinedButton(onClick = onBack) { Text("Изменить адрес") }
@@ -577,12 +562,23 @@ fun DeliverySlotsScreen(
                 ) {
                     DeliveryStepIntro(3, "Выберите время")
                     Spacer(Modifier.height(8.dp))
-                    Text(formatDeliveryDate(date), style = MaterialTheme.typography.titleMedium)
+                    Text(formatDeliveryDate(date), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                     Text(state.address, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(16.dp))
                     DeliveryPriceSummary(
                         price = if (pricesVary) selected?.deliveryPriceRubles else DeliverySlotPolicy.deliveryPriceRubles(slots),
                         varies = pricesVary && selected == null,
+                    )
+                }
+            }
+            if (state.busy) {
+                item { CustomerLoadingLine(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), tag = "delivery-slots-loading") }
+            } else if (state.error != null) {
+                item {
+                    Text(
+                        state.error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
@@ -632,11 +628,12 @@ fun DeliverySlotsScreen(
                     }
                 }
             }
-            if (slots.isEmpty()) {
+            if (slots.isEmpty() && !state.busy && state.error == null) {
                 item {
                     Text(
                         "На эту дату свободных слотов больше нет",
-                        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(24.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
             }
@@ -693,6 +690,17 @@ fun DeliveryConfirmationScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (state.busy) {
+                item { CustomerLoadingLine(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), tag = "delivery-confirmation-loading") }
+            } else if (state.error != null) {
+                item {
+                    Text(
+                        state.error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
             if (held == null) {
                 item {
                     Card(
@@ -845,6 +853,8 @@ internal fun DeliveryAddressPanel(
     onVoice: () -> Unit,
     onContinue: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    loading: Boolean = geocoding,
 ) {
     val editor = rememberTextFieldState(address)
     val scrollState = rememberScrollState()
@@ -869,17 +879,17 @@ internal fun DeliveryAddressPanel(
             modifier = Modifier.fillMaxWidth().figmaButtonShadow(shape).testTag("delivery-search-bar"),
             shape = shape,
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         ) {
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onVoice, enabled = !geocoding) {
+                IconButton(onClick = onVoice, enabled = enabled && !geocoding) {
                     Icon(Icons.Default.Mic, contentDescription = "Голосовой ввод адреса")
                 }
                 BasicTextField(
                     state = editor,
+                    enabled = enabled,
                     scrollState = scrollState,
                     lineLimits = TextFieldLineLimits.SingleLine,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -902,7 +912,7 @@ internal fun DeliveryAddressPanel(
                     onClick = {
                         if (editor.text.toString() == latestAddress && continueEnabled) onContinue()
                     },
-                    enabled = continueEnabled && editor.text.toString() == address,
+                    enabled = enabled && continueEnabled && editor.text.toString() == address,
                     modifier = Modifier.size(48.dp).testTag("delivery-map-continue"),
                     contentPadding = PaddingValues(0.dp),
                 ) {
@@ -926,6 +936,7 @@ internal fun DeliveryAddressPanel(
                     ) { suggestion ->
                         Surface(
                             onClick = { onSuggestion(suggestion) },
+                            enabled = enabled,
                             modifier = Modifier.fillMaxWidth().testTag("delivery-address-suggestion"),
                             color = MaterialTheme.colorScheme.surface,
                         ) {
@@ -942,6 +953,9 @@ internal fun DeliveryAddressPanel(
                 }
             }
         }
+        if (loading) {
+            CustomerLoadingLine(tag = "delivery-address-loading")
+        }
         if (status != null) {
             Surface(shape = shape, color = MaterialTheme.colorScheme.surface) {
                 Row(
@@ -949,7 +963,6 @@ internal fun DeliveryAddressPanel(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (geocoding) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -1119,6 +1132,7 @@ internal fun DeliveryLocationUnavailableDialog(message: String, onDismiss: () ->
 private fun DeliveryDateCard(
     availability: DeliveryDateAvailability,
     expanded: Boolean,
+    enabled: Boolean,
     onExpand: () -> Unit,
     onSelect: () -> Unit,
 ) {
@@ -1132,6 +1146,7 @@ private fun DeliveryDateCard(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     onClick = onSelect,
+                    enabled = enabled,
                     color = MaterialTheme.colorScheme.surface,
                     modifier = Modifier.weight(1f).testTag("delivery-date-${availability.date}"),
                 ) {
@@ -1179,7 +1194,7 @@ private fun DeliveryDateCard(
 private fun DeliveryStepIntro(step: Int, title: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Доставка · шаг $step из 4", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        Text(title, style = MaterialTheme.typography.headlineSmall)
+        Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
@@ -73,6 +74,7 @@ import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -105,6 +107,16 @@ internal val CustomerStoreBlue = Color(0xFF549AC5)
 internal val CustomerStoreWaterFallback = Color(0xFF2A8AD9)
 internal val CustomerStoreGuestText = Color(0xFF4A4848)
 internal val CustomerStoreFieldText = Color(0xFF585858)
+
+/** A compact progress slot shared by customer screens without blocking their current content. */
+@Composable
+internal fun CustomerLoadingLine(modifier: Modifier = Modifier, tag: String = "customer-loading") {
+    LinearProgressIndicator(
+        modifier = modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).testTag(tag),
+        color = MaterialTheme.colorScheme.primary,
+        trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+    )
+}
 
 /** Visual parameters for one normal or pressed gradient state from the supplied auth prototype. */
 internal data class CustomerActionButtonStyle(

@@ -72,6 +72,7 @@ fun CartScreen(
     state: CustomerWorkflowState,
     onBack: () -> Unit,
     onProfile: () -> Unit,
+    onChooseCabin: () -> Unit,
     onContinue: () -> Unit,
     onToggleCabin: (String) -> Unit,
     onCabinRentalMonths: (String, Long) -> Unit,
@@ -91,8 +92,19 @@ fun CartScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("cart-screen"),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 20.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
         ) {
+            if (state.busy) item { CustomerLoadingLine(tag = "cart-loading") }
+            state.error?.takeIf { !state.busy }?.let { error ->
+                item {
+                    Text(
+                        error,
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 1_120.dp),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
             items(cartCabins, key = CustomerCabin::unitId) { cabin ->
                 val serverEquipment = state.cart?.equipment.orEmpty()
                     .filter { it.cabinUnitId == cabin.unitId }
@@ -117,15 +129,32 @@ fun CartScreen(
                     },
                 )
             }
-            if (cartCabins.isEmpty()) {
+            if (cartCabins.isEmpty() && !state.busy && state.error == null) {
                 item {
-                    Text(
-                        "Добавьте хотя бы одну бытовку в аренду.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 1_120.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            "Корзина пока пуста",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "Выберите бытовку в каталоге, чтобы перейти к доставке.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(
+                            onClick = onChooseCabin,
+                            modifier = Modifier.fillMaxWidth().testTag("cart-choose-cabin-button"),
+                        ) {
+                            Text("Выбрать бытовку")
+                        }
+                    }
                 }
-            }
-            item {
+            } else if (cartCabins.isNotEmpty()) item {
                 Button(
                     onClick = onContinue,
                     modifier = Modifier.fillMaxWidth().widthIn(max = 1_120.dp).testTag("cart-delivery-button"),
@@ -373,51 +402,60 @@ private fun CartAdditionalSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 620.dp)
                 .navigationBarsPadding()
                 .padding(20.dp)
                 .testTag("cart-additional-sheet-${cabin.unitId}"),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Дополнительно · № ${cabin.accountingNo}", style = MaterialTheme.typography.headlineSmall)
+            Text("Дополнительно · № ${cabin.accountingNo}", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Добавьте мебель или оборудование к этой бытовке.",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (availableItems.isEmpty()) {
-                Text("Свободных дополнительных позиций на выбранном складе нет")
-            }
-            availableItems.forEach { item ->
-                val key = EquipmentKey(cabin.unitId, item.inventoryItemId)
-                val quantity = selectedEquipment[key] ?: 0L
-                val maximum = minOf(item.availableQuantity, item.maximumPerCabin?.toLong() ?: Long.MAX_VALUE)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                Text(
+                    "Свободных дополнительных позиций на выбранном складе нет",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f, fill = false).testTag("cart-equipment-list-${cabin.unitId}"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(item.name, fontWeight = FontWeight.Medium)
-                        item.category?.let { category ->
-                            Text(
-                                category,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    items(availableItems, key = AvailableEquipment::inventoryItemId) { item ->
+                        val key = EquipmentKey(cabin.unitId, item.inventoryItemId)
+                        val quantity = selectedEquipment[key] ?: 0L
+                        val maximum = minOf(item.availableQuantity, item.maximumPerCabin?.toLong() ?: Long.MAX_VALUE)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(item.name, fontWeight = FontWeight.Medium)
+                                Text(
+                                    listOfNotNull(item.category, "Доступно: ${item.availableQuantity}").joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
+                                onClick = { onQuantity(item, (quantity - 1).coerceAtLeast(0)) },
+                                enabled = !busy && quantity > 0,
+                                modifier = Modifier.testTag("cart-equipment-decrement-${cabin.unitId}-${item.inventoryItemId}"),
+                            ) {
+                                Icon(Icons.Default.Remove, contentDescription = "Убрать ${item.name}")
+                            }
+                            Text(quantity.toString(), modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+                            IconButton(
+                                onClick = { onQuantity(item, quantity + 1) },
+                                enabled = !busy && quantity < maximum,
+                                modifier = Modifier.testTag("cart-equipment-increment-${cabin.unitId}-${item.inventoryItemId}"),
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Добавить ${item.name}")
+                            }
                         }
-                    }
-                    IconButton(
-                        onClick = { onQuantity(item, (quantity - 1).coerceAtLeast(0)) },
-                        enabled = !busy && quantity > 0,
-                        modifier = Modifier.testTag("cart-equipment-decrement-${cabin.unitId}-${item.inventoryItemId}"),
-                    ) {
-                        Icon(Icons.Default.Remove, contentDescription = "Убрать ${item.name}")
-                    }
-                    Text(quantity.toString(), modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
-                    IconButton(
-                        onClick = { onQuantity(item, quantity + 1) },
-                        enabled = !busy && quantity < maximum,
-                        modifier = Modifier.testTag("cart-equipment-increment-${cabin.unitId}-${item.inventoryItemId}"),
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "Добавить ${item.name}")
                     }
                 }
             }
@@ -499,6 +537,7 @@ fun BookingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (busy) item { CustomerLoadingLine(tag = "bookings-loading") }
             updatesError?.let { error ->
                 item { Text(error, color = MaterialTheme.colorScheme.error) }
             }
@@ -517,9 +556,12 @@ fun BookingsScreen(
                     }
                 }
             }
-            if (visible.isEmpty()) item { Text("Оформленных заказов пока нет") }
+            if (visible.isEmpty() && !busy && updatesError == null) item {
+                Text("Оформленных заказов пока нет", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             items(visible, key = { it.bookingId ?: it.inquiryId }) { booking ->
                 val payment = payments[booking.bookingId]
+                val paymentError = paymentErrors[booking.bookingId]
                 OutlinedCard(
                     modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp),
                     shape = RoundedCornerShape(16.dp),
@@ -615,13 +657,28 @@ fun BookingsScreen(
                             }
                         }
                         if (payment != null) {
-                            CustomerInitialPaymentReceipt(payment, busy || paymentErrors[booking.bookingId] != null) {
+                            CustomerInitialPaymentReceipt(payment, busy || paymentError != null) {
                                 booking.bookingId?.let(onConfirmInitialPayment)
                             }
-                        } else if (booking.orderId != null) {
-                            Text("Счёт загружается. Оплата пока недоступна.", style = MaterialTheme.typography.bodySmall)
+                        } else if (booking.orderId != null && (paymentError == null || paymentError == CUSTOMER_PAYMENT_CHECKING_MESSAGE)) {
+                            CustomerLoadingLine(tag = "booking-payment-loading-${booking.bookingId}")
                         }
-                        paymentErrors[booking.bookingId]?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        paymentError?.let { message ->
+                            if (message == CUSTOMER_PAYMENT_CHECKING_MESSAGE) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().testTag("payment-checking-${booking.bookingId}"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                ) {
+                                    Text(
+                                        message,
+                                        modifier = Modifier.padding(12.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            } else Text(message, color = MaterialTheme.colorScheme.error)
+                        }
                         if (CustomerBookingLifecyclePolicy.canChange(booking)) {
                             val bookingId = requireNotNull(booking.bookingId)
                             Button(

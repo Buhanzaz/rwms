@@ -161,6 +161,24 @@ class ProfileAndWarehouseScreensTest {
         }
     }
 
+    @Test
+    fun `city loading does not announce an empty warehouse list`() {
+        var busy by mutableStateOf(true)
+        composeRule.setContent {
+            CustomerTheme {
+                WarehouseScreen(
+                    warehouses = emptyList(), busy = busy, onSelect = { _, _ -> },
+                    onMenu = null, onProfile = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("warehouse-loading").assertExists()
+        composeRule.onNodeWithText("Нет доступных городов").assertDoesNotExist()
+        composeRule.runOnIdle { busy = false }
+        composeRule.onNodeWithTag("warehouse-loading").assertDoesNotExist()
+        composeRule.onNodeWithText("Нет доступных городов").assertExists()
+    }
+
     private fun existingProfile(): CustomerProfile = CustomerProfile(
         id = "profile-a",
         version = 7,

@@ -233,10 +233,16 @@ class CustomerConditionalNavigationTest {
     }
 
     @Test
-    fun `delivery map owns busy progress while other routes keep the global overlay`() {
-        assertThat(shouldShowGlobalBusyOverlay(isBusy = true, current = CatalogRoute)).isTrue()
-        assertThat(shouldShowGlobalBusyOverlay(isBusy = true, current = DeliveryMapRoute)).isFalse()
-        assertThat(shouldShowGlobalBusyOverlay(isBusy = false, current = DeliveryMapRoute)).isFalse()
+    fun `catalog loading keeps its screen available without a blocking dialog`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(CustomerAppState.Ready(readyCatalogWorkflow().copy(busy = true)))
+            }
+        }
+        composeRule.onNodeWithTag("catalog-loading").assertExists()
+        composeRule.onAllNodes(androidx.compose.ui.test.isDialog()).assertCountEquals(0)
+        composeRule.onNodeWithContentDescription("Открыть меню").performClick()
+        composeRule.onNodeWithTag("customer-drawer").assertExists()
     }
 
     @Test

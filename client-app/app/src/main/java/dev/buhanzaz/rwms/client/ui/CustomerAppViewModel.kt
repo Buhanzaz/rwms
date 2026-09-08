@@ -1051,7 +1051,7 @@ class CustomerAppViewModel @Inject constructor(
         } finally {
             // A lost response or conflict is followed by a read, never automatic consent to a new bill.
             mutableWorkflow.value = mutableWorkflow.value.copy(
-                paymentErrors = mutableWorkflow.value.paymentErrors + (bookingId to "Проверяем результат оплаты…"),
+                paymentErrors = mutableWorkflow.value.paymentErrors + (bookingId to CUSTOMER_PAYMENT_CHECKING_MESSAGE),
             )
             refreshCustomerUpdatesOwned()
         }

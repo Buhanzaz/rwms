@@ -35,7 +35,8 @@ Authentication follows the supplied 404 × 874 canvases: full-screen caustic art
 a field-width BLOCK BOX wordmark, bottom-aligned forms, translucent borderless fields and soft
 shadows. The wordmark keeps its width across entry and login, moves above registration, and
 shrinks above each scrollable form when the keyboard opens. Short forms keep their actions at the
-bottom of the available canvas; the longer registration remains scrollable. Registration submits with
+bottom of the available canvas; the longer registration remains scrollable. Logo size and form
+position share the same layout constraints on every keyboard-animation frame. Registration submits with
 `Зарегистрироваться`, recovery uses `Отправить`, and login keeps `Вход`. System Back returns
 from recovery to login, and from login/registration to entry.
 Registration collects first name, last name, login, email, confirmed password and phone once.
@@ -92,8 +93,9 @@ foreground or restoring connectivity retries reads without replaying commands or
 
 ## Customer flow
 
-After checkout, My Orders shows the immutable server bill as a branded non-fiscal
-receipt with item amounts aligned to the right and a prominent exact total: cabin rental, furniture quantity × unit/month price × that cabin's months, accepted
+After checkout, My Orders shows the immutable server bill as a compact non-fiscal receipt.
+The total, status, payment countdown and action stay above expandable details. The detail rows
+retain right-aligned amounts: cabin rental, furniture quantity × unit/month price × that cabin's months, accepted
 delivery once, and an exact whole-RUB total. A delivery not included in the bill is explicitly
 unpriced, not free. No total uses floating point or an int64 accumulator. The displayed five-minute
 payment countdown uses server time and monotonic elapsed time; only server confirmation changes
@@ -147,8 +149,15 @@ facts and monthly-price typography. The catalog title and filter action sit insi
 category and characteristic values use rounded colored pills, while selection is marked locally
 instead of outlining the whole card. The cart has a labelled `Удалить`
 action alongside additional equipment. Full-screen photos use a black background and system areas with an unframed white close
-control; they never navigate to a passport. Available warehouse
-furniture can be assigned per cabin as `+ Additional`.
+control; they never navigate to a passport. Photos distinguish loading from failure and support
+pinch zoom, panning and an explicit reset; one-finger swipes change pages at the original scale.
+Available warehouse furniture can be assigned per cabin as `+ Additional` in bounded scrolling
+sheets. An empty cart links directly back to cabin selection. Filter options open below their
+field, scroll internally and keep their labels centered.
+
+Screen loading uses a thin inline progress bar. Empty and error messages occupy the same compact
+content area once loading finishes; existing content remains available, with affected commands
+disabled while pending. Payment verification is a neutral pending message, separate from errors.
 
 Catalog and cart cabin cards show the current logistics-owned monthly rental price, keyed by
 the cabin's asset type/category. Exact whole-ruble strings are decoded without rounding, including
@@ -219,9 +228,8 @@ pair of stable full-width `1`/`2` rows where `2` means a truck with a trailer. C
 holds and attestations. Both checkboxes are required before the slot request is sent, and the same
 capacity is fenced again on hold. Navigation advances to dates only after a newer server search
 generation succeeds; failures cannot open an empty date destination. While
-that request is active, a non-dismissible opaque dialog blocks repeated input and
-shows a spinner above `Идёт расчёт свободных слотов`; it disappears on success
-or error. The later hold revalidates the same two frozen facts with capacity and rejects a stale or
+that request is active, the address panel shows an inline progress bar and
+`Идёт расчёт свободных слотов`; address edits and repeated commands are disabled until it finishes. The later hold revalidates the same two frozen facts with capacity and rejects a stale or
 incomplete offer. Changing either answer preserves returned offers and the selected slot but clears
 an existing hold. Logistics,
 not the APK, checks

@@ -8,20 +8,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +43,8 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Locale
 import kotlinx.coroutines.delay
+
+internal const val CUSTOMER_PAYMENT_CHECKING_MESSAGE = "Проверяем результат оплаты…"
 
 /** Receipt plus monotonic observation time: changing the device clock cannot extend payment. */
 data class CustomerObservedPayment(val payment: CustomerOrderPayment, val receivedElapsedMillis: Long) {
@@ -64,6 +70,7 @@ fun CustomerInitialPaymentReceipt(
 ) {
     val payment = observed.payment
     val receipt = payment.receipt
+    var detailsVisible by rememberSaveable(receipt?.orderNumber) { mutableStateOf(false) }
     var now by remember(observed) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(observed, lifecycle) {
@@ -80,15 +87,7 @@ fun CustomerInitialPaymentReceipt(
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            CustomerStoreLogo(Modifier.width(132.dp).align(Alignment.CenterHorizontally))
-            Text(
-                "СЧЁТ НА ОПЛАТУ · НЕ ФИСКАЛЬНЫЙ ЧЕК",
-                modifier = Modifier.fillMaxWidth(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (receipt == null) {
                 Text("Счёт ещё не выставлен. Оплата не подтверждена.")
                 if (payment.state == null && payment.expiresAt == null && payment.orderStatus == "SAVED") {
@@ -100,28 +99,14 @@ fun CustomerInitialPaymentReceipt(
                     )
                 }
             } else {
-                Text("Заказ № ${receipt.orderNumber}", style = MaterialTheme.typography.titleMedium)
-                HorizontalDivider()
-                receipt.lines.forEach { line ->
-                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(line.label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                receiptRubles(line.amountRubles),
-                                modifier = Modifier.weight(0.8f),
-                                style = MaterialTheme.typography.titleSmall,
-                                textAlign = TextAlign.End,
-                            )
-                        }
-                        Text(
-                            if (line.kind == "DELIVERY") "Доставка · 1 услуга"
-                            else "${line.quantity} шт. × ${receiptRubles(line.unitPriceRubles)}/мес. × ${line.rentalMonths} мес.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Заказ № ${receipt.orderNumber}", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "СЧЁТ НА ОПЛАТУ · НЕ ФИСКАЛЬНЫЙ ЧЕК",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Итого", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -174,6 +159,42 @@ fun CustomerInitialPaymentReceipt(
                         modifier = Modifier.fillMaxWidth().testTag("confirm-initial-payment"),
                     ) {
                         Text("Оплатить тестово")
+                    }
+                }
+                TextButton(
+                    onClick = { detailsVisible = !detailsVisible },
+                    modifier = Modifier.fillMaxWidth().testTag("initial-payment-receipt-details-toggle"),
+                ) {
+                    Text(
+                        if (detailsVisible) "Скрыть детали счёта" else "Показать детали счёта (${receipt.lines.size})",
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Start,
+                    )
+                    Icon(
+                        if (detailsVisible) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (detailsVisible) "Скрыть детали счёта" else "Показать детали счёта",
+                    )
+                }
+                if (detailsVisible) {
+                    HorizontalDivider()
+                    receipt.lines.forEach { line ->
+                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text(line.label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    receiptRubles(line.amountRubles),
+                                    modifier = Modifier.weight(0.8f),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    textAlign = TextAlign.End,
+                                )
+                            }
+                            Text(
+                                if (line.kind == "DELIVERY") "Доставка · 1 услуга"
+                                else "${line.quantity} шт. × ${receiptRubles(line.unitPriceRubles)}/мес. × ${line.rentalMonths} мес.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

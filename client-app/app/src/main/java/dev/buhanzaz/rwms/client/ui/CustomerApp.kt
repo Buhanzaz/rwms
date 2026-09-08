@@ -8,7 +8,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -16,11 +15,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -34,7 +33,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.Badge
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,7 +42,6 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
@@ -63,8 +60,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -608,6 +603,7 @@ private fun SignedInNavigation(
                         CartScreen(
                             state = state,
                             onBack = { backFrom(CartRoute) },
+                            onChooseCabin = { topLevel(CatalogRoute) },
                             onProfile = ::openProfile,
                             onContinue = {
                                 if (backStack.lastOrNull() is CartRoute) {
@@ -719,6 +715,7 @@ private fun SignedInNavigation(
                         ProfileFormScreen(
                             existing = requireNotNull(state.profile),
                             busy = state.busy,
+                            errorMessage = state.error,
                             onSave = onSaveProfile,
                             onAvatarCropped = onAvatarCropped,
                             onAvatarEditingChanged = { editingAvatar = it },
@@ -736,28 +733,7 @@ private fun SignedInNavigation(
                 },
             )
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
-            if (shouldShowGlobalBusyOverlay(state.busy, current)) {
-                Dialog(
-                    onDismissRequest = {},
-                    properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-                ) {
-                    Surface(
-                        modifier = Modifier.testTag("global-busy-overlay"),
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    ) {
-                        Row(
-                            Modifier.padding(24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
-                            Text("Подождите…", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-                }
-            }
+
         }
     }
 }
@@ -785,9 +761,6 @@ private fun NavKey?.isDeliveryFlowRoute(): Boolean =
         this is DeliverySlotsRoute ||
         this is DeliveryConfirmationRoute
 
-internal fun shouldShowGlobalBusyOverlay(isBusy: Boolean, current: NavKey?): Boolean =
-    isBusy && current !is DeliveryMapRoute
-
 private fun CustomerAppearanceMode.appearanceIcon(): ImageVector = when (this) {
     CustomerAppearanceMode.LIGHT -> Icons.Default.LightMode
     CustomerAppearanceMode.DARK -> Icons.Default.DarkMode
@@ -795,16 +768,16 @@ private fun CustomerAppearanceMode.appearanceIcon(): ImageVector = when (this) {
 
 @Composable
 private fun LoadingCustomerScreen(message: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Text(
-                message,
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-        }
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CustomerLoadingLine(tag = "customer-session-loading")
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -826,8 +799,8 @@ private fun RegistrationStatusScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (busy) {
-                androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("Сохраняем регистрацию…", style = MaterialTheme.typography.bodyLarge)
+                CustomerLoadingLine(tag = "registration-loading")
+                Text("Сохраняем регистрацию…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 Text(
                     error ?: "Данные регистрации недоступны. Обратитесь в поддержку.",

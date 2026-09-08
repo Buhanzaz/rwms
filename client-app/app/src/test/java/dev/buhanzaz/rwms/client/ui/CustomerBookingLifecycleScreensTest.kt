@@ -502,6 +502,7 @@ class CustomerBookingLifecycleScreensTest {
                     ),
                     onBack = {},
                     onProfile = {},
+                    onChooseCabin = {},
                     onContinue = {},
                     onToggleCabin = removedCabin::set,
                     onCabinRentalMonths = { cabinId, months -> updatedTerm.set(cabinId to months) },
@@ -545,6 +546,105 @@ class CustomerBookingLifecycleScreensTest {
         composeRule.runOnIdle {
             assertThat(removedCabin.get()).isEqualTo("cabin-a")
         }
+    }
+
+    @Test
+    fun `empty cart offers a direct return to cabin selection`() {
+        var chooseCabinCalls = 0
+        composeRule.setContent {
+            CustomerTheme {
+                CartScreen(
+                    state = CustomerWorkflowState(bootstrapping = false),
+                    onBack = {},
+                    onProfile = {},
+                    onChooseCabin = { chooseCabinCalls++ },
+                    onContinue = {},
+                    onToggleCabin = {},
+                    onCabinRentalMonths = { _, _ -> },
+                    onEquipment = { _, _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("cart-delivery-button").assertDoesNotExist()
+        composeRule.onNodeWithTag("cart-choose-cabin-button").assertIsEnabled().performClick()
+        composeRule.runOnIdle { assertThat(chooseCabinCalls).isEqualTo(1) }
+    }
+
+    @Test
+    fun `cart loading and error states do not claim it is empty`() {
+        var workflow by mutableStateOf(
+            CustomerWorkflowState(bootstrapping = false, error = "Не удалось обновить корзину"),
+        )
+        composeRule.setContent {
+            CustomerTheme {
+                CartScreen(
+                    state = workflow,
+                    onBack = {}, onProfile = {}, onChooseCabin = {}, onContinue = {}, onToggleCabin = {},
+                    onCabinRentalMonths = { _, _ -> }, onEquipment = { _, _, _ -> },
+                )
+            }
+        }
+        composeRule.onNodeWithText("Не удалось обновить корзину").assertExists()
+        composeRule.onNodeWithTag("cart-choose-cabin-button").assertDoesNotExist()
+
+        composeRule.runOnIdle { workflow = workflow.copy(busy = true, error = null) }
+        composeRule.onNodeWithTag("cart-loading").assertExists()
+        composeRule.onNodeWithTag("cart-choose-cabin-button").assertDoesNotExist()
+    }
+
+    @Test
+    fun `order loading is distinct from an empty order list`() {
+        composeRule.setContent {
+            CustomerTheme {
+                BookingsScreen(
+                    bookings = emptyList(), latest = null, busy = true,
+                    onMenu = {}, onProfile = {}, onAccept = { _, _, _ -> }, onReport = { _, _, _, _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("bookings-loading").assertExists()
+        composeRule.onNodeWithText("Оформленных заказов пока нет").assertDoesNotExist()
+    }
+
+    @Test
+    fun `failed bill loading replaces progress with the real error`() {
+        var paymentErrors by mutableStateOf(emptyMap<String, String>())
+        composeRule.setContent {
+            CustomerTheme {
+                BookingsScreen(
+                    bookings = listOf(booking("booking-bill", "COMPLETED").copy(orderId = "order-bill")),
+                    latest = null,
+                    busy = false,
+                    paymentErrors = paymentErrors,
+                    onMenu = {}, onProfile = {}, onAccept = { _, _, _ -> }, onReport = { _, _, _, _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("booking-payment-loading-booking-bill").assertExists()
+        composeRule.runOnIdle { paymentErrors = mapOf("booking-bill" to "Не удалось загрузить счёт") }
+        composeRule.onNodeWithTag("booking-payment-loading-booking-bill").assertDoesNotExist()
+        composeRule.onNodeWithText("Не удалось загрузить счёт").assertExists()
+    }
+
+    @Test
+    fun `payment result verification is shown as neutral pending information`() {
+        composeRule.setContent {
+            CustomerTheme {
+                BookingsScreen(
+                    bookings = listOf(booking("booking-checking", "COMPLETED")),
+                    latest = null,
+                    busy = false,
+                    paymentErrors = mapOf("booking-checking" to CUSTOMER_PAYMENT_CHECKING_MESSAGE),
+                    onMenu = {}, onProfile = {}, onAccept = { _, _, _ -> }, onReport = { _, _, _, _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("payment-checking-booking-checking").assertExists()
+        composeRule.onNodeWithText(CUSTOMER_PAYMENT_CHECKING_MESSAGE).assertExists()
     }
 
     private fun booking(
