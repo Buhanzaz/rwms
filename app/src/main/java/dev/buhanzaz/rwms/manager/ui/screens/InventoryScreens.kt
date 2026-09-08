@@ -104,8 +104,9 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoGalleryDialog
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
 import dev.buhanzaz.rwms.manager.ui.components.StatusPillEmphasis
-import dev.buhanzaz.rwms.manager.ui.components.copyManagerPhotoToAppCache
+import dev.buhanzaz.rwms.manager.ui.components.importManagerGalleryMedia
 import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
+import dev.buhanzaz.rwms.manager.ui.components.launchManagerVisualMediaPicker
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
@@ -1384,13 +1385,11 @@ fun InventoryPhotosScreen(
     }
     val context = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments(),
+        ActivityResultContracts.PickMultipleVisualMedia(),
     ) { uris ->
-        uris.forEach { uri ->
-            // Import one app-owned, upright original for the UI and durable queue. The background
-            // encoder derives its three WebP parts from these pixels without a server transform.
-            copyManagerPhotoToAppCache(context, uri)?.let(onAddPhoto)
-        }
+        // Import app-owned, upright originals for the UI and durable queue. The background
+        // encoder derives its three WebP parts from these pixels without a server transform.
+        importManagerGalleryMedia(context, uris).forEach(onAddPhoto)
     }
     var galleryPhotoUri by remember(editor.findingId) { mutableStateOf<String?>(null) }
     val photoError = editor.inventoryPhotoValidationError()
@@ -1449,9 +1448,7 @@ fun InventoryPhotosScreen(
                             ) { Text("Фотография") }
                             FilledTonalButton(
                                 onClick = {
-                                    galleryLauncher.launch(
-                                        arrayOf("image/*", "video/mp4", "video/webm"),
-                                    )
+                                    launchManagerVisualMediaPicker(context, galleryLauncher::launch)
                                 },
                                 enabled = !editor.readOnly && !busy,
                                 modifier = Modifier.weight(1f),

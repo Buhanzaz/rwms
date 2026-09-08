@@ -128,8 +128,9 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoPreview
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
 import dev.buhanzaz.rwms.manager.ui.components.StatusPillEmphasis
-import dev.buhanzaz.rwms.manager.ui.components.copyManagerPhotoToAppCache
+import dev.buhanzaz.rwms.manager.ui.components.importManagerGalleryMedia
 import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
+import dev.buhanzaz.rwms.manager.ui.components.launchManagerVisualMediaPicker
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDate
@@ -2502,13 +2503,11 @@ private fun MaintenanceCatalogAddSheet(
     var pickerOpen by remember(context.quantityNode.id) { mutableStateOf(false) }
     val androidContext = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments(),
+        ActivityResultContracts.PickMultipleVisualMedia(),
     ) { uris ->
         capturedPhotoUris = (
-            capturedPhotoUris + uris.mapNotNull { uri ->
-                copyManagerPhotoToAppCache(androidContext, uri)
-            }
-            ).distinct()
+            capturedPhotoUris + importManagerGalleryMedia(androidContext, uris)
+        ).distinct()
     }
     val workCount = context.nodes.count { node -> node.nodeType == "WORK" }
     val hasWork = workCount > 0
@@ -2574,8 +2573,9 @@ private fun MaintenanceCatalogAddSheet(
                                     onAddPhoto = { cameraOpen = true },
                                     onChooseTaken = { pickerOpen = true },
                                     onChooseGallery = {
-                                        galleryLauncher.launch(
-                                            arrayOf("image/*", "video/mp4", "video/webm"),
+                                        launchManagerVisualMediaPicker(
+                                            androidContext,
+                                            galleryLauncher::launch,
                                         )
                                     },
                                 )
@@ -3101,13 +3101,11 @@ private fun CustomMaintenanceLineSheet(
     var pickerOpen by remember(editor.entityId, editor.lines.size) { mutableStateOf(false) }
     val androidContext = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments(),
+        ActivityResultContracts.PickMultipleVisualMedia(),
     ) { uris ->
         capturedPhotoUris = (
-            capturedPhotoUris + uris.mapNotNull { uri ->
-                copyManagerPhotoToAppCache(androidContext, uri)
-            }
-            ).distinct()
+            capturedPhotoUris + importManagerGalleryMedia(androidContext, uris)
+        ).distinct()
     }
     val stageRoutings = (editor.stages
         .filter { stage -> stage.kind == "REPAIR_WORK" }
@@ -3201,8 +3199,9 @@ private fun CustomMaintenanceLineSheet(
                             onAddPhoto = { cameraOpen = true },
                             onChooseTaken = { pickerOpen = true },
                             onChooseGallery = {
-                                galleryLauncher.launch(
-                                    arrayOf("image/*", "video/mp4", "video/webm"),
+                                launchManagerVisualMediaPicker(
+                                    androidContext,
+                                    galleryLauncher::launch,
                                 )
                             },
                         )
@@ -3400,13 +3399,11 @@ private fun MaintenanceLineEditSheet(
     var pickerOpen by remember(line.id) { mutableStateOf(false) }
     val androidContext = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments(),
+        ActivityResultContracts.PickMultipleVisualMedia(),
     ) { uris ->
         capturedPhotoUris = (
-            capturedPhotoUris + uris.mapNotNull { uri ->
-                copyManagerPhotoToAppCache(androidContext, uri)
-            }
-            ).distinct()
+            capturedPhotoUris + importManagerGalleryMedia(androidContext, uris)
+        ).distinct()
     }
     val canSave = maintenanceQuantity(quantity)?.let { it > BigDecimal.ZERO } == true &&
         (line.lineType != "WORK" || comment.length <= 2_000)
@@ -3451,8 +3448,9 @@ private fun MaintenanceLineEditSheet(
                             onAddPhoto = { cameraOpen = true },
                             onChooseTaken = { pickerOpen = true },
                             onChooseGallery = {
-                                galleryLauncher.launch(
-                                    arrayOf("image/*", "video/mp4", "video/webm"),
+                                launchManagerVisualMediaPicker(
+                                    androidContext,
+                                    galleryLauncher::launch,
                                 )
                             },
                         )
@@ -3607,11 +3605,9 @@ private fun MaintenancePhotosStep(
 ) {
     val context = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments(),
+        ActivityResultContracts.PickMultipleVisualMedia(),
     ) { uris ->
-        uris.forEach { uri ->
-            copyManagerPhotoToAppCache(context, uri)?.let(onAddPhoto)
-        }
+        importManagerGalleryMedia(context, uris).forEach(onAddPhoto)
     }
     val hasPhotos = editor.photoUris.isNotEmpty() || editor.readyMedia.isNotEmpty()
     val photos = editor.readyMedia.map { media ->
@@ -3670,9 +3666,7 @@ private fun MaintenancePhotosStep(
                             ) { Text("Фотография") }
                             FilledTonalButton(
                                 onClick = {
-                                    galleryLauncher.launch(
-                                        arrayOf("image/*", "video/mp4", "video/webm"),
-                                    )
+                                    launchManagerVisualMediaPicker(context, galleryLauncher::launch)
                                 },
                                 enabled = !busy,
                                 modifier = Modifier.weight(1f),

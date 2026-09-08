@@ -6,8 +6,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.view.Surface as AndroidSurface
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -160,6 +162,32 @@ internal fun managerPhotoCapturePermissions(): Array<String> =
 
 internal fun managerVideoAudioPermissions(): Array<String> =
     arrayOf(Manifest.permission.RECORD_AUDIO)
+
+/** Keeps every Manager gallery launcher on the same image-and-video picker request. */
+internal fun managerVisualMediaPickerRequest(): PickVisualMediaRequest =
+    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+
+/**
+ * Opens the system gallery only where Android supplies a photo-picker surface.
+ *
+ * Without this guard AndroidX falls back to the document picker, which is not the Manager
+ * gallery flow.
+ */
+internal fun launchManagerVisualMediaPicker(
+    context: Context,
+    onLaunch: (PickVisualMediaRequest) -> Unit,
+): Boolean {
+    if (!ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(context)) {
+        Toast.makeText(
+            context,
+            "Галерея недоступна на этом устройстве.",
+            Toast.LENGTH_LONG,
+        ).show()
+        return false
+    }
+    onLaunch(managerVisualMediaPickerRequest())
+    return true
+}
 
 @Composable
 private fun CameraPermissionScreen(
@@ -747,6 +775,21 @@ fun copyManagerMediaToAppCache(context: Context, source: Uri): String? = runCatc
     }
     Uri.fromFile(normalized).toString()
 }.getOrNull()
+
+/** Imports selected gallery media, retaining successes and explaining any failed imports. */
+internal fun importManagerGalleryMedia(context: Context, sources: List<Uri>): List<String> {
+    val importedUris = sources.mapNotNull { source ->
+        copyManagerPhotoToAppCache(context, source)
+    }
+    if (importedUris.size != sources.size) {
+        Toast.makeText(
+            context,
+            "Не удалось импортировать часть выбранных файлов.",
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+    return importedUris
+}
 
 /** Compatibility name for call sites that still present the shared media picker as photos. */
 fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? =
