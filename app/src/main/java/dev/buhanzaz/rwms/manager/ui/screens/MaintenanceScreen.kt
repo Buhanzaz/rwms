@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -2517,105 +2519,88 @@ private fun MaintenanceCatalogAddSheet(
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = maxHeight * 0.5f)
+                    .heightIn(max = maxHeight)
                     .widthIn(max = 600.dp),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item {
-                    Text(
-                        if (hasWork) {
-                            "Добавить работу"
-                        } else {
-                            "Добавить материал"
-                        },
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                }
-                item {
-                    Text(
-                        context.nodes.joinToString(" + ") { node -> node.name },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                item {
-                    MaintenanceQuantityField(
-                        value = quantity,
-                        onValueChange = { quantity = it },
-                        isError = quantity.isNotBlank() && !validQuantity,
-                    )
-                }
-                if (hasWork) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     item {
-                        OutlinedTextField(
-                            value = comment,
-                            onValueChange = { comment = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Комментарий") },
-                            minLines = 2,
-                            isError = !validComment,
-                            supportingText = if (validComment) null else {
-                                { Text("Комментарий не может быть длиннее 2000 символов") }
+                        Text(
+                            if (hasWork) {
+                                "Добавить работу"
+                            } else {
+                                "Добавить материал"
                             },
+                            style = MaterialTheme.typography.titleLarge,
                         )
                     }
-                    if (canAttachWorkPhotos) {
+                    item {
+                        Text(
+                            context.nodes.joinToString(" + ") { node -> node.name },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    item {
+                        MaintenanceQuantityField(
+                            value = quantity,
+                            onValueChange = { quantity = it },
+                            isError = quantity.isNotBlank() && !validQuantity,
+                        )
+                    }
+                    if (hasWork) {
                         item {
-                            MaintenanceWorkPhotoActions(
-                                onAddPhoto = { cameraOpen = true },
-                                onChooseTaken = { pickerOpen = true },
-                                onChooseGallery = {
-                                    galleryLauncher.launch(
-                                        arrayOf("image/*", "video/mp4", "video/webm"),
-                                    )
+                            OutlinedTextField(
+                                value = comment,
+                                onValueChange = { comment = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Комментарий") },
+                                minLines = 2,
+                                isError = !validComment,
+                                supportingText = if (validComment) null else {
+                                    { Text("Комментарий не может быть длиннее 2000 символов") }
                                 },
                             )
                         }
-                        item {
-                            Text(
-                                text = if (
-                                    capturedPhotoUris.isEmpty() &&
-                                    selectedLocalPhotoUris.isEmpty() &&
-                                    selectedMediaIds.isEmpty()
-                                ) {
-                                    "Фото необязательны и относятся только к этой работе."
-                                } else {
-                                    "Выбрано фото: ${
-                                        capturedPhotoUris.size +
-                                            selectedLocalPhotoUris.size +
-                                            selectedMediaIds.size
-                                    }"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        capturedPhotoUris.forEach { uri ->
-                            item(key = "new-work-photo:$uri") {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    ManagerPhotoPreview(
-                                        photoUri = uri,
-                                        modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
-                                    )
-                                    Text("Новое фото", modifier = Modifier.weight(1f))
-                                    TextButton(
-                                        onClick = { capturedPhotoUris = capturedPhotoUris - uri },
-                                    ) { Text("Убрать") }
-                                }
+                        if (canAttachWorkPhotos) {
+                            item {
+                                MaintenanceWorkPhotoActions(
+                                    onAddPhoto = { cameraOpen = true },
+                                    onChooseTaken = { pickerOpen = true },
+                                    onChooseGallery = {
+                                        galleryLauncher.launch(
+                                            arrayOf("image/*", "video/mp4", "video/webm"),
+                                        )
+                                    },
+                                )
                             }
-                        }
-                        availableLocalPhotoUris
-                            .filter(selectedLocalPhotoUris::contains)
-                            .forEach { uri ->
-                                item(key = "new-work-state-photo:$uri") {
+                            item {
+                                Text(
+                                    text = if (
+                                        capturedPhotoUris.isEmpty() &&
+                                        selectedLocalPhotoUris.isEmpty() &&
+                                        selectedMediaIds.isEmpty()
+                                    ) {
+                                        "Фото необязательны и относятся только к этой работе."
+                                    } else {
+                                        "Выбрано фото: ${
+                                            capturedPhotoUris.size +
+                                                selectedLocalPhotoUris.size +
+                                                selectedMediaIds.size
+                                        }"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            capturedPhotoUris.forEach { uri ->
+                                item(key = "new-work-photo:$uri") {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -2625,49 +2610,76 @@ private fun MaintenanceCatalogAddSheet(
                                             photoUri = uri,
                                             modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
                                         )
-                                        Text("Из фото состояния", modifier = Modifier.weight(1f))
+                                        Text("Новое фото", modifier = Modifier.weight(1f))
                                         TextButton(
-                                            onClick = {
-                                                selectedLocalPhotoUris -= uri
-                                            },
+                                            onClick = { capturedPhotoUris = capturedPhotoUris - uri },
                                         ) { Text("Убрать") }
                                     }
                                 }
                             }
-                        availablePhotos
-                            .filter { option -> option.reference.mediaId in selectedMediaIds }
-                            .forEach { option ->
-                                item(key = "new-work-media:${option.reference.mediaId}") {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    ) {
-                                        ManagerPhotoPreview(
-                                            photoUri = option.uri,
-                                            modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
-                                        )
-                                        Text("Загруженное фото", modifier = Modifier.weight(1f))
-                                        TextButton(
-                                            onClick = {
-                                                selectedMediaIds = selectedMediaIds -
-                                                    option.reference.mediaId
-                                            },
-                                        ) { Text("Убрать") }
+                            availableLocalPhotoUris
+                                .filter(selectedLocalPhotoUris::contains)
+                                .forEach { uri ->
+                                    item(key = "new-work-state-photo:$uri") {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        ) {
+                                            ManagerPhotoPreview(
+                                                photoUri = uri,
+                                                modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                            )
+                                            Text("Из фото состояния", modifier = Modifier.weight(1f))
+                                            TextButton(
+                                                onClick = {
+                                                    selectedLocalPhotoUris -= uri
+                                                },
+                                            ) { Text("Убрать") }
+                                        }
                                     }
                                 }
+                            availablePhotos
+                                .filter { option -> option.reference.mediaId in selectedMediaIds }
+                                .forEach { option ->
+                                    item(key = "new-work-media:${option.reference.mediaId}") {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        ) {
+                                            ManagerPhotoPreview(
+                                                photoUri = option.uri,
+                                                modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                            )
+                                            Text("Загруженное фото", modifier = Modifier.weight(1f))
+                                            TextButton(
+                                                onClick = {
+                                                    selectedMediaIds = selectedMediaIds -
+                                                        option.reference.mediaId
+                                                },
+                                            ) { Text("Убрать") }
+                                        }
+                                    }
+                                }
+                        } else {
+                            item {
+                                Text(
+                                    "Фото можно прикрепить после выбора одной конкретной работы.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
-                    } else {
-                        item {
-                            Text(
-                                "Фото можно прикрепить после выбора одной конкретной работы.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                         }
                     }
                 }
-                item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
                     Button(
                         onClick = {
                             onConfirm(
@@ -2686,7 +2698,9 @@ private fun MaintenanceCatalogAddSheet(
                             )
                         },
                         enabled = validQuantity && validComment,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("maintenance-catalog-add-next"),
                     ) { Text("Далее") }
                 }
             }
