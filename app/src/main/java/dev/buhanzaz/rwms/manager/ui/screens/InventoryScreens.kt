@@ -389,7 +389,10 @@ private fun InventoryNumberSearch(
             },
             singleLine = true,
             enabled = enabled,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Search,
+            ),
             keyboardActions = KeyboardActions(
                 onSearch = {
                     val exact = findExactInventoryRentalItem(rentalItems, value)

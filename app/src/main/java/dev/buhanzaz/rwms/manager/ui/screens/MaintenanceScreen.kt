@@ -1039,7 +1039,7 @@ private fun MaintenanceAssetCombobox(
                 },
                 singleLine = true,
                 enabled = enabled,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             )
             ExposedDropdownMenu(
                 expanded = expanded && feedback == null && visibleAssets.isNotEmpty(),
