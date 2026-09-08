@@ -1364,7 +1364,9 @@ fun InventoryPhotosScreen(
     onAddPhoto: (String) -> Unit,
     onSelectCoverPhoto: (String) -> Unit,
     onRemovePhoto: (String) -> Unit,
+    onFurnitureAbsent: () -> Unit,
     onAddFurniture: () -> Unit,
+    onReviewContinue: () -> Unit,
     onRequestEdit: () -> Unit,
 ) {
     if (editor == null) {
@@ -1403,13 +1405,13 @@ fun InventoryPhotosScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                // Leave room for the fixed furniture action. The last photograph can still be
+                // Leave room for the fixed furniture actions. The last photograph can still be
                 // scrolled fully above it instead of being covered by the footer.
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     top = 16.dp,
                     end = 16.dp,
-                    bottom = if (editor.readOnly) 152.dp else 96.dp,
+                    bottom = 152.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -1549,16 +1551,39 @@ fun InventoryPhotosScreen(
                     }
                 }
             }
-            InventoryStepActions(
-                primaryLabel = if (editor.readOnly) "Далее" else "Добавить мебель",
-                primaryEnabled = (editor.readOnly || photoError == null) && !busy,
-                onPrimary = onAddFurniture,
-                readOnly = editor.readOnly,
-                onRequestEdit = onRequestEdit,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            )
+            val footerModifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+            if (editor.readOnly) {
+                InventoryStepActions(
+                    primaryLabel = "Далее",
+                    primaryEnabled = !busy,
+                    onPrimary = onReviewContinue,
+                    readOnly = true,
+                    onRequestEdit = onRequestEdit,
+                    modifier = footerModifier,
+                )
+            } else {
+                Column(
+                    modifier = footerModifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onFurnitureAbsent,
+                        enabled = photoError == null && !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Мебели нет")
+                    }
+                    Button(
+                        onClick = onAddFurniture,
+                        enabled = photoError == null && !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Добавить мебель")
+                    }
+                }
+            }
         }
     }
     galleryPhotoUri?.let { initialPhoto ->
@@ -1575,69 +1600,6 @@ fun InventoryPhotosScreen(
 
 /** Keeps the inventory route and the camera route in the same ordinary photo flow. */
 internal const val INVENTORY_PHOTOS_TITLE = "Фотографии"
-
-@Composable
-fun InventoryFurnitureDecisionScreen(
-    editor: InventoryEditorState?,
-    onBack: () -> Unit,
-    onFurnitureAbsent: () -> Unit,
-    onFurniturePresent: () -> Unit,
-    onReviewContinue: () -> Unit,
-    onRequestEdit: () -> Unit,
-) {
-    if (editor == null) {
-        ManagerScreenScaffold(title = "Мебель", onBack = onBack) { padding ->
-            EmptyState(
-                title = "Проверка не найдена",
-                description = "Вернитесь к фотографиям и откройте этот шаг снова.",
-                modifier = Modifier.padding(padding),
-            )
-        }
-        return
-    }
-    ManagerScreenScaffold(title = "Мебель", onBack = onBack) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            ManagerPanel {
-                Text(
-                    if (editor.readOnly) "Мебель в бытовке" else "Есть мебель в бытовке?",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    if (editor.readOnly) {
-                        when (editor.equipmentObservationRequested) {
-                            true -> "В сохранённом осмотре мебель отмечена как присутствующая."
-                            false -> "В сохранённом осмотре мебель отмечена как отсутствующая."
-                            null -> "В сохранённом осмотре наличие мебели не указано."
-                        }
-                    } else {
-                        "Сохраните фактическое наличие мебели как доказательство осмотра. " +
-                            "Задание на комплектацию или перемещение из телефона не создаётся."
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (editor.readOnly) {
-                InventoryStepActions(
-                    primaryLabel = "Далее",
-                    primaryEnabled = true,
-                    onPrimary = onReviewContinue,
-                    readOnly = true,
-                    onRequestEdit = onRequestEdit,
-                )
-            } else {
-                OutlinedButton(onClick = onFurnitureAbsent, modifier = Modifier.fillMaxWidth()) {
-                    Text("Мебели нет")
-                }
-                Button(onClick = onFurniturePresent, modifier = Modifier.fillMaxWidth()) {
-                    Text("Мебель есть")
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun InventoryFurnitureScreen(

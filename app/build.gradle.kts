@@ -103,8 +103,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.manager"
         minSdk = 23
         targetSdk = 36
-        versionCode = 59
-        versionName = "0.3.56"
+        versionCode = 60
+        versionName = "0.3.57"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

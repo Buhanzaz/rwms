@@ -19,7 +19,6 @@ sealed class ManagerRoute(val route: String) {
     data object Inventory : ManagerRoute("manager-inventory")
     data object InventoryEditor : ManagerRoute("manager-inventory-editor")
     data object InventoryPhotos : ManagerRoute("manager-inventory-photos")
-    data object InventoryFurnitureDecision : ManagerRoute("manager-inventory-furniture-decision")
     data object InventoryFurniture : ManagerRoute("manager-inventory-furniture")
     data object InventoryCatalog : ManagerRoute("manager-inventory-catalog")
 
@@ -61,17 +60,23 @@ sealed class ManagerRoute(val route: String) {
 }
 
 /** Rebuilds the normal inventory navigation chain up to one validated recovery target. */
-internal fun managerInventoryResumeBackStack(targetRoute: String): List<String> {
-    val routes = listOf(
-        ManagerRoute.Inventory.route,
-        ManagerRoute.InventoryEditor.route,
-        ManagerRoute.InventoryPhotos.route,
-        ManagerRoute.InventoryFurnitureDecision.route,
-        ManagerRoute.InventoryFurniture.route,
-        ManagerRoute.InventoryCatalog.route,
-        ManagerRoute.InventoryInspectionDetails.route,
-        ManagerRoute.InventoryConfirmation.route,
-    )
+internal fun managerInventoryResumeBackStack(
+    targetRoute: String,
+    equipmentObservationRequested: Boolean?,
+): List<String> {
+    val routes = buildList {
+        add(ManagerRoute.Inventory.route)
+        add(ManagerRoute.InventoryEditor.route)
+        add(ManagerRoute.InventoryPhotos.route)
+        if (equipmentObservationRequested == true ||
+            targetRoute == ManagerRoute.InventoryFurniture.route
+        ) {
+            add(ManagerRoute.InventoryFurniture.route)
+        }
+        add(ManagerRoute.InventoryCatalog.route)
+        add(ManagerRoute.InventoryInspectionDetails.route)
+        add(ManagerRoute.InventoryConfirmation.route)
+    }
     val targetIndex = routes.indexOf(targetRoute).takeIf { index -> index >= 1 } ?: 1
     return routes.take(targetIndex + 1)
 }

@@ -451,7 +451,6 @@ private const val INVENTORY_DRAFT_SCHEMA_VERSION = 1
 private val INVENTORY_DRAFT_ROUTES = setOf(
     "manager-inventory-editor",
     "manager-inventory-photos",
-    "manager-inventory-furniture-decision",
     "manager-inventory-furniture",
     "manager-inventory-catalog",
     "manager-inventory-inspection-details",
@@ -460,7 +459,11 @@ private val INVENTORY_DRAFT_ROUTES = setOf(
 
 /** Rejects an obsolete or unrelated navigation target without discarding the draft itself. */
 internal fun inventoryDraftRouteOrDefault(route: String): String =
-    route.takeIf(INVENTORY_DRAFT_ROUTES::contains) ?: "manager-inventory-editor"
+    when (route) {
+        "manager-inventory-furniture-decision" -> "manager-inventory-photos"
+        in INVENTORY_DRAFT_ROUTES -> route
+        else -> "manager-inventory-editor"
+    }
 
 private fun inventoryDraftStableHash(value: String): String = MessageDigest
     .getInstance("SHA-256")

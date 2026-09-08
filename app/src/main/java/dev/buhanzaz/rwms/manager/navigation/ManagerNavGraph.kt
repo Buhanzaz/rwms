@@ -46,7 +46,6 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerHeaderState
 import dev.buhanzaz.rwms.manager.ui.screens.BackgroundUploadsScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryDashboardScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryEditorScreen
-import dev.buhanzaz.rwms.manager.ui.screens.InventoryFurnitureDecisionScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryFurnitureScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryInspectionDetailsScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryPhotosScreen
@@ -191,13 +190,18 @@ private fun AuthenticatedManagerNavGraph(
         navController,
         uiState.inventoryResumeRoute,
         uiState.inventoryEditor?.findingId,
+        uiState.inventoryEditor?.equipmentObservationRequested,
     ) {
         val resumeRoute = uiState.inventoryResumeRoute ?: return@LaunchedEffect
-        if (uiState.inventoryEditor == null) {
+        val editor = uiState.inventoryEditor
+        if (editor == null) {
             viewModel.consumeInventoryResumeRoute()
             return@LaunchedEffect
         }
-        val backStack = managerInventoryResumeBackStack(resumeRoute)
+        val backStack = managerInventoryResumeBackStack(
+            targetRoute = resumeRoute,
+            equipmentObservationRequested = editor.equipmentObservationRequested,
+        )
         navController.navigate(ManagerRoute.Inventory.route) {
             popUpTo(ManagerRoute.Home.route) { inclusive = false }
             launchSingleTop = true
@@ -213,7 +217,6 @@ private fun AuthenticatedManagerNavGraph(
             val route = when (entry.destination.route) {
                 ManagerRoute.InventoryEditor.route,
                 ManagerRoute.InventoryPhotos.route,
-                ManagerRoute.InventoryFurnitureDecision.route,
                 ManagerRoute.InventoryFurniture.route,
                 ManagerRoute.InventoryCatalog.route,
                 ManagerRoute.InventoryInspectionDetails.route,
@@ -452,16 +455,6 @@ private fun AuthenticatedManagerNavGraph(
                 onAddPhoto = viewModel::addInventoryPhoto,
                 onSelectCoverPhoto = viewModel::selectInventoryCoverPhoto,
                 onRemovePhoto = viewModel::removeInventoryPhoto,
-                onAddFurniture = {
-                    navController.navigate(ManagerRoute.InventoryFurnitureDecision.route)
-                },
-                onRequestEdit = { inventoryReinspectionDialogVisible = true },
-            )
-        }
-        composable(ManagerRoute.InventoryFurnitureDecision.route) {
-            InventoryFurnitureDecisionScreen(
-                editor = uiState.inventoryEditor,
-                onBack = navController::popManagerBackStack,
                 onFurnitureAbsent = {
                     viewModel.editInventory { current ->
                         current.copy(
@@ -475,7 +468,7 @@ private fun AuthenticatedManagerNavGraph(
                     }
                     navController.navigate(ManagerRoute.InventoryCatalog.route)
                 },
-                onFurniturePresent = {
+                onAddFurniture = {
                     viewModel.editInventory { current ->
                         current.copy(equipmentObservationRequested = true)
                     }

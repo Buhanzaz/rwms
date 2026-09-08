@@ -81,11 +81,13 @@ the server result.
 The active inventory screen filters its existing cabin cards by canonical
 number prefix as the manager types; it does not render a separate autocomplete
 list. The add action appears only when no loaded warehouse cabin number starts
-with the input. An inspection proceeds through passport, photos, furniture,
-work catalog, late inspection details, and confirmation. Characteristics,
-linoleum, sanitary counters, and inspection comment belong to that late details
-step rather than the passport. A saved inspection opens the same steps in
-read-only mode. Every step offers “Edit inspection”: supplementing enables the
+with the input. An inspection proceeds through passport and photos. On Photos,
+“No furniture” goes directly to the work catalog, while “Add furniture” opens
+the furniture composition actions; there is no intermediate furniture-presence
+decision step. Characteristics, linoleum, sanitary counters, and inspection
+comment belong to that late details step rather than the passport. A saved
+inspection follows its stored choice through the same steps in read-only mode.
+Every step offers “Edit inspection”: supplementing enables the
 retained data on the current step, while replacing returns to the passport with
 a clean inspection revision. The durable queue submits either repeat mode only
 while the finding still has the exact freshly opened revision; it may refresh
@@ -175,7 +177,10 @@ screen, while “From taken” and “From gallery” share the row below it. �
 taken” includes both local and already loaded photos from the preceding
 condition step; selecting one moves it to the work without a duplicate upload.
 “From gallery” opens the Android document picker without a preceding
-source-choice prompt. In the camera either volume key triggers the shutter once per press and
+source-choice prompt. The shared estimate, repair, and inventory pull-down photo
+carousel snaps open when pulled beyond 50%; otherwise it closes; its
+selector travels to the Add row, and tapping a frame opens the full-screen
+swipe-and-zoom viewer. In the camera either volume key triggers the shutter once per press and
 is consumed by the active activity or the owning dialog window, including when
 the task camera is hosted in a full-screen dialog. Ordinary `PHOTO` capture uses the
 low-latency CameraX policy, automatic resolution near 12 MP, and defaults HDR

@@ -130,6 +130,12 @@ class InventoryDraftStoreTest {
     }
 
     @Test
+    fun `legacy furniture decision recovery resumes at photos`() {
+        assertThat(inventoryDraftRouteOrDefault("manager-inventory-furniture-decision"))
+            .isEqualTo("manager-inventory-photos")
+    }
+
+    @Test
     fun `work-assigned server media mappings survive process-style recovery without becoming condition photos`() = runBlocking {
         val persistedSource = sourceFile("assigned-persisted.jpg", byteArrayOf(3, 2, 1))
         val uploadedSource = sourceFile("assigned-uploaded.jpg", byteArrayOf(4, 5, 6))
