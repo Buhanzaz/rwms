@@ -131,6 +131,35 @@ bindings, cutting parameters, surface layers, extra parts and drawing title
 fields. It shares the existing designer-only template revision/control fences,
 shared validation and JSONB persistence; no new database is involved.
 
+The CAD toolbar's **Материалы и чертежи** dialog calculates an explicit frozen
+source in a cancellable Worker. Designer-controlled template saves author
+material/profile bindings, cut axes/allowances/stock/kerf, surface layers and
+extras; members may read/export. Physical occurrences are evaluated once per
+size variant, regardless of renderer hiding. The report subtracts CAD openings,
+counts shared walls once and apportions crossing partitions/services to modules.
+Stairs and landings remain shared town assemblies. Missing materials or complete
+surface constructions are issues, never guessed successful quantities.
+
+A3 approval sheets include local cabin plans, A–D wall elevations, measured
+object/part coordinates and material tables; town sheets include floor plans,
+module placement and stair/landing dimensions. Frames and 185×55-mm form-1
+principal inscriptions follow the referenced ESKD layout, with blank signatures,
+selected scales and embedded Cyrillic Osifont. These are approval documents, not
+structural calculations or completed manufacturing process plans. Each sheet
+has its own designation and a separate package index. PDF/SVG/CSV ZIP exports
+include module BOMs, bar cuts/offcuts, authored sheet-piece/offcut dimensions and
+revision/content hashes. Area-based sheet purchasing is an estimate; exact
+nesting requires an authored layout. Imported STEP wall parts are not newly cut
+by CAD openings; the report explicitly flags that unresolved manufacturing case.
+The optional ПР-БК-01 layer preset records the [published Block Box build-up](https://block-box.ru/iz-proflista/blok-konteynery/standartnye/id-blok-konteyner-universalnyy-1-iz-proflista)
+without inferring frame profiles, board recipes or unplaced equipment.
+
+Implementation: [manufacturing projector](../../cabin-cad/src/manufacturing/report.ts),
+[drawing projector](../../cabin-cad/src/manufacturing/drawings.ts),
+[export package](../../cabin-cad/src/manufacturing/exportPackage.ts),
+[dialog](../../cabin-cad/src/manufacturing/ManufacturingDialog.tsx).
+Drawing-layout reference: [ГОСТ Р 2.104-2023, form 1](https://files.stroyinf.ru/Data/816/81679.pdf).
+
 `CADDocument` schema-version 2 and `MasterTemplate` schema-version 1 remain
 opaque versioned snapshots. `server/src/validation.ts` directly imports the
 framework-free shared `src/cad` and `src/master-template` validators and
