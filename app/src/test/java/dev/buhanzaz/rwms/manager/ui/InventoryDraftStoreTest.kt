@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.manager.ui
 import android.net.Uri
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.InventorySessionDto
+import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.Base64
@@ -128,6 +129,78 @@ class InventoryDraftStoreTest {
             .isEqualTo("manager-inventory-editor")
     }
 
+    @Test
+    fun `work-assigned server media mappings survive process-style recovery without becoming condition photos`() = runBlocking {
+        val persistedSource = sourceFile("assigned-persisted.jpg", byteArrayOf(3, 2, 1))
+        val uploadedSource = sourceFile("assigned-uploaded.jpg", byteArrayOf(4, 5, 6))
+        val persistedReference = MediaReferenceDto("assigned-persisted-media", 3)
+        val uploadedReference = MediaReferenceDto("assigned-uploaded-media", 3)
+        val workLine = MaintenanceLineEditorState(
+            id = "work-1",
+            catalogNodeId = "work-catalog-1",
+            description = "Замена стеновой панели",
+            lineType = "WORK",
+            unit = "шт.",
+            quantity = "1",
+            unitPrice = "0.00",
+            normativeMinutes = 30,
+            comment = "",
+            mediaReferences = listOf(persistedReference, uploadedReference),
+        )
+        val store = InventoryDraftStore(context, TestInventoryDraftCipher())
+
+        val durable = store.write(
+            firstScope,
+            snapshot(
+                editor = InventoryEditorState(
+                    findingId = "finding-a",
+                    number = "CAB-17",
+                    outcome = "MATCHED",
+                    coverPhotoUri = Uri.fromFile(persistedSource).toString(),
+                    persistedPhotoMedia = mapOf(
+                        Uri.fromFile(persistedSource).toString() to persistedReference,
+                    ),
+                    uploadedPhotoMedia = mapOf(
+                        Uri.fromFile(uploadedSource).toString() to uploadedReference,
+                    ),
+                    planLines = listOf(workLine),
+                ),
+            ),
+        )
+        persistedSource.delete()
+        uploadedSource.delete()
+
+        val restored = requireNotNull(
+            InventoryDraftStore(context, TestInventoryDraftCipher()).read(firstScope),
+        )
+        val restoredEditor = restored.editor
+        val reopenedPlan = restoredEditor.toMaintenancePlanEditor()
+
+        assertThat(durable.editor.photoUris).isEmpty()
+        assertThat(durable.editor.coverPhotoUri).isNull()
+        assertThat(restoredEditor.photoUris).isEmpty()
+        assertThat(restoredEditor.coverPhotoUri).isNull()
+        assertThat(restoredEditor.persistedPhotoMedia.values).containsExactly(persistedReference)
+        assertThat(restoredEditor.uploadedPhotoMedia.values).containsExactly(uploadedReference)
+        (restoredEditor.persistedPhotoMedia.keys + restoredEditor.uploadedPhotoMedia.keys)
+            .forEach { uri ->
+                val file = File(requireNotNull(Uri.parse(uri).path))
+                assertThat(file.isFile).isTrue()
+                assertThat(file.toPath().startsWith(context.filesDir.toPath())).isTrue()
+            }
+        assertThat(reopenedPlan.photoUris).isEmpty()
+        assertThat(reopenedPlan.readyMedia).isEmpty()
+        assertThat(reopenedPlan.readyPhotoUris).containsExactly(
+            persistedReference.mediaId,
+            restoredEditor.persistedPhotoMedia.keys.single(),
+            uploadedReference.mediaId,
+            restoredEditor.uploadedPhotoMedia.keys.single(),
+        )
+        assertThat(reopenedPlan.lines.single().mediaReferences)
+            .containsExactly(persistedReference, uploadedReference)
+            .inOrder()
+    }
+
     private fun snapshot(
         editor: InventoryEditorState = InventoryEditorState(
             findingId = "finding-a",
@@ -162,6 +235,8 @@ class InventoryDraftStoreTest {
         context.filesDir.resolve("manager-inventory-drafts").deleteRecursively()
         context.cacheDir.resolve("inspection.jpg").delete()
         context.cacheDir.resolve("walkaround.mp4").delete()
+        context.cacheDir.resolve("assigned-persisted.jpg").delete()
+        context.cacheDir.resolve("assigned-uploaded.jpg").delete()
     }
 }
 

@@ -3,7 +3,10 @@ package dev.buhanzaz.rwms.manager.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -48,26 +51,36 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +121,7 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerMenuCard
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoGalleryDialog
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoCaptureScreen
+import dev.buhanzaz.rwms.manager.ui.components.ManagerInlinePhotoPager
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoPreview
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
@@ -118,6 +132,7 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDate
 import java.util.UUID
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -125,6 +140,7 @@ import kotlinx.coroutines.launch
 private const val MAINTENANCE_STEP_COUNT = 5
 internal const val MAINTENANCE_CATALOG_PAGE_SIZE = 9
 internal const val MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS = 2_000L
+private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 48.dp
 
 /**
  * Defines manager UI or local cache state; it does not own a server-side business transition.
@@ -153,6 +169,55 @@ internal fun <T> maintenanceCatalogPage(items: List<T>, page: Int): List<T> {
         fromIndex = fromIndex.coerceAtMost(items.size),
         toIndex = (fromIndex + MAINTENANCE_CATALOG_PAGE_SIZE).coerceAtMost(items.size),
     )
+}
+
+/** Opens the catalog photo drawer only after the operator has revealed more than half of it. */
+internal fun maintenanceCatalogPhotoDrawerShouldExpand(
+    revealedHeightPx: Float,
+    maximumRevealHeightPx: Float,
+): Boolean = maximumRevealHeightPx > 0f &&
+    revealedHeightPx > maximumRevealHeightPx / 2f
+
+/** Preserves a settled drawer endpoint when the available reveal height changes. */
+internal fun maintenanceCatalogPhotoDrawerHeightAfterAvailableHeightChanged(
+    revealedHeightPx: Float,
+    maximumRevealHeightPx: Float,
+    lastSnapWasExpanded: Boolean,
+    dragInProgress: Boolean,
+): Float {
+    val normalizedMaximum = maximumRevealHeightPx.coerceAtLeast(0f)
+    return if (dragInProgress) {
+        revealedHeightPx.coerceIn(0f, normalizedMaximum)
+    } else if (lastSnapWasExpanded) {
+        normalizedMaximum
+    } else {
+        0f
+    }
+}
+
+/**
+ * Keeps the condition-photo carousel deterministic: resolved server media first, then local
+ * originals. Both editor-level condition photos and evidence moved to work lines are included,
+ * without duplicates or unresolved entries.
+ */
+internal fun maintenanceCatalogPhotoUris(editor: MaintenanceEditorState): List<String> {
+    val orderedUris = linkedSetOf<String>()
+
+    fun addResolved(uri: String?) {
+        if (!uri.isNullOrBlank()) orderedUris += uri
+    }
+
+    editor.readyMedia.forEach { reference ->
+        addResolved(editor.readyPhotoUris[reference.mediaId])
+    }
+    editor.lines.forEach { line ->
+        line.mediaReferences.forEach { reference ->
+            addResolved(editor.readyPhotoUris[reference.mediaId])
+        }
+    }
+    editor.photoUris.forEach(::addResolved)
+    editor.lines.forEach { line -> line.photoUris.forEach(::addResolved) }
+    return orderedUris.toList()
 }
 
 @Composable
@@ -1424,97 +1489,178 @@ internal fun MaintenanceCatalogStep(
         )
     }
 
+    val catalogPhotoUris = remember(
+        editor.readyMedia,
+        editor.readyPhotoUris,
+        editor.photoUris,
+        editor.lines,
+    ) {
+        maintenanceCatalogPhotoUris(editor)
+    }
+    var catalogGalleryInitialIndex by remember(editor.entityId, editor.mode) {
+        mutableStateOf<Int?>(null)
+    }
+    catalogGalleryInitialIndex?.let { initialIndex ->
+        if (catalogPhotoUris.isNotEmpty()) {
+            ManagerPhotoGalleryDialog(
+                photoUris = catalogPhotoUris,
+                initialIndex = initialIndex,
+                title = "Фото состояния",
+                onDismiss = { catalogGalleryInitialIndex = null },
+            )
+        }
+    }
+
     Column(modifier = modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-        MaintenanceCatalogModeSelector(
-            mode = mode,
-            enabled = !editor.readOnly && !uiState.busy,
-            onSelect = { selectedMode -> resetNavigation(selectedMode) },
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        // Only this middle area scrolls. The catalog controls stay fixed at the bottom.
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 2.dp),
-        ) {
-            if (uiState.maintenanceCatalogRefreshAvailable) {
-                item {
-                    Text(
-                        "Активный каталог обновлён. Обновите список явно.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-                item {
-                    OutlinedButton(
-                        onClick = onRefreshCatalog,
-                        enabled = !uiState.busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Обновить каталог") }
-                }
-            }
-            catalogMessage?.let { message ->
-                item {
-                    Text(
-                        message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (!isEmptyMaintenanceOutcome(editor) && !canContinue) {
-                item {
-                    Text(
-                        "Проверьте количество, цену и маршрут выбранных строк.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            if (editor.repairKind == "REWORK" && editor.reworkCandidates.isNotEmpty()) {
-                item {
-                    Text(
-                        "Уже выполненные позиции",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                }
-                items(
-                    editor.reworkCandidates,
-                    key = ReworkCandidateDto::lineageRootLineId,
-                ) { candidate ->
-                    val selected = editor.lines.any { line ->
-                        line.reworkDisposition == "REPEAT" &&
-                            line.lineageRootLineId == candidate.lineageRootLineId
+        var catalogPhotoDrawerObscured by remember(editor.entityId, editor.mode) {
+            mutableStateOf(false)
+        }
+        val catalogLines: @Composable (Modifier, PaddingValues) -> Unit = { linesModifier, contentPadding ->
+            // Only this middle area scrolls. The catalog controls stay fixed at the bottom.
+            LazyColumn(
+                modifier = if (catalogPhotoDrawerObscured) {
+                    linesModifier.clearAndSetSemantics {}
+                } else {
+                    linesModifier
+                },
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = contentPadding,
+                userScrollEnabled = !catalogPhotoDrawerObscured,
+            ) {
+                if (uiState.maintenanceCatalogRefreshAvailable) {
+                    item {
+                        Text(
+                            "Активный каталог обновлён. Обновите список явно.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
                     }
-                    ReworkCandidateRow(
-                        candidate = candidate,
-                        selected = selected,
-                        enabled = !editor.readOnly && !uiState.busy,
-                        onToggle = { onToggleReworkCandidate(candidate) },
-                    )
+                    item {
+                        OutlinedButton(
+                            onClick = onRefreshCatalog,
+                            enabled = !catalogPhotoDrawerObscured && !uiState.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Обновить каталог") }
+                    }
                 }
-                item {
-                    Text(
-                        "Новые позиции",
-                        style = MaterialTheme.typography.titleSmall,
+                catalogMessage?.let { message ->
+                    item {
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (!isEmptyMaintenanceOutcome(editor) && !canContinue) {
+                    item {
+                        Text(
+                            "Проверьте количество, цену и маршрут выбранных строк.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (editor.repairKind == "REWORK" && editor.reworkCandidates.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Уже выполненные позиции",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+                    items(
+                        editor.reworkCandidates,
+                        key = ReworkCandidateDto::lineageRootLineId,
+                    ) { candidate ->
+                        val selected = editor.lines.any { line ->
+                            line.reworkDisposition == "REPEAT" &&
+                                line.lineageRootLineId == candidate.lineageRootLineId
+                        }
+                        ReworkCandidateRow(
+                            candidate = candidate,
+                            selected = selected,
+                            enabled = !catalogPhotoDrawerObscured && !editor.readOnly && !uiState.busy,
+                            onToggle = { onToggleReworkCandidate(candidate) },
+                        )
+                    }
+                    item {
+                        Text(
+                            "Новые позиции",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+                }
+                items(editor.lines, key = MaintenanceLineEditorState::id) { line ->
+                    CompactMaintenanceLineRow(
+                        line = line,
+                        readOnly = catalogPhotoDrawerObscured || editor.readOnly || uiState.busy,
+                        onEdit = { editingLineId = line.id },
+                        onRemove = {
+                            onEdit { current ->
+                                current.copy(
+                                    lines = current.lines.filterNot { currentLine ->
+                                        currentLine.id == line.id
+                                    },
+                                )
+                            }
+                        },
                     )
                 }
             }
-            items(editor.lines, key = MaintenanceLineEditorState::id) { line ->
-                CompactMaintenanceLineRow(
-                    line = line,
-                    readOnly = editor.readOnly || uiState.busy,
-                    onEdit = { editingLineId = line.id },
-                    onRemove = {
-                        onEdit { current ->
-                            current.copy(
-                                lines = current.lines.filterNot { currentLine ->
-                                    currentLine.id == line.id
-                                },
-                            )
+        }
+
+        if (catalogPhotoUris.isEmpty()) {
+            MaintenanceCatalogModeSelector(
+                mode = mode,
+                enabled = !editor.readOnly && !uiState.busy,
+                onSelect = { selectedMode -> resetNavigation(selectedMode) },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            catalogLines(
+                Modifier.fillMaxWidth().weight(1f),
+                PaddingValues(vertical = 2.dp),
+            )
+        } else {
+            var drawerFooterHeightPx by remember(editor.entityId, editor.mode) {
+                mutableIntStateOf(0)
+            }
+            val density = LocalDensity.current
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                val drawerFooterHeight = with(density) { drawerFooterHeightPx.toDp() }
+                val maximumRevealHeight = (
+                    maxHeight - MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT -
+                        drawerFooterHeight
+                    ).coerceAtLeast(0.dp)
+                catalogLines(
+                    Modifier.fillMaxSize(),
+                    PaddingValues(
+                        top = MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT +
+                            drawerFooterHeight + 8.dp,
+                        bottom = 2.dp,
+                    ),
+                )
+                MaintenanceCatalogPhotoDrawer(
+                    photoUris = catalogPhotoUris,
+                    editorEntityId = editor.entityId,
+                    editorMode = editor.mode,
+                    maximumRevealHeight = maximumRevealHeight,
+                    onOpenPhoto = { index -> catalogGalleryInitialIndex = index },
+                    onObscuredChange = { obscured ->
+                        if (catalogPhotoDrawerObscured != obscured) {
+                            catalogPhotoDrawerObscured = obscured
                         }
                     },
-                )
+                    onFooterHeightChanged = { height ->
+                        if (drawerFooterHeightPx != height) drawerFooterHeightPx = height
+                    },
+                    modifier = Modifier.align(Alignment.TopCenter),
+                ) {
+                    MaintenanceCatalogModeSelector(
+                        mode = mode,
+                        enabled = !editor.readOnly && !uiState.busy,
+                        onSelect = { selectedMode -> resetNavigation(selectedMode) },
+                    )
+                }
             }
         }
 
@@ -1637,6 +1783,193 @@ internal fun MaintenanceCatalogStep(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(label)
+            }
+        }
+    }
+}
+
+/**
+ * Covers the existing catalog lines with condition photos while keeping the composition selector
+ * attached to the drawer's lower edge. The drawer has no domain state: it resets for another
+ * maintenance editor and settles only from the revealed-distance threshold.
+ */
+@Composable
+private fun MaintenanceCatalogPhotoDrawer(
+    photoUris: List<String>,
+    editorEntityId: String?,
+    editorMode: MaintenanceEditorMode,
+    maximumRevealHeight: androidx.compose.ui.unit.Dp,
+    onOpenPhoto: (Int) -> Unit,
+    onObscuredChange: (Boolean) -> Unit,
+    onFooterHeightChanged: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    footer: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current
+    val maximumRevealHeightPx = with(density) { maximumRevealHeight.toPx() }
+    var revealedHeightPx by remember(editorEntityId, editorMode) { mutableFloatStateOf(0f) }
+    var settleJob by remember(editorEntityId, editorMode) { mutableStateOf<Job?>(null) }
+    var lastSnapWasExpanded by remember(editorEntityId, editorMode) { mutableStateOf(false) }
+    var dragInProgress by remember(editorEntityId, editorMode) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val latestOnObscuredChange = rememberUpdatedState(onObscuredChange)
+
+    fun animateDrawerTo(targetHeight: Float) {
+        settleJob?.cancel()
+        settleJob = scope.launch {
+            animate(revealedHeightPx, targetHeight) { value, _ ->
+                revealedHeightPx = value
+            }
+        }
+    }
+
+    LaunchedEffect(maximumRevealHeightPx) {
+        settleJob?.cancel()
+        val targetHeight = maintenanceCatalogPhotoDrawerHeightAfterAvailableHeightChanged(
+            revealedHeightPx = revealedHeightPx,
+            maximumRevealHeightPx = maximumRevealHeightPx,
+            lastSnapWasExpanded = lastSnapWasExpanded,
+            dragInProgress = dragInProgress,
+        )
+        if (targetHeight != revealedHeightPx) {
+            if (dragInProgress) {
+                revealedHeightPx = targetHeight
+            } else {
+                animateDrawerTo(targetHeight)
+            }
+        }
+    }
+
+    fun settleDrawer() {
+        lastSnapWasExpanded = maintenanceCatalogPhotoDrawerShouldExpand(
+            revealedHeightPx = revealedHeightPx,
+            maximumRevealHeightPx = maximumRevealHeightPx,
+        )
+        val targetHeight = if (lastSnapWasExpanded) {
+            maximumRevealHeightPx
+        } else {
+            0f
+        }
+        animateDrawerTo(targetHeight)
+    }
+
+    val drawerExpanded = maintenanceCatalogPhotoDrawerShouldExpand(
+        revealedHeightPx = revealedHeightPx,
+        maximumRevealHeightPx = maximumRevealHeightPx,
+    )
+    val revealedHeightDp = with(density) { revealedHeightPx.toDp() }
+
+    val drawerObscuresLines = revealedHeightPx > 0f
+    LaunchedEffect(drawerObscuresLines) {
+        latestOnObscuredChange.value(drawerObscuresLines)
+    }
+    DisposableEffect(Unit) {
+        onDispose { latestOnObscuredChange.value(false) }
+    }
+
+    fun toggleDrawer() {
+        val targetHeight = if (drawerExpanded) {
+            0f
+        } else {
+            maximumRevealHeightPx
+        }
+        lastSnapWasExpanded = !drawerExpanded
+        animateDrawerTo(targetHeight)
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clipToBounds(),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent(PointerEventPass.Initial).changes.forEach { change ->
+                                    change.consume()
+                                }
+                            }
+                        }
+                    },
+            )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(revealedHeightDp)
+                        .clipToBounds(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (revealedHeightDp > 0.dp) {
+                        ManagerInlinePhotoPager(
+                            photoUris = photoUris,
+                            contentDescription = "Фото состояния",
+                            onOpen = onOpenPhoto,
+                            testTag = "maintenance-catalog-photo-pager",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT)
+                        .testTag("maintenance-catalog-photo-drawer-handle")
+                        .clickable(role = Role.Button, onClick = ::toggleDrawer)
+                        .pointerInput(maximumRevealHeightPx) {
+                            if (maximumRevealHeightPx <= 0f) return@pointerInput
+                            detectVerticalDragGestures(
+                                onDragStart = {
+                                    dragInProgress = true
+                                    settleJob?.cancel()
+                                },
+                                onVerticalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    revealedHeightPx = (revealedHeightPx + dragAmount)
+                                        .coerceIn(0f, maximumRevealHeightPx)
+                                },
+                                onDragEnd = {
+                                    dragInProgress = false
+                                    settleDrawer()
+                                },
+                                onDragCancel = {
+                                    dragInProgress = false
+                                    settleDrawer()
+                                },
+                            )
+                        }
+                        .semantics {
+                            contentDescription = if (drawerExpanded) {
+                                "Потяните вверх, чтобы скрыть фотографии"
+                            } else {
+                                "Потяните вниз, чтобы открыть фотографии"
+                            }
+                            stateDescription = if (drawerExpanded) {
+                                "Фотографии раскрыты"
+                            } else {
+                                "Фотографии свернуты"
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Surface(
+                        modifier = Modifier.width(36.dp).height(4.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        shape = MaterialTheme.shapes.extraSmall,
+                    ) {}
+                }
+                Box(
+                    modifier = Modifier
+                        .testTag("maintenance-catalog-photo-drawer-footer")
+                        .onSizeChanged { size -> onFooterHeightChanged(size.height) },
+                ) {
+                    footer()
+                }
             }
         }
     }

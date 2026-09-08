@@ -12,6 +12,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.network.ExplicitNullJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.network.InventorySessionDto
+import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
@@ -150,22 +151,45 @@ internal class InventoryDraftStore(
         scope: InventoryDraftScope,
         snapshot: InventoryDraftSnapshot,
     ): InventoryDraftSnapshot {
-        val sourceUris = buildList {
+        val planLineMediaIds = snapshot.editor.planLineMediaIds()
+        val requiredSourceUris = buildList {
             addAll(snapshot.editor.photoUris)
             snapshot.editor.planLines.forEach { line -> addAll(line.photoUris) }
         }.distinct()
-        val durableBySource = sourceUris.associateWith { uri -> materializeMedia(scope, uri) }
+        val durableBySource = requiredSourceUris
+            .associateWith { uri -> materializeMedia(scope, uri) }
+            .toMutableMap()
+        val planLineMediaUris = buildSet {
+            snapshot.editor.persistedPhotoMedia.forEach { (uri, reference) ->
+                if (reference.mediaId in planLineMediaIds) add(uri)
+            }
+            snapshot.editor.uploadedPhotoMedia.forEach { (uri, reference) ->
+                if (reference.mediaId in planLineMediaIds) add(uri)
+            }
+        }
+        planLineMediaUris
+            .filterNot { uri -> uri in durableBySource }
+            .forEach { uri ->
+                runCatching { materializeMedia(scope, uri) }
+                    .getOrNull()
+                    ?.let { durable -> durableBySource[uri] = durable }
+            }
         fun durable(uri: String): String = requireNotNull(durableBySource[uri])
+        fun materializedPlanLineMedia(
+            mediaByUri: Map<String, MediaReferenceDto>,
+        ) = mediaByUri
+            .filter { (uri, reference) ->
+                reference.mediaId !in planLineMediaIds || uri in durableBySource
+            }
+            .mapKeys { (uri, _) -> durableBySource[uri] ?: uri }
 
         val editor = snapshot.editor.copy(
             photoUris = snapshot.editor.photoUris.map(::durable),
-            coverPhotoUri = snapshot.editor.coverPhotoUri?.let(durableBySource::get),
-            persistedPhotoMedia = snapshot.editor.persistedPhotoMedia.mapKeys { (uri, _) ->
-                durableBySource[uri] ?: uri
-            },
-            uploadedPhotoMedia = snapshot.editor.uploadedPhotoMedia.mapKeys { (uri, _) ->
-                durableBySource[uri] ?: uri
-            },
+            coverPhotoUri = snapshot.editor.coverPhotoUri
+                ?.takeIf(snapshot.editor.photoUris::contains)
+                ?.let(durableBySource::get),
+            persistedPhotoMedia = materializedPlanLineMedia(snapshot.editor.persistedPhotoMedia),
+            uploadedPhotoMedia = materializedPlanLineMedia(snapshot.editor.uploadedPhotoMedia),
             planLines = snapshot.editor.planLines.map { line ->
                 line.copy(photoUris = line.photoUris.map(::durable))
             },
@@ -237,13 +261,20 @@ internal class InventoryDraftStore(
             val file = Uri.parse(uriText).path?.let(::File) ?: return false
             return file.isInside(mediaDirectory) && file.isFile && file.length() > 0L
         }
+        val planLineMediaIds = snapshot.editor.planLineMediaIds()
         val retained = snapshot.editor.photoUris.filter(::available)
         val retainedSet = retained.toSet()
+        fun retainedPlanLineMedia(
+            mediaByUri: Map<String, MediaReferenceDto>,
+        ) = mediaByUri.filter { (uri, reference) ->
+            uri in retainedSet ||
+                (reference.mediaId in planLineMediaIds && available(uri))
+        }
         val editor = snapshot.editor.copy(
             photoUris = retained,
             coverPhotoUri = snapshot.editor.coverPhotoUri?.takeIf(retainedSet::contains),
-            persistedPhotoMedia = snapshot.editor.persistedPhotoMedia.filterKeys(retainedSet::contains),
-            uploadedPhotoMedia = snapshot.editor.uploadedPhotoMedia.filterKeys(retainedSet::contains),
+            persistedPhotoMedia = retainedPlanLineMedia(snapshot.editor.persistedPhotoMedia),
+            uploadedPhotoMedia = retainedPlanLineMedia(snapshot.editor.uploadedPhotoMedia),
             planLines = snapshot.editor.planLines.map { line ->
                 line.copy(photoUris = line.photoUris.filter(::available))
             },
@@ -258,11 +289,20 @@ internal class InventoryDraftStore(
         scope: InventoryDraftScope,
         snapshot: InventoryDraftSnapshot,
     ) {
+        val planLineMediaIds = snapshot.editor.planLineMediaIds()
         val referenced = buildSet {
             snapshot.editor.photoUris.mapNotNullTo(this) { Uri.parse(it).path }
             snapshot.editor.planLines.forEach { line ->
                 line.photoUris.mapNotNullTo(this) { Uri.parse(it).path }
             }
+            snapshot.editor.persistedPhotoMedia
+                .filterValues { reference -> reference.mediaId in planLineMediaIds }
+                .keys
+                .mapNotNullTo(this) { Uri.parse(it).path }
+            snapshot.editor.uploadedPhotoMedia
+                .filterValues { reference -> reference.mediaId in planLineMediaIds }
+                .keys
+                .mapNotNullTo(this) { Uri.parse(it).path }
         }
         mediaDirectory(scope).listFiles()?.forEach { file ->
             if (file.absolutePath !in referenced) file.delete()
@@ -397,6 +437,14 @@ private fun File.isInside(directory: File): Boolean = runCatching {
     generateSequence(canonicalFile.parentFile) { parent -> parent.parentFile }
         .any { parent -> parent == canonicalDirectory }
 }.getOrDefault(false)
+
+/** Returns media that a work line owns, even though its URI is not a condition-photo URI. */
+private fun InventoryEditorState.planLineMediaIds(): Set<String> = planLines
+    .asSequence()
+    .filter { line -> line.lineType == "WORK" }
+    .flatMap { line -> line.mediaReferences.asSequence() }
+    .map { reference -> reference.mediaId }
+    .toSet()
 
 private const val INVENTORY_DRAFT_SCHEMA_VERSION = 1
 

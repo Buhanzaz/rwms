@@ -585,8 +585,16 @@ internal fun MaintenanceEditorState.toggleReworkCandidate(
 }
 
 internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorState {
-    val readyPhotoMedia = (persistedPhotoMedia + uploadedPhotoMedia)
-        .filterKeys(photoUris::contains)
+    val workLineMediaIds = planLines
+        .asSequence()
+        .filter { line -> line.lineType == "WORK" }
+        .flatMap { line -> line.mediaReferences.asSequence() }
+        .map(MediaReferenceDto::mediaId)
+        .toSet()
+    val resolvedPhotoMedia = (persistedPhotoMedia + uploadedPhotoMedia)
+        .filter { (uri, reference) ->
+            uri in photoUris || reference.mediaId in workLineMediaIds
+        }
     return MaintenanceEditorState(
         mode = MaintenanceEditorMode.REPAIR,
         entityId = findingId,
@@ -596,9 +604,11 @@ internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorSt
         dispatchDate = LocalDate.now().toString(),
         sourceParty = "Инвентаризация",
         lines = planLines,
-        photoUris = photoUris.filterNot(readyPhotoMedia::containsKey),
-        readyMedia = readyPhotoMedia.values.distinctBy(MediaReferenceDto::mediaId),
-        readyPhotoUris = readyPhotoMedia.entries.associate { (uri, reference) ->
+        photoUris = photoUris.filterNot(resolvedPhotoMedia::containsKey),
+        readyMedia = resolvedPhotoMedia.values
+            .filterNot { reference -> reference.mediaId in workLineMediaIds }
+            .distinctBy(MediaReferenceDto::mediaId),
+        readyPhotoUris = resolvedPhotoMedia.entries.associate { (uri, reference) ->
             reference.mediaId to uri
         },
         priority = planPriority,
@@ -615,21 +625,33 @@ internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorSt
 internal fun InventoryEditorState.withMaintenancePlanEditor(
     editor: MaintenanceEditorState,
 ): InventoryEditorState {
-    val remainingReadyMediaIds = editor.readyMedia.mapTo(linkedSetOf(), MediaReferenceDto::mediaId)
+    val workLineMediaIds = editor.lines
+        .asSequence()
+        .filter { line -> line.lineType == "WORK" }
+        .flatMap { line -> line.mediaReferences.asSequence() }
+        .mapTo(linkedSetOf(), MediaReferenceDto::mediaId)
+    val remainingReadyMediaIds = editor.readyMedia
+        .asSequence()
+        .map(MediaReferenceDto::mediaId)
+        .filterNot(workLineMediaIds::contains)
+        .toCollection(linkedSetOf())
+    val retainedMediaIds = remainingReadyMediaIds + workLineMediaIds
     val remainingPhotoUris = buildSet {
         addAll(editor.photoUris)
-        editor.readyMedia.mapNotNullTo(this) { reference ->
-            editor.readyPhotoUris[reference.mediaId]
-        }
+        editor.readyMedia
+            .filterNot { reference -> reference.mediaId in workLineMediaIds }
+            .mapNotNullTo(this) { reference ->
+                editor.readyPhotoUris[reference.mediaId]
+            }
     }
     return copy(
         photoUris = photoUris.filter(remainingPhotoUris::contains),
         coverPhotoUri = coverPhotoUri?.takeIf(remainingPhotoUris::contains),
         persistedPhotoMedia = persistedPhotoMedia.filterValues { reference ->
-            reference.mediaId in remainingReadyMediaIds
+            reference.mediaId in retainedMediaIds
         },
         uploadedPhotoMedia = uploadedPhotoMedia.filterValues { reference ->
-            reference.mediaId in remainingReadyMediaIds
+            reference.mediaId in retainedMediaIds
         },
         planLines = editor.lines,
         planStages = editor.stages,

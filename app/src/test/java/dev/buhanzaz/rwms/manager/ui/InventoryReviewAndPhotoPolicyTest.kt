@@ -72,4 +72,57 @@ class InventoryReviewAndPhotoPolicyTest {
         assertThat(updated.coverPhotoUri).isNull()
         assertThat(updated.persistedPhotoMedia).isEmpty()
     }
+
+    @Test
+    fun `work-assigned persisted and uploaded photos remain resolvable without returning to condition photos`() {
+        val persistedUri = "file:///cache/condition-saved.jpg"
+        val uploadedUri = "file:///cache/condition-uploaded.jpg"
+        val persistedReference = MediaReferenceDto("condition-saved-media", 4)
+        val uploadedReference = MediaReferenceDto("condition-uploaded-media", 4)
+        val inventory = InventoryEditorState(
+            findingId = "finding-1",
+            number = "160780",
+            outcome = "MATCHED",
+            photoUris = listOf(persistedUri, uploadedUri),
+            coverPhotoUri = persistedUri,
+            persistedPhotoMedia = mapOf(persistedUri to persistedReference),
+            uploadedPhotoMedia = mapOf(uploadedUri to uploadedReference),
+        )
+        val workLine = MaintenanceLineEditorState(
+            id = "work-1",
+            catalogNodeId = "work-catalog-1",
+            description = "Замена стеновой панели",
+            lineType = "WORK",
+            unit = "шт.",
+            quantity = "1",
+            unitPrice = "0.00",
+            normativeMinutes = 30,
+            comment = "",
+            mediaReferences = listOf(persistedReference, uploadedReference),
+        )
+
+        val updated = inventory.withMaintenancePlanEditor(
+            inventory.toMaintenancePlanEditor().copy(
+                readyMedia = emptyList(),
+                lines = listOf(workLine),
+            ),
+        )
+        val reopenedPlan = updated.toMaintenancePlanEditor()
+
+        assertThat(updated.photoUris).isEmpty()
+        assertThat(updated.coverPhotoUri).isNull()
+        assertThat(updated.persistedPhotoMedia).containsExactly(persistedUri, persistedReference)
+        assertThat(updated.uploadedPhotoMedia).containsExactly(uploadedUri, uploadedReference)
+        assertThat(reopenedPlan.photoUris).isEmpty()
+        assertThat(reopenedPlan.readyMedia).isEmpty()
+        assertThat(reopenedPlan.readyPhotoUris).containsExactly(
+            persistedReference.mediaId,
+            persistedUri,
+            uploadedReference.mediaId,
+            uploadedUri,
+        )
+        assertThat(reopenedPlan.lines.single().mediaReferences)
+            .containsExactly(persistedReference, uploadedReference)
+            .inOrder()
+    }
 }

@@ -4,6 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.FurnitureEquipmentReferenceDto
+import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState
 import dev.buhanzaz.rwms.manager.ui.MaintenanceLineEditorState
@@ -25,6 +26,103 @@ class MaintenanceCatalogUiPolicyTest {
     @Test
     fun `full catalog label requires a two second hold`() {
         assertThat(MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS).isEqualTo(2_000L)
+    }
+
+    @Test
+    fun `photo drawer opens only after more than half of its height is revealed`() {
+        assertThat(
+            maintenanceCatalogPhotoDrawerShouldExpand(
+                revealedHeightPx = 0f,
+                maximumRevealHeightPx = 240f,
+            ),
+        ).isFalse()
+        assertThat(
+            maintenanceCatalogPhotoDrawerShouldExpand(
+                revealedHeightPx = 120f,
+                maximumRevealHeightPx = 240f,
+            ),
+        ).isFalse()
+        assertThat(
+            maintenanceCatalogPhotoDrawerShouldExpand(
+                revealedHeightPx = 120.01f,
+                maximumRevealHeightPx = 240f,
+            ),
+        ).isTrue()
+        assertThat(
+            maintenanceCatalogPhotoDrawerShouldExpand(
+                revealedHeightPx = 500f,
+                maximumRevealHeightPx = 0f,
+            ),
+        ).isFalse()
+    }
+
+    @Test
+    fun `photo drawer preserves its last settled endpoint when available height changes`() {
+        assertThat(
+            maintenanceCatalogPhotoDrawerHeightAfterAvailableHeightChanged(
+                revealedHeightPx = 120f,
+                maximumRevealHeightPx = 240f,
+                lastSnapWasExpanded = true,
+                dragInProgress = false,
+            ),
+        ).isEqualTo(240f)
+        assertThat(
+            maintenanceCatalogPhotoDrawerHeightAfterAvailableHeightChanged(
+                revealedHeightPx = 120f,
+                maximumRevealHeightPx = 240f,
+                lastSnapWasExpanded = false,
+                dragInProgress = false,
+            ),
+        ).isEqualTo(0f)
+        assertThat(
+            maintenanceCatalogPhotoDrawerHeightAfterAvailableHeightChanged(
+                revealedHeightPx = 300f,
+                maximumRevealHeightPx = 240f,
+                lastSnapWasExpanded = true,
+                dragInProgress = true,
+            ),
+        ).isEqualTo(240f)
+    }
+
+    @Test
+    fun `photo drawer keeps top-level and work-assigned condition photos in deterministic order`() {
+        val firstReady = MediaReferenceDto("ready-1", 1)
+        val duplicateReady = MediaReferenceDto("ready-2", 1)
+        val missingReady = MediaReferenceDto("ready-missing", 1)
+        val blankReady = MediaReferenceDto("ready-blank", 1)
+        val assignedReady = MediaReferenceDto("ready-assigned", 1)
+        val editor = editorWithLines(
+            line(id = "work", catalogNodeId = "work", type = "WORK").copy(
+                mediaReferences = listOf(assignedReady, firstReady),
+                photoUris = listOf(
+                    "file:///cache/assigned-local.jpg",
+                    "file:///cache/ready-first.jpg",
+                ),
+            ),
+        ).copy(
+            readyMedia = listOf(firstReady, duplicateReady, missingReady, blankReady),
+            readyPhotoUris = mapOf(
+                firstReady.mediaId to "file:///cache/ready-first.jpg",
+                duplicateReady.mediaId to "file:///cache/ready-first.jpg",
+                blankReady.mediaId to "   ",
+                assignedReady.mediaId to "file:///cache/ready-assigned.jpg",
+            ),
+            photoUris = listOf(
+                "file:///cache/local-first.jpg",
+                "file:///cache/ready-first.jpg",
+                "",
+                "file:///cache/local-first.jpg",
+                "file:///cache/local-second.jpg",
+            ),
+        )
+
+        assertThat(maintenanceCatalogPhotoUris(editor)).containsExactly(
+            "file:///cache/ready-first.jpg",
+            "file:///cache/ready-assigned.jpg",
+            "file:///cache/local-first.jpg",
+            "file:///cache/local-second.jpg",
+            "file:///cache/assigned-local.jpg",
+        ).inOrder()
     }
 
     @Test
