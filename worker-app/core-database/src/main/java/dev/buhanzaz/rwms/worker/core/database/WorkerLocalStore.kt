@@ -111,7 +111,11 @@ class WorkerLocalStore @Inject constructor(
      * A stale cached version or another pending action for the same task is rejected locally.
      */
     suspend fun applyOptimisticAction(action: OptimisticAction) {
-        requireActiveLease(action.userId)
+        if (action.payload.action == "COMPLETE") {
+            requireDeferredCompletionLease(action)
+        } else {
+            requireActiveLease(action.userId)
+        }
         val now = System.currentTimeMillis()
         database.withTransaction {
             check(database.outboxDao().pendingActionCount(action.userId, action.entryId) == 0) {
@@ -164,8 +168,9 @@ class WorkerLocalStore @Inject constructor(
         sha256: String,
         variantManifestJson: String,
         reservationPayload: String,
+        completeAfterEvidence: Boolean = false,
     ) {
-        requireActiveLease(userId)
+        requireResultEvidenceLease(userId, entryId)
         val now = System.currentTimeMillis()
         val operationId = UUID.fromString(evidenceId).toString()
         database.withTransaction {
@@ -211,7 +216,97 @@ class WorkerLocalStore @Inject constructor(
                     lastError = null,
                 ),
             )
+            if (completeAfterEvidence) {
+                enqueueCompletionAfterEvidenceInTransaction(
+                    userId = userId,
+                    entryId = entryId,
+                    evidenceId = evidenceId,
+                    now = now,
+                )
+            }
         }
+    }
+
+    /**
+     * Completes a capture batch whose final transient frame was removed after earlier evidence had
+     * already been persisted. The original photo remains durable; this transaction only creates
+     * the missing replay-safe command.
+     */
+    suspend fun enqueueCompletionAfterEvidence(userId: String, entryId: String, evidenceId: String) {
+        requireResultEvidenceLease(userId, entryId)
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            val evidence = requireNotNull(database.evidenceDao().evidence(userId, evidenceId)) {
+                "Фотография больше недоступна"
+            }
+            require(evidence.entryId == entryId && evidence.state in COMPLETION_EVIDENCE_STATES) {
+                "Фотография ещё не готова для завершения"
+            }
+            enqueueCompletionAfterEvidenceInTransaction(userId, entryId, evidenceId, now)
+        }
+    }
+
+    /**
+     * Creates COMPLETE in the same Room transaction as the final confirmed photo. A process death
+     * can therefore retain an incomplete capture batch, or retain both the photo reservation and
+     * its replay-safe completion command, but never only the latter.
+     */
+    private suspend fun enqueueCompletionAfterEvidenceInTransaction(
+        userId: String,
+        entryId: String,
+        evidenceId: String,
+        now: Long,
+    ) {
+        check(database.outboxDao().pendingActionCount(userId, entryId) == 0) {
+            "Действие по этому заданию уже ожидает синхронизации"
+        }
+        val task = requireNotNull(database.taskDao().task(userId, entryId)) {
+            "Cannot queue completion for a task outside the current user cache"
+        }
+        require(task.status == "IN_PROGRESS" && !task.locallyPending) {
+            "Задание изменилось до сохранения фотографии"
+        }
+        val session = requireNotNull(database.sessionDao().session(userId)) {
+            "Сначала синхронизируйте задание"
+        }
+        val lease = requireNotNull(leaseFor(userId)) { "Сначала синхронизируйте задание" }
+        val leaseId = requireNotNull(session.leaseId) { "Офлайн-доступ ещё не подготовлен" }
+        val queuePurpose = database.categoryDao().categories(userId)
+            .firstOrNull { it.queueId == task.categoryId }
+            ?.queuePurpose
+        val payload = PendingWorkerAction(
+            operationId = UUID.randomUUID().toString(),
+            action = "COMPLETE",
+            expectedVersion = task.version,
+            workerGroupId = session.currentGroupId,
+            evidenceId = evidenceId.takeIf { queuePurpose == "LOGISTICS_DRIVER" },
+            occurredAt = java.time.Instant.ofEpochMilli(
+                lease.estimatedServerNow(SystemClock.elapsedRealtime()),
+            ).toString(),
+            offlineLeaseId = leaseId,
+        )
+        database.taskDao().markOptimistic(
+            userId = userId,
+            entryId = entryId,
+            status = "DONE",
+            optimisticVersion = task.version + 1,
+            now = now,
+        )
+        database.outboxDao().insert(
+            WorkerOutboxEntity(
+                operationId = payload.operationId,
+                userId = userId,
+                entryId = entryId,
+                kind = OUTBOX_ACTION,
+                encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload)),
+                expectedVersion = payload.expectedVersion,
+                state = OUTBOX_PENDING,
+                retryCount = 0,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+                lastError = null,
+            ),
+        )
     }
 
     /**
@@ -370,19 +465,69 @@ class WorkerLocalStore @Inject constructor(
     }
 
     /**
-     * Hides and removes only reusable projections once a lease expires. Durable
-     * encrypted outbox/evidence rows deliberately remain for their original
-     * user and are never exposed through another user's queries.
+     * Task-board accepts an assigned worker's result photo after the ordinary 24-hour lease window.
+     * The cached state is only a fail-closed UX gate; task-board still validates assignment, task
+     * state, the signed lease and capture time when it receives the reservation.
+     */
+    private suspend fun requireResultEvidenceLease(userId: String, entryId: String) {
+        val lease = requireNotNull(leaseFor(userId)) { "Сначала синхронизируйте задание" }
+        requireNotNull(currentLeaseId(userId)) { "Офлайн-доступ ещё не подготовлен" }
+        val elapsedRealtime = SystemClock.elapsedRealtime()
+        require(elapsedRealtime >= lease.elapsedRealtimeAtSyncMillis) {
+            "После перезапуска устройства синхронизируйте задание"
+        }
+        if (lease.isLeaseActive(elapsedRealtime)) return
+        requireAssignedInProgressRecovery(userId, entryId)
+    }
+
+    /**
+     * Allows an expired completion only for an already captured assigned-worker result. This keeps
+     * the ordinary monotonic lease fence for all other actions, including a freshly invented
+     * COMPLETE after device reboot or offline-cache expiry.
+     */
+    private suspend fun requireDeferredCompletionLease(action: OptimisticAction) {
+        val lease = requireNotNull(leaseFor(action.userId)) { "Сначала синхронизируйте задание" }
+        val currentLeaseId = requireNotNull(currentLeaseId(action.userId)) {
+            "Офлайн-доступ ещё не подготовлен"
+        }
+        require(action.payload.offlineLeaseId == currentLeaseId) { "Офлайн-доступ обновлён; повторите действие" }
+        val elapsedRealtime = SystemClock.elapsedRealtime()
+        require(elapsedRealtime >= lease.elapsedRealtimeAtSyncMillis) {
+            "После перезапуска устройства синхронизируйте задание"
+        }
+        if (lease.isLeaseActive(elapsedRealtime)) return
+        requireAssignedInProgressRecovery(action.userId, action.entryId)
+        require(database.evidenceDao().hasCompletionEvidence(action.userId, action.entryId)) {
+            "Для завершения после срока офлайн-доступа добавьте фотографию"
+        }
+    }
+
+    private suspend fun requireAssignedInProgressRecovery(userId: String, entryId: String) {
+        val task = requireNotNull(database.taskDao().task(userId, entryId)) {
+            "Задание больше недоступно"
+        }
+        require(task.status == "IN_PROGRESS" && !task.locallyPending) {
+            "Добавить новую фотографию можно только к заданию в работе"
+        }
+        require(database.assignmentDao().forEntry(userId, entryId).any { assignment ->
+            assignment.workerId == userId && assignment.status == "ACTIVE"
+        }) { "Сначала возьмите задание, затем можно добавить фотографию" }
+    }
+
+    /**
+     * Removes expired reusable projections but keeps only the exact assigned in-progress task or
+     * pending action required to finish a result already captured offline. This recovery surface
+     * remains account-scoped and is not permission to browse expired waiting work.
      */
     suspend fun hideExpiredCacheIfNeeded(userId: String, elapsedRealtimeMillis: Long = SystemClock.elapsedRealtime()) {
         val lease = leaseFor(userId) ?: return
         if (lease.isLeaseActive(elapsedRealtimeMillis)) return
         database.withTransaction {
-            database.categoryDao().deleteForUser(userId)
-            database.taskDao().deleteForUser(userId)
-            database.assignmentDao().deleteForUser(userId)
-            database.detailDao().deleteForUser(userId)
-            database.sessionDao().setCacheHidden(userId, true)
+            database.taskDao().deleteExpiredNonRecovery(userId)
+            database.assignmentDao().deleteForRemovedTasks(userId)
+            database.detailDao().deleteForRemovedTasks(userId)
+            database.categoryDao().deleteForRemovedTasks(userId)
+            database.sessionDao().setCacheHidden(userId, database.taskDao().tasks(userId).isEmpty())
         }
     }
 
@@ -394,6 +539,14 @@ class WorkerLocalStore @Inject constructor(
         const val EVIDENCE_CAPTURED = "CAPTURED"
         const val EVIDENCE_SUPERSEDED = "SUPERSEDED"
         const val EXPIRED_OFFLINE_LEASE_ERROR = "Действие создано вне срока offline lease"
+
+        private val COMPLETION_EVIDENCE_STATES = setOf(
+            "CAPTURED",
+            "RESERVED",
+            "UPLOADING",
+            "PROCESSING",
+            "READY",
+        )
     }
 }
 

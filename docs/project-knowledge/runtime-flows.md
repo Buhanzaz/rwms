@@ -714,18 +714,27 @@ and
    never acknowledges the journal entry: only the worker's explicit
    `Принять состояние RWMS и обновить` action closes open conflicts.
 4. Only `429`, `502`, `503`, `504` and a transport exception whose cause chain
-   contains no cancellation can request an automatic WorkManager retry.
+   contains no cancellation permit automatic failure retries. Pending evidence
+   processing also receives a bounded background follow-up; it is not classified
+   as a transport failure.
 5. WorkManager persists one jittered exponential-backoff seed and permits at
    most four total runs. Cancellation is rethrown. A durable visible conflict
    ends the background run successfully and waits for explicit acknowledgement.
-   Media/evidence that is correctly pending is not a network failure and waits
-   for a later explicit sync trigger.
+   Pending media/evidence uses the same finite run budget. New local commands and
+   photos append a follow-up behind an existing job, while ordinary foreground and
+   invalidation refreshes remain coalesced.
 6. Within one pass each task entry advances independently through prerequisite
    commands, evidence reservation, upload/finalize and completion. A conflict,
    delayed media item or terminal local failure blocks only its own entry; other
    entries still progress before the feed refresh. Completion compares the
    server READY count with the union of exact READY IDs from cached detail and
    local finalized evidence, without double-counting one photo.
+7. WorkerApp persists the final confirmed result photo and its COMPLETE command in
+   one Room transaction. Camera/navigation callbacks do not dispatch completion.
+   A partial batch retains saved photos without closing the task. Pending COMPLETE
+   remains the one home card until server acknowledgement. Lease expiry retains
+   only assigned-result and pending-command recovery, while unrelated waiting work
+   is removed and new TAKE/JOIN transitions still require a current lease.
 
 Evidence:
 [`api-client.ts`](../../panel/src/lib/api-client.ts),

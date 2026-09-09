@@ -134,17 +134,6 @@ internal fun newCameraRoute(
     fromGallery = fromGallery,
 )
 
-/** One-shot camera or gallery result delivered to the task entry that opened the capture flow. */
-internal data class CapturedEvidenceResult(
-    val entryId: String,
-    val evidenceIds: List<String>,
-    val completeAfterSave: Boolean,
-)
-
-/** Selects the final durable photo in a capture batch as the completion command's evidence. */
-internal fun CapturedEvidenceResult.completionEvidenceId(): String? =
-    evidenceIds.lastOrNull(String::isNotBlank)
-
 @Serializable
 private data object ProfileRoute : NavKey
 
@@ -180,7 +169,6 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
     LaunchedEffect(userId) { profileViewModel.bind(userId) }
     val tasksState by tasksViewModel.uiState.collectAsStateWithLifecycle()
     val profileState by profileViewModel.state.collectAsStateWithLifecycle()
-    var capturedEvidenceResult by remember { mutableStateOf<CapturedEvidenceResult?>(null) }
     val profileMonogram = displayName.trim().firstOrNull()?.uppercase() ?: "А"
     val currentTask = selectCurrentWorkerTask(
         userId = userId,
@@ -318,8 +306,6 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         profileMonogram = profileMonogram,
                         profileAvatar = profileState.avatar,
                         onProfile = ::openProfile,
-                        capturedEvidenceResult = capturedEvidenceResult,
-                        onEvidenceConsumed = { capturedEvidenceResult = null },
                         onCamera = { routeIndex, completeAfterSave ->
                             openCamera(routeIndex to completeAfterSave)
                         },
@@ -359,8 +345,6 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                     profileMonogram = profileMonogram,
                     profileAvatar = profileState.avatar,
                     onProfile = ::openProfile,
-                    capturedEvidenceResult = capturedEvidenceResult,
-                    onEvidenceConsumed = { capturedEvidenceResult = null },
                     onCamera = { routeIndex, completeAfterSave ->
                         openCamera(routeIndex to completeAfterSave)
                     },
@@ -377,14 +361,7 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
             }
             entry<CameraRoute> { route ->
                 val closeCamera = dropUnlessResumed { backStack.removeLastOrNull() }
-                val onSaved: (List<String>) -> Unit = { evidenceIds ->
-                    capturedEvidenceResult = CapturedEvidenceResult(
-                        entryId = route.entryId,
-                        evidenceIds = evidenceIds,
-                        completeAfterSave = route.completeAfterSave,
-                    )
-                    closeCamera()
-                }
+                val onSaved: (List<String>) -> Unit = { closeCamera() }
                 if (route.fromGallery) {
                     GalleryImportScreen(
                         userId = userId,
@@ -393,6 +370,7 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         onBack = closeCamera,
                         onSaved = onSaved,
                         requestSyncAfterSave = !route.completeAfterSave,
+                        completeAfterSave = route.completeAfterSave,
                     )
                 } else {
                     CameraScreen(
@@ -402,6 +380,7 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         onBack = closeCamera,
                         onSaved = onSaved,
                         requestSyncAfterSave = !route.completeAfterSave,
+                        completeAfterSave = route.completeAfterSave,
                     )
                 }
             }
@@ -471,8 +450,6 @@ private fun WorkerTaskContent(
     profileMonogram: String,
     profileAvatar: Bitmap?,
     onProfile: () -> Unit,
-    capturedEvidenceResult: CapturedEvidenceResult?,
-    onEvidenceConsumed: () -> Unit,
     onCamera: (routeIndex: Int, completeAfterSave: Boolean) -> Unit,
     onGallery: (routeIndex: Int) -> Unit,
     onMedia: (
@@ -486,16 +463,6 @@ private fun WorkerTaskContent(
     autoTakeOnOpen: Boolean = false,
     viewModel: TaskDetailViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(capturedEvidenceResult, entryId) {
-        capturedEvidenceResult?.let { result ->
-            if (result.entryId == entryId) {
-                onEvidenceConsumed()
-                if (result.completeAfterSave) {
-                    result.completionEvidenceId()?.let(viewModel::completeAfterEvidence)
-                }
-            }
-        }
-    }
     TaskDetailScreen(
         userId = userId,
         entryId = entryId,

@@ -125,6 +125,7 @@ fun CameraScreen(
     onBack: () -> Unit,
     onSaved: (evidenceIds: List<String>) -> Unit,
     requestSyncAfterSave: Boolean = true,
+    completeAfterSave: Boolean = false,
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -197,6 +198,7 @@ fun CameraScreen(
                     routeIndex,
                     files,
                     requestSyncAfterSave,
+                    completeAfterSave,
                 )
             },
         )
@@ -215,6 +217,7 @@ fun GalleryImportScreen(
     onBack: () -> Unit,
     onSaved: (evidenceIds: List<String>) -> Unit,
     requestSyncAfterSave: Boolean = true,
+    completeAfterSave: Boolean = false,
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -225,7 +228,14 @@ fun GalleryImportScreen(
         if (uris.isEmpty()) {
             onBack()
         } else {
-            viewModel.confirmGallery(userId, entryId, routeIndex, uris, requestSyncAfterSave)
+            viewModel.confirmGallery(
+                userId,
+                entryId,
+                routeIndex,
+                uris,
+                requestSyncAfterSave,
+                completeAfterSave,
+            )
         }
     }
 

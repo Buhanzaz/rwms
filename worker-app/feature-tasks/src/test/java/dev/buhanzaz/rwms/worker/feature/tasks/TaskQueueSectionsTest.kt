@@ -130,6 +130,24 @@ class TaskQueueSectionsTest {
     }
 
     @Test
+    fun `locally pending completion stays foreground while its evidence is delivered`() {
+        val completedLocally = task("completed-locally", "general", queuePosition = 2).copy(
+            status = "DONE",
+            locallyPending = true,
+        )
+
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            categories = listOf(category("general", 10, groupIds = listOf(GROUP_ID))),
+            tasks = listOf(task("waiting", "general", 1), completedLocally),
+            assignments = emptyList(),
+        )
+
+        assertThat(selected?.entryId).isEqualTo("completed-locally")
+    }
+
+    @Test
     fun `active unjoined slinger task becomes a modal candidate`() {
         val slinger = task("slinger", "logistics", queuePosition = 0).copy(
             status = "IN_PROGRESS",

@@ -71,14 +71,15 @@ internal fun workerRunDisposition(
     runAttemptCount: Int,
 ): WorkerRunDisposition = when (outcome) {
     WorkerSyncOutcome.Complete,
-    is WorkerSyncOutcome.Deferred,
     is WorkerSyncOutcome.Conflict,
     -> WorkerRunDisposition.SUCCESS
     is WorkerSyncOutcome.AuthenticationRequired,
     is WorkerSyncOutcome.UserActionRequired,
     is WorkerSyncOutcome.Failed,
     -> WorkerRunDisposition.FAILURE
-    is WorkerSyncOutcome.Retry -> {
+    is WorkerSyncOutcome.Retry,
+    is WorkerSyncOutcome.Deferred,
+    -> {
         if (WorkerSyncRetryPolicy.shouldUseWorkManagerRetry(runAttemptCount)) {
             WorkerRunDisposition.RETRY
         } else {
@@ -123,7 +124,7 @@ interface WorkerSyncEntryPoint {
 }
 
 /**
- * Coalesces external refresh demand into one connected worker sync job.
+ * Coalesces refresh demand while preserving a follow-up for newly committed local work.
  */
 @Singleton
 class WorkerSyncScheduler @Inject constructor(
@@ -134,6 +135,19 @@ class WorkerSyncScheduler @Inject constructor(
      * does not replace a job that is already running or queued.
      */
     fun request(userId: String) {
+        enqueue(userId, ExistingWorkPolicy.KEEP)
+    }
+
+    /**
+     * Queues a follow-up behind an existing run after a command or photo is durably committed.
+     * That run may already have read its outbox snapshot, so KEEP would lose the new trigger.
+     * Only durable writes append; foreground polling and invalidations remain coalesced.
+     */
+    fun requestAfterMutation(userId: String) {
+        enqueue(userId, ExistingWorkPolicy.APPEND_OR_REPLACE)
+    }
+
+    private fun enqueue(userId: String, policy: ExistingWorkPolicy) {
         val work = OneTimeWorkRequestBuilder<WorkerSyncWorker>()
             .setInputData(androidx.work.workDataOf(WorkerSyncWorker.KEY_USER_ID to userId))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -146,7 +160,7 @@ class WorkerSyncScheduler @Inject constructor(
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             uniqueName(userId),
-            ExistingWorkPolicy.KEEP,
+            policy,
             work,
         )
     }

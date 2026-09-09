@@ -88,7 +88,7 @@ class TaskDetailViewModel internal constructor(
         gateway = gateway,
         projections = projections,
         json = json,
-        requestSync = scheduler::request,
+        requestSync = scheduler::requestAfterMutation,
     )
 
     private val key = MutableStateFlow<DetailKey?>(null)
@@ -217,23 +217,6 @@ class TaskDetailViewModel internal constructor(
     }
 
     fun perform(action: String, evidenceId: String? = null) {
-        perform(action, evidenceId, allowPendingEvidence = false)
-    }
-
-    /**
-     * Queues completion immediately after camera/gallery persistence. The sync coordinator keeps
-     * the command behind evidence reservation, upload and READY processing before contacting the
-     * task-board service.
-     */
-    fun completeAfterEvidence(evidenceId: String) {
-        perform(
-            action = WorkerTaskAction.COMPLETE.wireValue,
-            evidenceId = evidenceId,
-            allowPendingEvidence = true,
-        )
-    }
-
-    private fun perform(action: String, evidenceId: String?, allowPendingEvidence: Boolean) {
         val current = key.value ?: return
         val state = uiState.value
         val task = state.task ?: return
@@ -264,18 +247,11 @@ class TaskDetailViewModel internal constructor(
                         .map { it.evidenceId },
                 )
             }
-        val selectedEvidenceId = if (
-            allowPendingEvidence &&
-            requestedAction == WorkerTaskAction.COMPLETE
-        ) {
-            queuedCompletionEvidenceId(state.queuePurpose, requireNotNull(evidenceId))
-        } else {
-            completionEvidenceId(
-                queuePurpose = state.queuePurpose,
-                readyEvidenceIds = readyEvidenceIds,
-                selectedEvidenceId = evidenceId,
-            )
-        }
+        val selectedEvidenceId = completionEvidenceId(
+            queuePurpose = state.queuePurpose,
+            readyEvidenceIds = readyEvidenceIds,
+            selectedEvidenceId = evidenceId,
+        )
         if (
             requestedAction == WorkerTaskAction.COMPLETE &&
             state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&
@@ -291,7 +267,9 @@ class TaskDetailViewModel internal constructor(
         viewModelScope.launch {
             try {
                 val lease = requireNotNull(localStore.leaseFor(current.userId)) { "Офлайн-доступ ещё не подготовлен" }
-                require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
+                if (requestedAction != WorkerTaskAction.COMPLETE) {
+                    require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
+                }
                 val payload = PendingWorkerAction(
                     operationId = UUID.randomUUID().toString(),
                     action = action,

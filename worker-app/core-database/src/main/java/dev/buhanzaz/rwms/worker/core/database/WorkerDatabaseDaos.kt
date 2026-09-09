@@ -56,6 +56,15 @@ interface WorkerCategoryDao {
 
     @Query("DELETE FROM worker_category WHERE userId = :userId")
     suspend fun deleteForUser(userId: String)
+
+    @Query(
+        """
+        DELETE FROM worker_category
+        WHERE userId = :userId
+          AND queueId NOT IN (SELECT DISTINCT categoryId FROM worker_task WHERE userId = :userId)
+        """,
+    )
+    suspend fun deleteForRemovedTasks(userId: String)
 }
 
 @Dao
@@ -81,6 +90,33 @@ interface WorkerTaskDao {
     @Query("DELETE FROM worker_task WHERE userId = :userId")
     suspend fun deleteForUser(userId: String)
 
+    /** Removes expired cache entries except active assigned work and durable action recovery state. */
+    @Query(
+        """
+        DELETE FROM worker_task
+        WHERE userId = :userId
+          AND NOT (
+            (
+              status = 'IN_PROGRESS'
+              AND EXISTS (
+                SELECT 1 FROM worker_assignment
+                WHERE worker_assignment.userId = :userId
+                  AND worker_assignment.entryId = worker_task.entryId
+                  AND worker_assignment.workerId = :userId
+                  AND worker_assignment.status = 'ACTIVE'
+              )
+            )
+            OR entryId IN (
+              SELECT entryId FROM worker_outbox
+              WHERE userId = :userId
+                AND kind = 'ACTION'
+                AND state IN ('PENDING', 'RETRY')
+            )
+          )
+        """,
+    )
+    suspend fun deleteExpiredNonRecovery(userId: String)
+
     @Query("DELETE FROM worker_task WHERE userId = :userId AND entryId = :entryId")
     suspend fun deleteForEntry(userId: String, entryId: String)
 }
@@ -96,6 +132,9 @@ interface WorkerAssignmentDao {
     @Query("SELECT * FROM worker_assignment WHERE userId = :userId AND entryId = :entryId ORDER BY assignedAt")
     fun observeForEntry(userId: String, entryId: String): Flow<List<WorkerAssignmentEntity>>
 
+    @Query("SELECT * FROM worker_assignment WHERE userId = :userId AND entryId = :entryId ORDER BY assignedAt")
+    suspend fun forEntry(userId: String, entryId: String): List<WorkerAssignmentEntity>
+
     @Query("SELECT * FROM worker_assignment WHERE userId = :userId ORDER BY entryId, assignedAt")
     fun observeAll(userId: String): Flow<List<WorkerAssignmentEntity>>
 
@@ -104,6 +143,15 @@ interface WorkerAssignmentDao {
 
     @Query("DELETE FROM worker_assignment WHERE userId = :userId")
     suspend fun deleteForUser(userId: String)
+
+    @Query(
+        """
+        DELETE FROM worker_assignment
+        WHERE userId = :userId
+          AND entryId NOT IN (SELECT entryId FROM worker_task WHERE userId = :userId)
+        """,
+    )
+    suspend fun deleteForRemovedTasks(userId: String)
 }
 
 @Dao
@@ -122,6 +170,15 @@ interface WorkerTaskDetailDao {
 
     @Query("DELETE FROM worker_task_detail WHERE userId = :userId")
     suspend fun deleteForUser(userId: String)
+
+    @Query(
+        """
+        DELETE FROM worker_task_detail
+        WHERE userId = :userId
+          AND entryId NOT IN (SELECT entryId FROM worker_task WHERE userId = :userId)
+        """,
+    )
+    suspend fun deleteForRemovedTasks(userId: String)
 
     @Query("DELETE FROM worker_task_detail WHERE userId = :userId AND entryId = :entryId")
     suspend fun deleteForEntry(userId: String, entryId: String)
@@ -214,6 +271,18 @@ interface TaskEvidenceDao {
 
     @Query("SELECT evidenceId FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
     suspend fun readyIds(userId: String, entryId: String): List<String>
+
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM task_evidence
+            WHERE userId = :userId
+              AND entryId = :entryId
+              AND state IN ('CAPTURED', 'RESERVED', 'UPLOADING', 'PROCESSING', 'READY')
+        )
+        """,
+    )
+    suspend fun hasCompletionEvidence(userId: String, entryId: String): Boolean
 
     @Query("SELECT * FROM task_evidence WHERE userId = :userId ORDER BY createdAtEpochMillis DESC")
     fun observeAll(userId: String): Flow<List<TaskEvidenceEntity>>

@@ -86,6 +86,25 @@ class TaskDetailViewModelTest {
     }
 
     @Test
+    fun `expired lease still queues completion after an already ready result`() = runTest(dispatcher) {
+        val fixture = fixture(
+            leaseExpiresAt = 0,
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            status = "IN_PROGRESS",
+            assigned = true,
+        )
+        database.evidenceDao().upsert(evidence("ready-evidence").copy(state = "READY"))
+        fixture.awaitEvidence("ready-evidence", expectedState = "READY")
+
+        fixture.viewModel.perform("COMPLETE", "ready-evidence")
+        val action = fixture.awaitAction()
+
+        assertThat(action.action).isEqualTo("COMPLETE")
+        assertThat(action.evidenceId).isEqualTo("ready-evidence")
+        assertThat(fixture.syncRequests).containsExactly(USER)
+    }
+
+    @Test
     fun `allowed action writes the exact worker entry version lease and schedules once`() = runTest(dispatcher) {
         val fixture = fixture()
 
@@ -112,16 +131,16 @@ class TaskDetailViewModelTest {
     }
 
     @Test
-    fun `completion after persisted evidence carries the pending evidence identity`() = runTest(dispatcher) {
+    fun `completion after ready evidence carries the selected evidence identity`() = runTest(dispatcher) {
         val fixture = fixture(queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE, status = "IN_PROGRESS", assigned = true)
-        database.evidenceDao().upsert(evidence("captured-evidence"))
-        fixture.awaitEvidence("captured-evidence", expectedState = "CAPTURED")
+        database.evidenceDao().upsert(evidence("ready-evidence").copy(state = "READY"))
+        fixture.awaitEvidence("ready-evidence", expectedState = "READY")
 
-        fixture.viewModel.completeAfterEvidence("captured-evidence")
+        fixture.viewModel.perform("COMPLETE", "ready-evidence")
         val action = fixture.awaitAction()
 
         assertThat(action.action).isEqualTo("COMPLETE")
-        assertThat(action.evidenceId).isEqualTo("captured-evidence")
+        assertThat(action.evidenceId).isEqualTo("ready-evidence")
         assertThat(fixture.syncRequests).containsExactly(USER)
     }
 

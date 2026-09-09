@@ -35,24 +35,9 @@ class WorkerCameraNavigationTest {
     }
 
     @Test
-    fun `gallery completion references the final photo from a durable batch`() {
-        val result = CapturedEvidenceResult(
-            entryId = "entry-1",
-            evidenceIds = listOf("evidence-1", "evidence-2", "evidence-3"),
-            completeAfterSave = true,
-        )
+    fun `completion intent remains on the capture route until camera persistence`() {
+        val route = newCameraRoute("entry-1", 2, completeAfterSave = true)
 
-        assertThat(result.completionEvidenceId()).isEqualTo("evidence-3")
-    }
-
-    @Test
-    fun `empty capture result cannot create a completion reference`() {
-        val result = CapturedEvidenceResult(
-            entryId = "entry-1",
-            evidenceIds = emptyList(),
-            completeAfterSave = true,
-        )
-
-        assertThat(result.completionEvidenceId()).isNull()
+        assertThat(route.completeAfterSave).isTrue()
     }
 }

@@ -47,7 +47,7 @@ sealed interface WorkerSyncOutcome {
     /** A bounded automatic retry is permitted for a transient dependency or transport failure. */
     data class Retry(val reason: String) : WorkerSyncOutcome
 
-    /** A server-confirmed evidence dependency is pending until a later explicit sync trigger. */
+    /** A pending evidence dependency gets a bounded background follow-up, even with the app closed. */
     data class Deferred(val reason: String) : WorkerSyncOutcome
 
     /** The gateway's token refresh opportunity was exhausted and login is required. */

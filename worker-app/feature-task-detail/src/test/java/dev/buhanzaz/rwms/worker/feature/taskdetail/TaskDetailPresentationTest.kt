@@ -685,13 +685,6 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `new completion photo is selected only for logistics`() {
-        assertThat(queuedCompletionEvidenceId("LOGISTICS_DRIVER", "evidence-1"))
-            .isEqualTo("evidence-1")
-        assertThat(queuedCompletionEvidenceId("GENERAL", "evidence-1")).isNull()
-    }
-
-    @Test
     fun `active logistics slinger can complete with a selected ready photo`() {
         val presentation = taskActionPresentation(
             currentWorkerId = "slinger",

@@ -85,6 +85,7 @@ class CameraViewModel @Inject constructor(
         routeIndex: Int,
         temporaryFiles: List<File>,
         requestSyncAfterSave: Boolean = true,
+        completeAfterSave: Boolean = false,
     ) {
         if (mutableState.value.saving) return
         val selectedFiles = remainingWorkerCameraCaptures(
@@ -92,10 +93,16 @@ class CameraViewModel @Inject constructor(
             persistedPaths = accumulatedCameraCapturePaths,
         )
         if (selectedFiles.isEmpty()) {
-            mutableState.value = if (accumulatedCameraEvidenceIds.isEmpty()) {
-                CameraUiState(error = EMPTY_CAMERA_BATCH_ERROR)
+            if (accumulatedCameraEvidenceIds.isEmpty()) {
+                mutableState.value = CameraUiState(error = EMPTY_CAMERA_BATCH_ERROR)
+            } else if (completeAfterSave) {
+                enqueueCompletionForPersistedCameraBatch(
+                    userId = userId,
+                    entryId = entryId,
+                    evidenceId = accumulatedCameraEvidenceIds.last(),
+                )
             } else {
-                CameraUiState(savedEvidenceIds = accumulatedCameraEvidenceIds.toList())
+                mutableState.value = CameraUiState(savedEvidenceIds = accumulatedCameraEvidenceIds.toList())
             }
             return
         }
@@ -105,13 +112,16 @@ class CameraViewModel @Inject constructor(
             val failures = mutableListOf<Exception>()
             try {
                 withContext(Dispatchers.IO) {
-                    selectedFiles.forEach { temporaryFile ->
+                    selectedFiles.forEachIndexed { index, temporaryFile ->
                         try {
                             val evidenceId = saveEvidence(
                                 userId,
                                 entryId,
                                 routeIndex,
                                 temporaryFile,
+                                completeAfterEvidence = completeAfterSave &&
+                                    failures.isEmpty() &&
+                                    index == selectedFiles.lastIndex,
                             )
                             saved += temporaryFile to evidenceId
                             temporaryFile.delete()
@@ -123,7 +133,7 @@ class CameraViewModel @Inject constructor(
                     }
                 }
             } catch (error: CancellationException) {
-                if (saved.isNotEmpty()) runCatching { scheduler.request(userId) }
+                if (saved.isNotEmpty()) runCatching { scheduler.requestAfterMutation(userId) }
                 throw error
             }
 
@@ -131,9 +141,9 @@ class CameraViewModel @Inject constructor(
             accumulatedCameraCapturePaths += saved.map { it.first.absolutePath }
             val syncFailure = if (
                 accumulatedCameraEvidenceIds.isNotEmpty() &&
-                (failures.isNotEmpty() || requestSyncAfterSave)
+                (failures.isNotEmpty() || requestSyncAfterSave || completeAfterSave)
             ) {
-                runCatching { scheduler.request(userId) }.exceptionOrNull()
+                runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
             } else {
                 null
             }
@@ -174,6 +184,7 @@ class CameraViewModel @Inject constructor(
         routeIndex: Int,
         uris: List<Uri>,
         requestSyncAfterSave: Boolean = true,
+        completeAfterSave: Boolean = false,
     ) {
         if (mutableState.value.saving) return
         val selectedUris = uris.toList()
@@ -187,7 +198,7 @@ class CameraViewModel @Inject constructor(
             val failures = mutableListOf<Exception>()
             try {
                 withContext(Dispatchers.IO) {
-                    selectedUris.forEach { uri ->
+                    selectedUris.forEachIndexed { index, uri ->
                         try {
                             val temporaryFile = galleryImporter.`import`(uri)
                             try {
@@ -196,6 +207,9 @@ class CameraViewModel @Inject constructor(
                                     entryId,
                                     routeIndex,
                                     temporaryFile,
+                                    completeAfterEvidence = completeAfterSave &&
+                                        failures.isEmpty() &&
+                                        index == selectedUris.lastIndex,
                                 )
                             } finally {
                                 temporaryFile.delete()
@@ -208,15 +222,15 @@ class CameraViewModel @Inject constructor(
                     }
                 }
             } catch (error: CancellationException) {
-                if (savedEvidenceIds.isNotEmpty()) runCatching { scheduler.request(userId) }
+                if (savedEvidenceIds.isNotEmpty()) runCatching { scheduler.requestAfterMutation(userId) }
                 throw error
             }
 
             val syncFailure = if (
                 savedEvidenceIds.isNotEmpty() &&
-                (failures.isNotEmpty() || requestSyncAfterSave)
+                (failures.isNotEmpty() || requestSyncAfterSave || completeAfterSave)
             ) {
-                runCatching { scheduler.request(userId) }.exceptionOrNull()
+                runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
             } else {
                 null
             }
@@ -250,9 +264,9 @@ class CameraViewModel @Inject constructor(
         entryId: String,
         routeIndex: Int,
         temporaryFile: File,
+        completeAfterEvidence: Boolean,
     ): String = withContext(Dispatchers.IO) {
         val lease = requireNotNull(localStore.leaseFor(userId)) { "Сначала синхронизируйте задание" }
-        require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
         val evidenceId = UUID.randomUUID().toString()
         val capturedAt = Instant.ofEpochMilli(
             lease.estimatedServerNow(SystemClock.elapsedRealtime()),
@@ -281,12 +295,42 @@ class CameraViewModel @Inject constructor(
                 sha256 = persisted.manifestSha256,
                 variantManifestJson = json.encodeToString(persisted.variants),
                 reservationPayload = json.encodeToString(reservation),
+                completeAfterEvidence = completeAfterEvidence,
             )
         } catch (error: Throwable) {
             fileStore.deleteBundle(persisted.originalEncryptedPath, persisted.variants)
             throw error
         }
         evidenceId
+    }
+
+    private fun enqueueCompletionForPersistedCameraBatch(
+        userId: String,
+        entryId: String,
+        evidenceId: String,
+    ) {
+        mutableState.value = CameraUiState(saving = true)
+        viewModelScope.launch {
+            val completionFailure = runCatching {
+                withContext(Dispatchers.IO) {
+                    localStore.enqueueCompletionAfterEvidence(userId, entryId, evidenceId)
+                }
+            }.exceptionOrNull()
+            if (completionFailure != null) {
+                mutableState.value = CameraUiState(
+                    persistedCameraCaptureCount = accumulatedCameraEvidenceIds.size,
+                    error = "Фотографии сохранены. Не удалось завершить задание: ${
+                        completionFailure.safeWorkerUserMessage(CAMERA_SAVE_FAILURE)
+                    }",
+                )
+                return@launch
+            }
+            val syncFailure = runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
+            mutableState.value = CameraUiState(
+                savedEvidenceIds = accumulatedCameraEvidenceIds.toList(),
+                error = syncFailure?.let { "Фотографии сохранены. ${cameraSyncFailureReason(it)}" },
+            )
+        }
     }
 }
 

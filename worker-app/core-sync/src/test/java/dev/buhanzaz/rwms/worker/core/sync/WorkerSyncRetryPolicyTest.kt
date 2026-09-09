@@ -29,10 +29,20 @@ class WorkerSyncRetryPolicyTest {
     }
 
     @Test
-    fun `only retry outcome consumes bounded WorkManager retry budget`() {
+    fun `transient failure consumes bounded WorkManager retry budget`() {
         assertThat(workerRunDisposition(WorkerSyncOutcome.Retry("offline"), runAttemptCount = 2))
             .isEqualTo(WorkerRunDisposition.RETRY)
         assertThat(workerRunDisposition(WorkerSyncOutcome.Retry("offline"), runAttemptCount = 3))
+            .isEqualTo(WorkerRunDisposition.FAILURE)
+    }
+
+    @Test
+    fun `pending evidence gets bounded background followup without another screen trigger`() {
+        assertThat(workerRunDisposition(WorkerSyncOutcome.Deferred("processing"), runAttemptCount = 0))
+            .isEqualTo(WorkerRunDisposition.RETRY)
+        assertThat(workerRunDisposition(WorkerSyncOutcome.Deferred("processing"), runAttemptCount = 2))
+            .isEqualTo(WorkerRunDisposition.RETRY)
+        assertThat(workerRunDisposition(WorkerSyncOutcome.Deferred("processing"), runAttemptCount = 3))
             .isEqualTo(WorkerRunDisposition.FAILURE)
     }
 }

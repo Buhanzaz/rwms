@@ -157,9 +157,5 @@ internal fun completionEvidenceId(
     }
 }
 
-/** Attaches the new photo only where the task-board contract requires a completion selection. */
-internal fun queuedCompletionEvidenceId(queuePurpose: String?, capturedEvidenceId: String): String? =
-    capturedEvidenceId.takeIf { queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
-
 internal const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"
 private const val REAL_ENTRY_TYPE = "REAL"

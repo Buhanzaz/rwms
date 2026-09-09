@@ -44,7 +44,10 @@ fun selectCurrentWorkerTask(
     val liveAssignments = assignments.filter(WorkerAssignmentEntity::isLive)
     val visibleTasks = tasks.asSequence()
         .filter { it.entryType == REAL_ENTRY_TYPE }
-        .filter { it.status in VISIBLE_TASK_STATUSES }
+        // A completion is optimistic before its evidence reaches READY. Keep that
+        // task in front until its durable outbox command is authoritatively
+        // retired, otherwise the board can take the next waiting task too soon.
+        .filter { it.locallyPending || it.status in VISIBLE_TASK_STATUSES }
         .filter { categoriesById.isEmpty() || it.categoryId in categoriesById }
         .filter { task ->
             val logistics = categoriesById[task.categoryId]?.queuePurpose == LOGISTICS_QUEUE_PURPOSE
@@ -65,6 +68,7 @@ fun selectCurrentWorkerTask(
         .toList()
 
     fun foregroundRank(task: WorkerTaskEntity): Int {
+        if (task.locallyPending) return -1
         val logistics = categoriesById[task.categoryId]?.queuePurpose == LOGISTICS_QUEUE_PURPOSE
         if (logistics) return 0
         val taskAssignments = liveAssignments.filter { it.entryId == task.entryId }

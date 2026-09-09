@@ -59,8 +59,9 @@ the task, notice and dialog surfaces stay lightly translucent.
 The home surface renders exactly one server-authorized card instead of a task
 board: a joined active slinger task first, then the current worker/group active
 or paused ordinary task, then the first waiting task in authoritative category
-and queue order. A local pending TAKE/JOIN remains the foreground card until an
-authoritative refresh catches up. The card is centered and bounded to 620 dp on
+and queue order. A local pending action, including COMPLETE, remains the foreground
+card until the server acknowledges it; an optimistic DONE never exposes the next
+waiting task early. The card is centered and bounded to 620 dp on
 larger windows. WorkerApp still owns no queue membership, assignment or task
 transition and has no driver work surface or driver-trip read.
 
@@ -177,8 +178,11 @@ Completing a task opens three equal-width, vertically stacked actions: CameraX,
 Android photo picker, and cancel. The picker accepts up to ten images. Every
 camera batch and every picker selection is physically oriented, converted to a
 local WebP original plus SMALL/MEDIUM/LARGE WebP upload parts, encrypted, and
-durably queued in capture or selection order before the completion callback is
-emitted. The three upload parts total
+durably queued in capture or selection order. The last successfully confirmed photo
+and its COMPLETE command enter the same Room transaction; the screen callback only
+navigates and cannot lose completion on process death. A partial batch never closes
+the task automatically. Confirming an already saved subset after removing failed
+frames queues completion directly in the durable store. The three upload parts total
 at most 1 MiB; only the original is visible in the UI. The final
 saved evidence ID is attached only where the logistics completion contract
 requires a selected photo. The sync coordinator never sends `COMPLETE` until
@@ -209,6 +213,10 @@ is invented. Worker-facing work data does not expose price/cost fields.
   A passed task `deadlineAt` does not block this completion; once task-board
   accepts it, the canonical completion fact advances the mapped repair to
   acceptance.
+  Expiring the lease removes unrelated reusable feed data but retains the current
+  assigned result task and pending-command recovery rows. New result capture and
+  COMPLETE still require an intact monotonic server-time anchor and the cached
+  current assignment; other new transitions keep their active-lease gate.
   Unique connected WorkManager work preserves prerequisite → reservation →
   upload/finalize → COMPLETE ordering independently for each entry, so evidence
   waiting or failure on one task does not block another task from progressing.
@@ -257,12 +265,15 @@ The raw transport DTO remains attached to the typed exception only for typed
 metadata and structured diagnostics. Sync uses the mapped text for outcomes,
 progress, conflicts, outbox retry reasons, and evidence review state.
 
-One unique WorkManager job performs at most four attempts: only the permitted
-transient failures return `Result.retry()`, and WorkManager uses a persisted
-jittered exponential-backoff seed. A server-confirmed pending evidence state
-completes this run and awaits a later explicit trigger. Cancellation escapes
+One unique WorkManager job performs at most four attempts: permitted transient
+failures and pending evidence processing return `Result.retry()`, using a persisted
+jittered exponential-backoff seed. Pending processing therefore receives bounded
+background follow-up without requiring the task screen to remain open. Cancellation escapes
 without scheduling another attempt. A later explicit foreground, FCM, or user
 trigger may enqueue a new job with the same durable operation identities.
+Foreground refresh and invalidation requests coalesce with existing work. A newly
+committed command or photo instead appends a follow-up, so an already running sync
+cannot consume and lose the trigger after reading its earlier outbox snapshot.
 
 Every mutable action uses the contract's version fence and a stable operation
 ID/idempotency key where defined. Evidence uses the ordered
