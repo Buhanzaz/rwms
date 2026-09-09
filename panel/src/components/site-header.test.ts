@@ -65,6 +65,9 @@ describe("resolveHeaderBreadcrumbs", () => {
     expect(
       resolveHeaderBreadcrumbs("/logistics/transfers", "", null, null)
     ).toEqual([{ title: "Перемещения" }])
+    expect(
+      resolveHeaderBreadcrumbs("/logistics/tasks", "", null, null)
+    ).toEqual([{ title: "Внутренние перемещения" }])
   })
 
   it("shows non-navigable settings context for settings sections", () => {
@@ -138,5 +141,4 @@ describe("resolveHeaderBreadcrumbs", () => {
       { title: "Продолжение" },
     ])
   })
-
 })

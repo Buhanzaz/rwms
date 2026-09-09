@@ -216,6 +216,9 @@ describe("AppSidebar collapsed desktop navigation", () => {
     ).not.toBeNull()
     expect(screen.getByRole("link", { name: "Перемещения" })).not.toBeNull()
     expect(
+      screen.getByRole("link", { name: "Внутренние перемещения" })
+    ).not.toBeNull()
+    expect(
       screen.getByRole("link", { name: "Работа с претензиями" })
     ).not.toBeNull()
   })

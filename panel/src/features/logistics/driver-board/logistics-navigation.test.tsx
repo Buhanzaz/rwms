@@ -52,6 +52,9 @@ vi.mock("@/features/booking", () => ({
 vi.mock("@/features/logistics/logistics-shipments-page", () => ({
   LogisticsShipmentsPage: () => <div data-testid="shipments-route" />,
 }))
+vi.mock("@/features/logistics/driver-board/driver-board-page", () => ({
+  DriverBoardPage: () => <div data-testid="internal-movements-route" />,
+}))
 vi.mock(
   "@/features/logistics/warehouse-transfers/warehouse-transfers-page",
   () => ({
@@ -105,73 +108,78 @@ describe("logistics navigation", () => {
   it.each([
     ["/logistics/board", "shipments-route"],
     ["/logistics/order-tasks", "shipments-route"],
-    ["/logistics/tasks", "transfers-route"],
+    ["/logistics/tasks", "internal-movements-route"],
     ["/assistant", "home-route"],
     ["/clients", "home-route"],
     ["/orders", "home-route"],
     ["/settings", "home-route"],
     ["/settings/logistics", "home-route"],
-  ])("redirects the removed RWMS route %s", async (initialPath, targetTestId) => {
-    mocks.useAuth.mockReturnValue({
-      accessToken: "panel-token",
-      currentUser,
-      logout: vi.fn(),
-    })
-    mocks.useWarehouse.mockReturnValue({
-      warehouses: [
-        {
+  ])(
+    "redirects the removed RWMS route %s",
+    async (initialPath, targetTestId) => {
+      mocks.useAuth.mockReturnValue({
+        accessToken: "panel-token",
+        currentUser,
+        logout: vi.fn(),
+      })
+      mocks.useWarehouse.mockReturnValue({
+        warehouses: [
+          {
+            id: WAREHOUSE_ID,
+            version: 0,
+            name: "Основной склад",
+            city: "Москва",
+            address: null,
+            timeZone: "Europe/Moscow",
+            active: true,
+            lifecycleState: "ACTIVE",
+            sortOrder: 0,
+          },
+        ],
+        selectedWarehouse: {
           id: WAREHOUSE_ID,
-          version: 0,
           name: "Основной склад",
           city: "Москва",
-          address: null,
-          timeZone: "Europe/Moscow",
-          active: true,
-          lifecycleState: "ACTIVE",
-          sortOrder: 0,
         },
-      ],
-      selectedWarehouse: {
-        id: WAREHOUSE_ID,
-        name: "Основной склад",
-        city: "Москва",
-      },
-      selectedWarehouseId: WAREHOUSE_ID,
-      isLoading: false,
-      error: null,
-      setSelectedWarehouseId: vi.fn(),
-      reloadWarehouses: vi.fn(),
-    })
-    mocks.getActiveInventory.mockResolvedValue(null)
+        selectedWarehouseId: WAREHOUSE_ID,
+        isLoading: false,
+        error: null,
+        setSelectedWarehouseId: vi.fn(),
+        reloadWarehouses: vi.fn(),
+      })
+      mocks.getActiveInventory.mockResolvedValue(null)
 
-    render(
-      <MemoryRouter initialEntries={[initialPath]}>
-        <QueryClientProvider
-          client={
-            new QueryClient({
-              defaultOptions: { queries: { retry: false } },
-            })
-          }
-        >
-          <ThemeProvider defaultTheme="system" storageKey="rwms-panel-theme">
-            <App />
-          </ThemeProvider>
-        </QueryClientProvider>
-      </MemoryRouter>
-    )
+      render(
+        <MemoryRouter initialEntries={[initialPath]}>
+          <QueryClientProvider
+            client={
+              new QueryClient({
+                defaultOptions: { queries: { retry: false } },
+              })
+            }
+          >
+            <ThemeProvider defaultTheme="system" storageKey="rwms-panel-theme">
+              <App />
+            </ThemeProvider>
+          </QueryClientProvider>
+        </MemoryRouter>
+      )
 
-    await screen.findByTestId(targetTestId)
-    const sidebar = document.querySelector<HTMLElement>('[data-slot="sidebar"]')
-    expect(sidebar).not.toBeNull()
-    expect(
-      within(sidebar!).queryByRole("link", { name: "Доска логистики" })
-    ).toBeNull()
-    expect(
-      within(sidebar!).queryByRole("link", { name: "Задания" })
-    ).toBeNull()
-    expect(
-      within(sidebar!).queryByRole("button", { name: "Настройки" })
-    ).toBeNull()
-    expect(screen.getByTestId(targetTestId)).toBeTruthy()
-  })
+      await screen.findByTestId(targetTestId)
+      const sidebar = document.querySelector<HTMLElement>(
+        '[data-slot="sidebar"]'
+      )
+      expect(sidebar).not.toBeNull()
+      expect(
+        within(sidebar!).queryByRole("link", { name: "Доска логистики" })
+      ).toBeNull()
+      expect(
+        within(sidebar!).queryByRole("link", { name: "Задания" })
+      ).toBeNull()
+      expect(
+        within(sidebar!).queryByRole("button", { name: "Настройки" })
+      ).toBeNull()
+      expect(screen.getByTestId(targetTestId)).toBeTruthy()
+    }
+  )
 })

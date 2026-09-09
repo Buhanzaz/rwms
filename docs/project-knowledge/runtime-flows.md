@@ -2478,10 +2478,12 @@ and
    projection. The owner projection retains operation, address/coordinates,
    contacts, client wishes, actual scheduled date, cabins and per-cabin
    desired/actual furniture, movement-task state and readiness. The active Panel
-   uses dated shipment, return and transfer pages. Its retired `/logistics/board`
-   and `/logistics/order-tasks` routes redirect to shipments; `/logistics/tasks`
-   redirects to transfers. The disconnected board implementations were removed,
-   while shared API/model consumers remain. Board enrichment performs at most one asset order read
+   uses dated shipment, return and transfer pages. `Logistics → Internal movements`
+   (`/logistics/tasks`) separately shows repair delivery, capital-production movement,
+   pending capital repairs and repair places under the existing date/promotion rules.
+   Opening the page creates no driver or repair work; rental trips remain on their
+   dedicated pages. Its retired `/logistics/board` and `/logistics/order-tasks`
+   routes still redirect to shipments. Board enrichment performs at most one asset order read
    per distinct rental order; an unavailable owner snapshot is explicit rather
    than false readiness. The public board publishes only warehouse-local
    current/future columns; overdue rolling maintenance cards are folded into

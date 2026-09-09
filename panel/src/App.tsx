@@ -22,6 +22,7 @@ import { EquipmentWriteOffsPage } from "@/features/write-offs/equipment-write-of
 import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-page"
 import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
 import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
+import { DriverBoardPage } from "@/features/logistics/driver-board/driver-board-page"
 import {
   BookingCatalogPage,
   BookingContinuePage,
@@ -260,7 +261,7 @@ function AppLayout() {
                   <Route path="/acceptance" element={<AcceptancePage />} />
                   <Route
                     path="/logistics/tasks"
-                    element={<Navigate to="/logistics/transfers" replace />}
+                    element={<DriverBoardPage />}
                   />
                   <Route
                     path="/logistics/board"
@@ -316,7 +317,6 @@ function AppLayout() {
                           "/repairs",
                           "/task-board",
                           "/acceptance",
-                          "/logistics/tasks",
                           "/logistics/board",
                           "/logistics/order-tasks",
                           "/logistics/returns",

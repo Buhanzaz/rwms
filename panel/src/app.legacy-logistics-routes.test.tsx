@@ -50,6 +50,9 @@ vi.mock("@/features/booking", () => ({
 vi.mock("@/features/logistics/logistics-shipments-page", () => ({
   LogisticsShipmentsPage: () => <div data-testid="shipments-route" />,
 }))
+vi.mock("@/features/logistics/driver-board/driver-board-page", () => ({
+  DriverBoardPage: () => <div data-testid="internal-movements-route" />,
+}))
 vi.mock(
   "@/features/logistics/warehouse-transfers/warehouse-transfers-page",
   () => ({
@@ -155,7 +158,6 @@ afterEach(() => {
 
 describe("legacy RWMS logistics routes", () => {
   it.each([
-    ["/logistics/tasks", "/logistics/transfers", "transfers-route"],
     ["/logistics/board", "/logistics/shipments", "shipments-route"],
     ["/logistics/order-tasks", "/logistics/shipments", "shipments-route"],
   ])(
@@ -179,4 +181,18 @@ describe("legacy RWMS logistics routes", () => {
       ).toBeNull()
     }
   )
+
+  it("opens the internal movements board", async () => {
+    renderApp("/logistics/tasks")
+
+    await screen.findByTestId("internal-movements-route")
+    expect(screen.getByTestId("route-path").textContent).toBe(
+      "/logistics/tasks"
+    )
+    const sidebar = document.querySelector<HTMLElement>('[data-slot="sidebar"]')
+    expect(sidebar).not.toBeNull()
+    expect(
+      within(sidebar!).getByRole("link", { name: "Внутренние перемещения" })
+    ).not.toBeNull()
+  })
 })

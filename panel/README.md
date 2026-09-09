@@ -669,9 +669,11 @@ contexts and screens are usable.
   shipment fields and are rejected explicitly when required fields are missing
   or contain shipment data; the panel never fabricates a successful transfer.
 - The retired `/logistics/board` and `/logistics/order-tasks` URLs redirect to
-  `/logistics/shipments`; `/logistics/tasks` redirects to `/logistics/transfers`.
-  Their disconnected board implementations and dedicated tests have been removed.
-  The shared driver-board API/model remain available to supported consumers.
+  `/logistics/shipments`. `/logistics/tasks` is the `Внутренние перемещения`
+  board: it shows only delivery-to-repair, removal-from-repair, capital-to-production
+  and manual general-movement cards, never rental shipment/return or interwarehouse
+  transfer trips. Reading the board does not create or promote work; its existing
+  fenced/manual scheduling, pinning and capital-repair actions remain explicit.
 
 See the [canonical logistics contract](../contracts/openapi/logistics-service.yaml),
 [active routes](src/App.tsx),

@@ -21,6 +21,7 @@ const routeTitles = [
   { path: "/logistics/returns", title: "Возврат из аренды" },
   { path: "/logistics/shipments", title: "Отгрузка в аренду" },
   { path: "/logistics/transfers", title: "Перемещения" },
+  { path: "/logistics/tasks", title: "Внутренние перемещения" },
   { path: "/estimates", title: "Сметы" },
   { path: "/repairs", title: "Ремонты" },
   { path: "/task-board", title: "Доска задач" },
@@ -91,6 +92,10 @@ export function resolveHeaderBreadcrumbs(
 
   if (pathname === "/logistics/transfers") {
     return [{ title: "Перемещения" }]
+  }
+
+  if (pathname === "/logistics/tasks") {
+    return [{ title: "Внутренние перемещения" }]
   }
 
   if (pathname === "/settings/warehouses") {
