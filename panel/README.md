@@ -146,6 +146,12 @@ contexts and screens are usable.
   entity, and filter inputs. The server stays authoritative.
 - The selected warehouse is a non-authoritative local UI preference. It is
   revalidated against the profile returned after authentication.
+- The header bell reads worker problem reports for the selected warehouse through
+  `/api/task-board/warehouses/{warehouseId}/task-problem-reports`. It refreshes every
+  15 seconds, pages older reports explicitly and shows comments, authors and protected
+  photos. Unread counts and read receipts belong to the signed-in user; acknowledging
+  a report refreshes only that user's warehouse report query. Pending photos and
+  unavailable reads remain visible, never fabricated as successful or empty results.
 - `/settings/warehouses` is presented as **Objects** and edits the warehouse-service aggregate
   directly. The form persists independent production/main checkboxes or one representative parent,
   uses the shared IANA timezone selector with a visible UTC offset, and exposes lifecycle/timezone

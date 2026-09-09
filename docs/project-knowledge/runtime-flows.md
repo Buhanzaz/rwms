@@ -2244,6 +2244,14 @@ receipt under USER/read/warehouse-VIEW authorization. Later attachment readiness
 does not reset that receipt. Both client surfaces use `/api/task-board/**` through
 the existing public gateway; no command orchestration moves into the panel.
 
+The panel header bell polls the selected warehouse every 15 seconds and loads
+older cursor pages on request. Its cache is scoped by user and warehouse;
+explicit acknowledgement invalidates only that report query. Comments, worker
+and task snapshots remain separate from pending/ready photo presentation.
+Protected previews and full-photo viewing use the existing authenticated media
+facilities. Missing authentication, warehouse selection and read failures have
+explicit UI states rather than an invented empty inbox.
+
 Evidence: [task-board contract](../../contracts/openapi/task-board-service.yaml),
 [owning service](../../services/task-board-service/README.md), and
 [PostgreSQL/API checks](../../services/task-board-service/src/test/java/dev/buhanzaz/rwms/taskboard/WorkerProblemReportIntegrationTest.java).

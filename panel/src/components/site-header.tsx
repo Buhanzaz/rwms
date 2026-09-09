@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { resolveHeaderBreadcrumbs } from "@/components/site-header-breadcrumbs"
 import { canShowWarehouseHtmlImport } from "@/components/site-header-html-import-access"
 import { EquipmentItemCountBadge } from "@/features/equipment/equipment-item-count-badge"
+import { TaskProblemReportsBell } from "@/features/task-board/task-problem-reports-bell"
 import { useAuth } from "@/features/auth/use-auth"
 import { HtmlImportHeaderAction } from "@/features/rental-items/html-import/html-import-workspace"
 import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
@@ -105,6 +106,11 @@ export function SiteHeader() {
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        <TaskProblemReportsBell
+          accessToken={accessToken}
+          warehouseId={selectedWarehouse?.id ?? null}
+          userId={currentUser?.id ?? null}
+        />
         {canImportWarehouseHtml && selectedWarehouse ? (
           <HtmlImportHeaderAction
             warehouseId={selectedWarehouse.id}
