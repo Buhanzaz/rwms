@@ -61,10 +61,11 @@ Cabin CAD browser -> /api/cad/v1/**
 The browser must never receive an internal service address, `CAD_SERVICE_URL`,
 or a direct `/api/internal/**` route. `/health` is a local service check, not a
 browser collaboration endpoint. [`CadApi`](../../cabin-cad/src/collaboration/api.ts)
-uses only the same-origin `/api/cad/v1/**` paths, `no-store` reads and Bearer
-authentication. The development Vite proxy is opt-in through
-`CAD_DEV_GATEWAY_URL`; it preserves those public paths rather than supplying a
-browser service address. Nginx includes
+uses only the same-origin `/api/cad/v1/**` paths and `no-store` reads. Account
+requests use Bearer JWT authentication; an accepted guest uses the separate
+`CadGuest projectId.invitationId.token` authorization scheme. The development
+Vite proxy is opt-in through `CAD_DEV_GATEWAY_URL`; it preserves those public
+paths rather than supplying a browser service address. Nginx includes
 `/etc/nginx/snippets/rwms-cad-api.conf` before generic API routing; its CAD
 location allows 80 MiB bodies and uses 50-second proxy read/send timeouts. The
 gateway receives the private CAD upstream through `CAD_SERVICE_URL`.
@@ -74,8 +75,10 @@ The interactive OIDC client is `rwms-cad`, with callback
 with `cad.project`; issuer, audience, signature, `exp`, `iat` and `sub` are
 checked before current project membership is resolved. Invitation acceptance is
 public. Its signed capability creates a stable guest subject scoped to that
-project and then acts as the guest Bearer credential. The service rechecks the
-capability, current membership and revocation for every protected guest request.
+project and then acts as its `CadGuest` credential. The gateway admits only the
+strict capability shape without interpreting it as a JWT; cad-service rechecks
+the signature, accepted identity, current membership and revocation for every
+protected guest request.
 The browser uses Authorization Code with PKCE through `oidc-client-ts` only for
 account access; OIDC state and the guest capability are tab-scoped.
 
