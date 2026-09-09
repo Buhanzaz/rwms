@@ -105,7 +105,7 @@ class NativeLoginScreenTest {
     }
 
     @Test
-    fun `logo keeps its dimensions when the IME resizes the login viewport`() {
+    fun `logo stays aligned with the form when the IME resizes the login viewport`() {
         var viewportHeight by mutableIntStateOf(720)
         compose.setContent {
             RwmsWorkerTheme {
@@ -123,12 +123,31 @@ class NativeLoginScreenTest {
             }
         }
 
-        val sizeBeforeIme = compose.onNodeWithTag("worker-login-logo")
-            .fetchSemanticsNode().size
-        compose.runOnIdle { viewportHeight = 120 }
-        val sizeWithIme = compose.onNodeWithTag("worker-login-logo")
-            .fetchSemanticsNode().size
+        val logoBeforeIme = compose.onNodeWithTag("worker-login-logo")
+            .fetchSemanticsNode().boundsInRoot
+        val loginBeforeIme = compose.onNodeWithTag("worker-login")
+            .fetchSemanticsNode().boundsInRoot
+        val submitBeforeIme = compose.onNodeWithTag("worker-login-submit")
+            .fetchSemanticsNode().boundsInRoot
+        assertThat(logoBeforeIme.width).isWithin(1f).of(loginBeforeIme.width)
+        assertThat(logoBeforeIme.width).isWithin(1f).of(submitBeforeIme.width)
+        assertThat(logoBeforeIme.bottom).isAtMost(loginBeforeIme.top)
+        val logoToFieldGap = loginBeforeIme.top - logoBeforeIme.bottom
 
-        assertThat(sizeWithIme).isEqualTo(sizeBeforeIme)
+        compose.runOnIdle { viewportHeight = 120 }
+        val logoWithSmallIme = compose.onNodeWithTag("worker-login-logo")
+            .fetchSemanticsNode().boundsInRoot
+        assertThat(logoWithSmallIme.size).isEqualTo(logoBeforeIme.size)
+
+        compose.runOnIdle { viewportHeight = 420 }
+        val logoWithIme = compose.onNodeWithTag("worker-login-logo")
+            .fetchSemanticsNode().boundsInRoot
+        val loginWithIme = compose.onNodeWithTag("worker-login").fetchSemanticsNode().boundsInRoot
+        val submitWithIme = compose.onNodeWithTag("worker-login-submit")
+            .fetchSemanticsNode().boundsInRoot
+        assertThat(logoWithIme.width).isWithin(1f).of(loginWithIme.width)
+        assertThat(logoWithIme.width).isWithin(1f).of(submitWithIme.width)
+        assertThat(logoWithIme.bottom).isAtMost(loginWithIme.top)
+        assertThat(loginWithIme.top - logoWithIme.bottom).isWithin(1f).of(logoToFieldGap)
     }
 }

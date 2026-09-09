@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.worker.feature.login
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -76,93 +77,103 @@ fun LoginScreen(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    Box(
-        modifier = Modifier.fillMaxSize().testTag("worker-login-screen"),
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .testTag("worker-login-screen"),
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            // The IME may reduce the viewport height. Keep the logo width based on the screen
-            // width so it moves with the viewport without being scaled down.
-            val logoWidth = minOf(maxWidth, 330.dp)
-            WorkerStoreLogo(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .requiredSize(width = logoWidth, height = logoWidth * (96f / 234f))
-                    .testTag("worker-login-logo"),
-            )
+        // The logo and form share one scroll owner. This keeps their fixed relationship when
+        // the IME reduces the viewport instead of allowing the logo to fall behind the fields.
+        val contentWidth = (minOf(maxWidth, 520.dp) - 76.dp).coerceAtLeast(0.dp)
+        val density = LocalDensity.current
+        val horizontalTravelPx = with(density) { (contentWidth + 80.dp).toPx() }
+        val verticalTravelPx = with(density) { 220.dp.toPx() }
+        val usernameOffset = remember(horizontalTravelPx) { Animatable(-horizontalTravelPx) }
+        val passwordOffset = remember(horizontalTravelPx) { Animatable(horizontalTravelPx) }
+        val buttonOffset = remember(verticalTravelPx) { Animatable(verticalTravelPx) }
+        val appearance = remember { Animatable(0f) }
+        var formReady by remember { mutableStateOf(false) }
+
+        LaunchedEffect(horizontalTravelPx, verticalTravelPx) {
+            coroutineScope {
+                launch {
+                    usernameOffset.animateTo(
+                        0f,
+                        tween(
+                            WorkerLoginAnimationDurationMillis,
+                            easing = LinearOutSlowInEasing,
+                        ),
+                    )
+                }
+                launch {
+                    passwordOffset.animateTo(
+                        0f,
+                        tween(
+                            WorkerLoginAnimationDurationMillis,
+                            easing = LinearOutSlowInEasing,
+                        ),
+                    )
+                }
+                launch {
+                    buttonOffset.animateTo(
+                        0f,
+                        tween(
+                            WorkerLoginAnimationDurationMillis,
+                            easing = LinearOutSlowInEasing,
+                        ),
+                    )
+                }
+                launch {
+                    appearance.animateTo(
+                        1f,
+                        tween(
+                            WorkerLoginAnimationDurationMillis,
+                            easing = LinearOutSlowInEasing,
+                        ),
+                    )
+                }
+            }
+            formReady = true
         }
 
-        BoxWithConstraints(
+        fun submit() {
+            if (!formReady || isSubmitting || username.isBlank() || password.isBlank()) return
+            focusManager.clearFocus()
+            keyboardController?.hide()
+            onLogin(username.trim(), password)
+        }
+
+        Column(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding()
+                .height(maxHeight)
+                .verticalScroll(rememberScrollState())
                 .padding(start = 38.dp, end = 38.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            val density = LocalDensity.current
-            val horizontalTravelPx = with(density) { (maxWidth + 80.dp).toPx() }
-            val verticalTravelPx = with(density) { 220.dp.toPx() }
-            val usernameOffset = remember(horizontalTravelPx) { Animatable(-horizontalTravelPx) }
-            val passwordOffset = remember(horizontalTravelPx) { Animatable(horizontalTravelPx) }
-            val buttonOffset = remember(verticalTravelPx) { Animatable(verticalTravelPx) }
-            val appearance = remember { Animatable(0f) }
-            var formReady by remember { mutableStateOf(false) }
-
-            LaunchedEffect(horizontalTravelPx, verticalTravelPx) {
-                coroutineScope {
-                    launch {
-                        usernameOffset.animateTo(
-                            0f,
-                            tween(
-                                WorkerLoginAnimationDurationMillis,
-                                easing = LinearOutSlowInEasing,
-                            ),
-                        )
-                    }
-                    launch {
-                        passwordOffset.animateTo(
-                            0f,
-                            tween(
-                                WorkerLoginAnimationDurationMillis,
-                                easing = LinearOutSlowInEasing,
-                            ),
-                        )
-                    }
-                    launch {
-                        buttonOffset.animateTo(
-                            0f,
-                            tween(
-                                WorkerLoginAnimationDurationMillis,
-                                easing = LinearOutSlowInEasing,
-                            ),
-                        )
-                    }
-                    launch {
-                        appearance.animateTo(
-                            1f,
-                            tween(
-                                WorkerLoginAnimationDurationMillis,
-                                easing = LinearOutSlowInEasing,
-                            ),
-                        )
-                    }
-                }
-                formReady = true
+            Box(
+                modifier = Modifier
+                    .requiredSize(
+                        width = contentWidth,
+                        height = contentWidth * (96f / 234f),
+                    )
+                    .testTag("worker-login-logo"),
+            ) {
+                WorkerStoreLogo(
+                    modifier = Modifier.matchParentSize(),
+                    horizontalPadding = 0.dp,
+                )
             }
-
-            fun submit() {
-                if (!formReady || isSubmitting || username.isBlank() || password.isBlank()) return
-                focusManager.clearFocus()
-                keyboardController?.hide()
-                onLogin(username.trim(), password)
-            }
+            Spacer(Modifier.height(24.dp))
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .graphicsLayer {
                         alpha = appearance.value
                         scaleX = 0.92f + appearance.value * 0.08f
