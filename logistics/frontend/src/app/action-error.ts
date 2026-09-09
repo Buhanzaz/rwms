@@ -16,7 +16,7 @@ const conflictTitles: Readonly<Record<string, string>> = {
   DRIVER_SHIFT_OVERLAP: 'Смены водителя пересекаются',
   VEHICLE_SHIFT_OVERLAP: 'Машина уже занята в смене',
   CATALOG_VERSION_CONFLICT: 'Смена уже изменена',
-  DATABASE_CONSTRAINT_VIOLATION: 'Объект используется в сохранённом плане',
+  DATABASE_CONSTRAINT_VIOLATION: 'Изменение не сохранено',
   CONTRACTOR_HANDOFF_REVIEW_REQUIRED: 'Передача требует проверки',
 };
 

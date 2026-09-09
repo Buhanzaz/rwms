@@ -41,6 +41,24 @@ describe('action error feedback', () => {
     expect(`${feedback.title} ${feedback.detail}`).not.toMatch(/manual|cycle|capacity|HTTP|shift/iu);
   });
 
+  it('does not present a workload database conflict as deletion of a historical shift', () => {
+    const error = new ApiError(409, {
+      code: 'DATABASE_CONSTRAINT_VIOLATION',
+      detail: 'The requested change conflicts with existing logistics data',
+      instance: '/api/warehouses/warehouse-1/generate-workload',
+    }, 'HTTP 409');
+
+    const feedback = actionErrorFeedback(error);
+
+    expect(feedback).toEqual({
+      tone: 'warning',
+      title: 'Изменение не сохранено',
+      detail: 'Изменение конфликтует с текущими данными. Обновите страницу и повторите действие. Если ошибка сохранится, свяжитесь с администратором.',
+      refreshPlan: false,
+    });
+    expect(`${feedback.title} ${userFacingErrorDetail(error)}`).not.toMatch(/смен|маршрут|удал|HTTP|database/iu);
+  });
+
   it('never exposes an upstream HTTP 400 from logistics settings', () => {
     const feedback = actionErrorFeedback(new ApiError(400, {
       code: 'RWMS_REQUEST_FAILED',
