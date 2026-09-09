@@ -69,6 +69,7 @@ import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureReconciliationIntent;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
+import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovement;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMediaFactProjection;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
@@ -85,6 +86,7 @@ import dev.buhanzaz.rwms.inventory.repository.FindingMediaReferenceRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryExpectedItemRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanEntryRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryMembershipMovementRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryMediaFactProjectionRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository;
@@ -160,6 +162,7 @@ class InventoryReadProjectionIntegrationTest {
 
   @Autowired InventoryApplicationService service;
   @Autowired InventoryFindingRepository findings;
+  @Autowired InventoryMembershipMovementRepository membershipMovements;
   @Autowired InventoryMediaFactProjectionRepository mediaFacts;
   @Autowired InventoryExpectedItemRepository expectedItems;
   @Autowired InventoryFinalPlanEntryRepository finalPlanEntries;
@@ -4400,7 +4403,7 @@ class InventoryReadProjectionIntegrationTest {
   @EnumSource(
       value = FindingOrigin.class,
       names = {"ADDED_NEW", "ADDED_USED"})
-  void createsInventoryAssetWithOpaqueActorEventAndCurrentSessionRevision(FindingOrigin origin) {
+  void createsInventoryAssetWithoutMembershipMovements(FindingOrigin origin) {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
@@ -4447,14 +4450,10 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(created.expectedSnapshot()).isNull();
     SessionView session = service.session(jwt(), inventoryId);
     assertThat(session.sessionRevision()).isEqualTo(1);
-    assertThat(session.membershipMovements())
-        .singleElement()
-        .satisfies(
-            movement -> {
-              assertThat(movement.type()).isEqualTo(InventoryMembershipMovementType.ARRIVED);
-              assertThat(movement.assetId()).isEqualTo(assetId);
-              assertThat(movement.origin()).isEqualTo(origin);
-            });
+    assertThat(session.findingCount()).isOne();
+    assertThat(session.membershipMovements()).isEmpty();
+    assertThat(membershipMovements.findAllByInventoryIdOrderByOccurredAtAscIdAsc(inventoryId))
+        .isEmpty();
     assertThat(
             jdbc.queryForObject(
                 "select actor_ref->>'subjectId' from domain_event "
@@ -4462,6 +4461,67 @@ class InventoryReadProjectionIntegrationTest {
                 String.class,
                 findingId.toString()))
         .isEqualTo(jwt().getSubject());
+
+    long assetVersion = 0;
+    for (String status : List.of("FREE", "RENTED", "AFTER_RENT", "IN_TRANSFER")) {
+      assetVersion++;
+      when(dependencies.currentAsset(assetId))
+          .thenReturn(Optional.of(new InventoryDependencyGateway.LiveAssetSnapshot(
+              assetId, assetVersion, warehouseId, status, "NEW-901", "NEW901", null,
+              mapper.createObjectNode(), mapper.createArrayNode())));
+      service.reconcileAssetMembership(
+          assetId, assetVersion, warehouseId, status,
+          new OpaqueActorReference(jwt().getSubject(), "USER", null),
+          UUID.randomUUID(), UUID.randomUUID(), OffsetDateTime.now(ZoneOffset.UTC));
+
+      SessionView refreshed = service.session(jwt(), inventoryId);
+      assertThat(refreshed.membershipMovements()).as(status).isEmpty();
+      assertThat(refreshed.findingCount()).as(status).isOne();
+      assertThat(findings.findById(findingId).orElseThrow().isMembershipActive()).isTrue();
+      assertThat(membershipMovements.findAllByInventoryIdOrderByOccurredAtAscIdAsc(inventoryId))
+          .as(status).isEmpty();
+    }
+  }
+
+  @Test
+  void hidesPreviouslyRecordedInventoryAdditionsWithoutRemovingRentalMovementsOrHistory() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    OffsetDateTime occurredAt = OffsetDateTime.parse("2026-09-09T08:00:00Z");
+    List<InventoryMembershipMovement> history = new ArrayList<>();
+    for (FindingOrigin origin : List.of(FindingOrigin.ADDED_NEW, FindingOrigin.ADDED_USED)) {
+      UUID addedAssetId = UUID.randomUUID();
+      history.add(InventoryMembershipMovement.arrived(
+          inventoryId, UUID.randomUUID(), addedAssetId, origin, "INV-" + origin,
+          null, warehouseId, "FREE", null, occurredAt));
+      history.add(InventoryMembershipMovement.departed(
+          inventoryId, UUID.randomUUID(), addedAssetId, origin, "INV-" + origin,
+          warehouseId, null, "RENTED", null, occurredAt.plusMinutes(1)));
+      history.add(InventoryMembershipMovement.departed(
+          inventoryId, UUID.randomUUID(), addedAssetId, origin, "INV-" + origin,
+          warehouseId, UUID.randomUUID(), "IN_TRANSFER", null, occurredAt.plusMinutes(2)));
+    }
+    UUID returnedAssetId = UUID.randomUUID();
+    UUID rentedAssetId = UUID.randomUUID();
+    history.add(InventoryMembershipMovement.arrived(
+        inventoryId, UUID.randomUUID(), returnedAssetId, FindingOrigin.EXPECTED, "RETURN-1",
+        null, warehouseId, "AFTER_RENT", null, occurredAt.plusMinutes(3)));
+    history.add(InventoryMembershipMovement.departed(
+        inventoryId, UUID.randomUUID(), rentedAssetId, FindingOrigin.EXPECTED, "RENTAL-1",
+        warehouseId, null, "RENTED", "Арендатор", occurredAt.plusMinutes(4)));
+    membershipMovements.saveAllAndFlush(history);
+
+    SessionView session = service.session(jwt(), inventoryId);
+
+    assertThat(session.membershipMovements())
+        .extracting(movement -> movement.assetId())
+        .containsExactly(returnedAssetId, rentedAssetId);
+    assertThat(session.membershipMovements())
+        .extracting(movement -> movement.type())
+        .containsExactly(InventoryMembershipMovementType.ARRIVED, InventoryMembershipMovementType.DEPARTED);
+    assertThat(membershipMovements.findAllByInventoryIdOrderByOccurredAtAscIdAsc(inventoryId))
+        .hasSize(8);
   }
 
   @ParameterizedTest

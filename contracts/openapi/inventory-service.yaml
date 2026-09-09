@@ -183,8 +183,9 @@ paths:
       description: >-
         Requires USER, rwms.read and warehouse VIEW. The active finding set
         follows the live warehouse population: departures and transfers are
-        removed, while arrivals are added. Every membership change is retained
-        separately in SessionDetail.membershipMovements.
+        removed, while arrivals are added. Warehouse movements are retained
+        separately in SessionDetail.membershipMovements, excluding findings
+        created through inventory with origin ADDED_NEW or ADDED_USED.
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/Size' }
@@ -1762,6 +1763,11 @@ components:
         publicationState: { $ref: '#/components/schemas/AggregatePublicationState' }
         membershipMovements:
           type: array
+          description: >-
+            Warehouse movements during this session, excluding every ADDED_NEW
+            and ADDED_USED finding created through inventory. Their registration
+            is not an arrival. Previously stored movements with these origins
+            are also excluded; the findings and inspection evidence are retained.
           items: { $ref: '#/components/schemas/MembershipMovement' }
         statistics: { oneOf: [{ $ref: '#/components/schemas/FrozenStatistics' }, { type: 'null' }] }
         cancellation: { oneOf: [{ $ref: '#/components/schemas/CancellationAudit' }, { type: 'null' }] }

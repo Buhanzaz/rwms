@@ -108,6 +108,12 @@ Asset-service materializes the final status, passport and reviewed contents in o
 ordinary per-finding publication then delivers the remaining outcomes. Cancellation never
 materializes the proposal. Existing cabins created by earlier versions are not deleted or hidden.
 
+`ADDED_NEW` and `ADDED_USED` findings never enter the session's `membershipMovements`
+list. Source registration is not a warehouse arrival, and subsequent membership signals do not
+add movement rows for those findings. Session reads also exclude their previously recorded
+movements while retaining the append-only journal, findings and inspection evidence. Rental
+returns and departures of registry cabins continue to appear normally.
+
 Every non-write-off completed final-plan finding has one durable publication intent, including findings without
 maintenance work. After furniture reconciliation succeeds, the recovery scheduler first applies
 the exact completed local finding through asset-service: no work means `FREE`, ordinary work means

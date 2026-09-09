@@ -164,6 +164,7 @@ final class InventoryProjectionService extends InventoryProjectionWorkflowSuppor
         membershipMovements
             .findAllByInventoryIdOrderByOccurredAtAscIdAsc(value.getId())
             .stream()
+            .filter(movement -> !movement.getOrigin().isInventoryAddition())
             .map(sessionMapper::toMembershipMovementView)
             .toList(),
         statistics,

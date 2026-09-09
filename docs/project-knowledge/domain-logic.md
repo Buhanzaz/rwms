@@ -577,6 +577,11 @@ capture eligibility cannot erase the fact that the cabin was physically found.
 Terminal `WRITTEN_OFF` and `LOST` status still rejects outcome publication at
 the asset owner rather than being rewritten by inventory.
 
+Inventory-created `ADDED_NEW` and `ADDED_USED` findings are excluded from the session's
+`membershipMovements` list for every movement type. Registration does not record an arrival;
+later membership signals do not add journal rows for these findings. The session projection
+also excludes their legacy journal rows without deleting history or inspection evidence.
+
 A warehouse MANAGE user can explicitly refresh a stale active session from a fresh, read-only
 asset capture. Inventory checks the expected session revision before the remote capture and again
 under the local apply lock, then atomically feeds captured arrivals/current snapshots and

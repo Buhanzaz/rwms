@@ -7,5 +7,10 @@ public enum FindingOrigin {
   EXPECTED,
   ADDED_NEW,
   ADDED_USED,
-  UNEXPECTED_EXISTING
+  UNEXPECTED_EXISTING;
+
+  /** Inventory-created cabins belong to the findings, not the warehouse movement list. */
+  public boolean isInventoryAddition() {
+    return this == ADDED_NEW || this == ADDED_USED;
+  }
 }

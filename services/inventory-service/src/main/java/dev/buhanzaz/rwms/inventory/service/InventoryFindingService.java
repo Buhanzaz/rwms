@@ -403,20 +403,22 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       session.touch();
       sessions.saveAndFlush(session);
       if (departureMovement) {
-        membershipMovements.saveAndFlush(
-            InventoryMembershipMovement.departed(
-                session.getId(),
-                causationId,
-                assetId,
-                finding.getOrigin(),
-                finding.getDisplayCanonicalNumber(),
-                session.getWarehouseId(),
-                currentWarehouseId != null && !currentWarehouseId.equals(session.getWarehouseId())
-                    ? currentWarehouseId
-                    : null,
-                membershipStatus == null ? previousStatus : membershipStatus,
-                current == null ? previousTenant : current.tenantSnapshot(),
-                occurredAt));
+        if (!finding.getOrigin().isInventoryAddition()) {
+          membershipMovements.saveAndFlush(
+              InventoryMembershipMovement.departed(
+                  session.getId(),
+                  causationId,
+                  assetId,
+                  finding.getOrigin(),
+                  finding.getDisplayCanonicalNumber(),
+                  session.getWarehouseId(),
+                  currentWarehouseId != null && !currentWarehouseId.equals(session.getWarehouseId())
+                      ? currentWarehouseId
+                      : null,
+                  membershipStatus == null ? previousStatus : membershipStatus,
+                  current == null ? previousTenant : current.tenantSnapshot(),
+                  occurredAt));
+        }
         appendFindingFacts(
             finding,
             session,
@@ -425,10 +427,12 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
             correlationId,
             causationId);
       } else if (arrivalMovement) {
-        membershipMovements.saveAndFlush(InventoryMembershipMovement.arrived(
-            session.getId(), causationId, assetId, finding.getOrigin(),
-            finding.getDisplayCanonicalNumber(), previousEventWarehouse, session.getWarehouseId(),
-            membershipStatus, current.tenantSnapshot(), occurredAt));
+        if (!finding.getOrigin().isInventoryAddition()) {
+          membershipMovements.saveAndFlush(InventoryMembershipMovement.arrived(
+              session.getId(), causationId, assetId, finding.getOrigin(),
+              finding.getDisplayCanonicalNumber(), previousEventWarehouse, session.getWarehouseId(),
+              membershipStatus, current.tenantSnapshot(), occurredAt));
+        }
         appendFindingFacts(finding, session, actor, "inventory.finding.membership-refreshed.v1",
             correlationId, causationId);
       } else if (snapshotRefreshed) {
@@ -899,18 +903,6 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               if (finding.isOwnerProofActive() != expectedActive) {
                 throw new IllegalStateException("Finding owner proof lifecycle is inconsistent");
               }
-              membershipMovements.saveAndFlush(
-                  InventoryMembershipMovement.arrived(
-                      currentSession.getId(),
-                      idempotencyKey,
-                      remote.asset().assetId(),
-                      finding.getOrigin(),
-                      finding.getDisplayCanonicalNumber(),
-                      null,
-                      currentSession.getWarehouseId(),
-                      remote.asset().status(),
-                      remote.asset().tenantSnapshot(),
-                      OffsetDateTime.now(ZoneOffset.UTC)));
               appendOwnerProof(finding, currentSession.getWarehouseId(), actor(jwt));
               return finding;
             });
