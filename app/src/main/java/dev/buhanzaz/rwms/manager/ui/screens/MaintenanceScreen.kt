@@ -6,7 +6,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -143,7 +144,7 @@ import kotlinx.coroutines.launch
 private const val MAINTENANCE_STEP_COUNT = 5
 internal const val MAINTENANCE_CATALOG_PAGE_SIZE = 9
 internal const val MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS = 2_000L
-private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 24.dp
+private val MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT = 12.dp
 
 /**
  * Defines manager UI or local cache state; it does not own a server-side business transition.
@@ -1872,19 +1873,76 @@ private fun MaintenanceCatalogPhotoDrawer(
     }
 
     fun toggleDrawer() {
-        val targetHeight = if (drawerExpanded) {
-            0f
-        } else {
+        val willExpand = !maintenanceCatalogPhotoDrawerShouldExpand(
+            revealedHeightPx = revealedHeightPx,
+            maximumRevealHeightPx = maximumRevealHeightPx,
+        )
+        val targetHeight = if (willExpand) {
             maximumRevealHeightPx
+        } else {
+            0f
         }
-        lastSnapWasExpanded = !drawerExpanded
+        lastSnapWasExpanded = willExpand
         animateDrawerTo(targetHeight)
     }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .clipToBounds(),
+            .clipToBounds()
+            .pointerInput(maximumRevealHeightPx) {
+                if (maximumRevealHeightPx <= 0f) return@pointerInput
+                val handleHeightPx = MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT.toPx()
+                awaitEachGesture {
+                    val down = awaitFirstDown(
+                        requireUnconsumed = false,
+                        pass = PointerEventPass.Initial,
+                    )
+                    val initialRevealHeightPx = revealedHeightPx
+                    if (down.position.y !in
+                        initialRevealHeightPx..(initialRevealHeightPx + handleHeightPx)
+                    ) {
+                        return@awaitEachGesture
+                    }
+
+                    settleJob?.cancel()
+                    dragInProgress = true
+                    down.consume()
+                    val initialPointerY = down.position.y
+                    var movedBeyondTouchSlop = false
+                    var pointerReleased = false
+                    try {
+                        while (true) {
+                            val change = awaitPointerEvent(PointerEventPass.Initial)
+                                .changes
+                                .firstOrNull { it.id == down.id }
+                                ?: break
+                            val dragDistance = change.position.y - initialPointerY
+                            movedBeyondTouchSlop = movedBeyondTouchSlop ||
+                                dragDistance !in -viewConfiguration.touchSlop..viewConfiguration.touchSlop
+                            if (change.position != change.previousPosition) {
+                                revealedHeightPx = (initialRevealHeightPx + dragDistance)
+                                    .coerceIn(0f, maximumRevealHeightPx)
+                                change.consume()
+                            }
+                            if (!change.pressed) {
+                                change.consume()
+                                pointerReleased = true
+                                break
+                            }
+                        }
+                    } finally {
+                        dragInProgress = false
+                    }
+
+                    if (pointerReleased && !movedBeyondTouchSlop) {
+                        revealedHeightPx = initialRevealHeightPx
+                        toggleDrawer()
+                    } else {
+                        settleDrawer()
+                    }
+                }
+            },
         color = MaterialTheme.colorScheme.surface,
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -1924,30 +1982,12 @@ private fun MaintenanceCatalogPhotoDrawer(
                         .fillMaxWidth()
                         .height(MAINTENANCE_CATALOG_PHOTO_DRAWER_HANDLE_HEIGHT)
                         .testTag("maintenance-catalog-photo-drawer-handle")
-                        .clickable(role = Role.Button, onClick = ::toggleDrawer)
-                        .pointerInput(maximumRevealHeightPx) {
-                            if (maximumRevealHeightPx <= 0f) return@pointerInput
-                            detectVerticalDragGestures(
-                                onDragStart = {
-                                    dragInProgress = true
-                                    settleJob?.cancel()
-                                },
-                                onVerticalDrag = { change, dragAmount ->
-                                    change.consume()
-                                    revealedHeightPx = (revealedHeightPx + dragAmount)
-                                        .coerceIn(0f, maximumRevealHeightPx)
-                                },
-                                onDragEnd = {
-                                    dragInProgress = false
-                                    settleDrawer()
-                                },
-                                onDragCancel = {
-                                    dragInProgress = false
-                                    settleDrawer()
-                                },
-                            )
-                        }
                         .semantics {
+                            role = Role.Button
+                            onClick {
+                                toggleDrawer()
+                                true
+                            }
                             contentDescription = if (drawerExpanded) {
                                 "Потяните вверх, чтобы скрыть фотографии"
                             } else {
