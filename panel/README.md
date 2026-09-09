@@ -199,6 +199,12 @@ contexts and screens are usable.
   to publish or hide the queue in WorkerApp. WorkerApp retains active REAL work,
   receives only that many waiting REAL cards and never receives shadows while the
   queue is enabled; disabling it removes the whole queue, including active cards.
+  An `EDIT` manager can temporarily disable a taken ordinary task from the panel;
+  the version-fenced command releases its assignees server-side and marks every
+  unfinished route card gray as `Временно отключено`. Suspended cards are excluded
+  from the daily plan, reordering and future-stage promotion until the manager
+  explicitly uses `Восстановить`. This control exists only in the panel, not in
+  WorkerApp.
   On an unfiltered desktop board an
   `EDIT` user can drag unpinned `WAITING REAL` cards to reorder them inside the
   same queue under entry/queue version fences and the observed target-card

@@ -29,7 +29,9 @@ const mocks = vi.hoisted(() => ({
   listMaintenanceRepairs: vi.fn(),
   updateTaskBoardWorkerPlan: vi.fn(),
   reorderTaskBoardEntry: vi.fn(),
+  restoreTaskBoardTask: vi.fn(),
   setFutureTaskBoardEntryAvailability: vi.fn(),
+  suspendTaskBoardTask: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: mocks.useAuth }))
@@ -47,8 +49,10 @@ vi.mock("@/features/task-board/api/task-board-api", async () => {
     getTaskBoard: mocks.getTaskBoard,
     updateTaskBoardWorkerPlan: mocks.updateTaskBoardWorkerPlan,
     reorderTaskBoardEntry: mocks.reorderTaskBoardEntry,
+    restoreTaskBoardTask: mocks.restoreTaskBoardTask,
     setFutureTaskBoardEntryAvailability:
       mocks.setFutureTaskBoardEntryAvailability,
+    suspendTaskBoardTask: mocks.suspendTaskBoardTask,
   }
 })
 vi.mock("@/features/settings/kpi/api/kpi-settings-api", async () => {
@@ -82,6 +86,8 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     futureEntryIds,
     initialScrollTop,
     onFutureAvailabilityChange,
+    onSuspend,
+    onRestore,
     onToggleCollapsed,
     onScrollTopChange,
   }: {
@@ -113,6 +119,8 @@ vi.mock("@/features/task-board/task-board-column", () => ({
       entry: TaskBoardEntryDto,
       available: boolean
     ) => void
+    onSuspend: (entry: TaskBoardEntryDto) => void
+    onRestore: (entry: TaskBoardEntryDto) => void
     onToggleCollapsed: (queueKey: string) => void
     onScrollTopChange: (queueKey: string, scrollTop: number) => void
   }) => (
@@ -132,6 +140,9 @@ vi.mock("@/features/task-board/task-board-column", () => ({
         {visibleEntries
           .map((entry) => entry.externalTaskId ?? entry.taskId)
           .join(",")}
+      </span>
+      <span data-testid="first-visible-task-suspended">
+        {String(visibleEntries[0]?.suspended ?? false)}
       </span>
       <span
         data-testid="visible-repair-complexities"
@@ -203,6 +214,16 @@ vi.mock("@/features/task-board/task-board-column", () => ({
           Переместить тестовое задание
         </button>
       ) : null}
+      {visibleEntries[0] ? (
+        <button type="button" onClick={() => onSuspend(visibleEntries[0]!)}>
+          Отключить тестовое задание
+        </button>
+      ) : null}
+      {visibleEntries[0] ? (
+        <button type="button" onClick={() => onRestore(visibleEntries[0]!)}>
+          Восстановить тестовое задание
+        </button>
+      ) : null}
     </div>
   ),
 }))
@@ -267,6 +288,7 @@ function taskEntry(externalTaskId: string, title: string): TaskBoardEntryDto {
     scheduledDate: "2026-07-18",
     priority: 3,
     pinned: false,
+    suspended: false,
     status: "WAITING",
     taskText: null,
     plannedDurationMinutes: null,
@@ -332,6 +354,8 @@ function renderPage(
     availableTaskLimit: 3,
   })
   mocks.reorderTaskBoardEntry.mockResolvedValue(currentBoard)
+  mocks.suspendTaskBoardTask.mockResolvedValue(currentBoard)
+  mocks.restoreTaskBoardTask.mockResolvedValue(currentBoard)
   mocks.setFutureTaskBoardEntryAvailability.mockResolvedValue(currentBoard)
   mocks.getKpiSettings.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
@@ -995,6 +1019,67 @@ describe("task board warehouse access", () => {
 
     expect(screen.getByTestId("task-board-location").textContent).toBe(
       "/repairs?repairId=repair%20id%2Fwith%20space&edit=1"
+    )
+  })
+
+  it("sends task-level suspend and restore commands for editable entries", async () => {
+    const taken = {
+      ...taskEntry("taken-stage", "Замена панели"),
+      status: "IN_PROGRESS" as const,
+    }
+    const suspended = {
+      ...taken,
+      suspended: true,
+      status: "WAITING" as const,
+      taskVersion: 2,
+    }
+    const restored = { ...suspended, suspended: false, taskVersion: 3 }
+    const currentBoard = {
+      ...board,
+      queues: [{ ...board.queues[0]!, entries: [taken] }],
+    }
+    renderPage("EDIT", { currentBoard })
+    const user = userEvent.setup()
+    const suspendedBoard = {
+      ...currentBoard,
+      queues: [{ ...currentBoard.queues[0]!, entries: [suspended] }],
+    }
+    const restoredBoard = {
+      ...currentBoard,
+      queues: [{ ...currentBoard.queues[0]!, entries: [restored] }],
+    }
+    mocks.suspendTaskBoardTask.mockResolvedValue(suspendedBoard)
+    mocks.restoreTaskBoardTask.mockResolvedValue(restoredBoard)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Отключить тестовое задание" })
+    )
+    await waitFor(() =>
+      expect(mocks.suspendTaskBoardTask).toHaveBeenCalledWith(
+        "task-board-token",
+        taken
+      )
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("first-visible-task-suspended").textContent
+      ).toBe("true")
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Восстановить тестовое задание",
+      })
+    )
+    await waitFor(() =>
+      expect(mocks.restoreTaskBoardTask).toHaveBeenCalledWith(
+        "task-board-token",
+        suspended
+      )
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("first-visible-task-suspended").textContent
+      ).toBe("false")
     )
   })
 })

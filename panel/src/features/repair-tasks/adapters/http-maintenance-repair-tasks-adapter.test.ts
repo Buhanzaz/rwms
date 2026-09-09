@@ -212,6 +212,7 @@ const board: TaskBoardSnapshotDto = {
           scheduledDate: "2026-07-18",
           priority: 2,
           pinned: true,
+          suspended: false,
           status: "DONE",
           taskText: null,
           plannedDurationMinutes: 30,

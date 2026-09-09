@@ -173,6 +173,7 @@ function entry(
     scheduledDate: text(source.scheduledDate),
     priority: priority(source.priority),
     pinned: boolean(source.pinned),
+    suspended: boolean(source.suspended),
     status: oneOf<TaskBoardEntryStatus>(source.status, [
       "WAITING",
       "IN_PROGRESS",
@@ -313,6 +314,35 @@ export function pinHttpTaskBoardEntry(
       }),
     }
   ).then(parseBoard)
+}
+
+function taskPath(entry: TaskBoardEntryDto, effect: "suspend" | "restore") {
+  return `${TASK_BOARD_API}/warehouses/${encodeURIComponent(entry.warehouseId)}/task-board/tasks/${encodeURIComponent(entry.taskId)}/${effect}`
+}
+
+function changeTaskSuspension(
+  accessToken: string,
+  entry: TaskBoardEntryDto,
+  effect: "suspend" | "restore"
+) {
+  return bearerRequest<unknown>(accessToken, taskPath(entry, effect), {
+    method: "POST",
+    body: JSON.stringify({ expectedTaskVersion: entry.taskVersion }),
+  }).then(parseBoard)
+}
+
+export function suspendHttpTaskBoardTask(
+  accessToken: string,
+  entry: TaskBoardEntryDto
+) {
+  return changeTaskSuspension(accessToken, entry, "suspend")
+}
+
+export function restoreHttpTaskBoardTask(
+  accessToken: string,
+  entry: TaskBoardEntryDto
+) {
+  return changeTaskSuspension(accessToken, entry, "restore")
 }
 
 export function updateHttpTaskBoardWorkerPlan(params: {

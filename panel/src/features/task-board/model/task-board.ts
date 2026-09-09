@@ -78,6 +78,7 @@ export type TaskBoardEntryDto = {
   scheduledDate: string
   priority: number
   pinned: boolean
+  suspended: boolean
   status: TaskBoardEntryStatus
   taskText: string | null
   plannedDurationMinutes: number | null

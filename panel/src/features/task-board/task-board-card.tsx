@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowDown01Icon,
   ArrowUp01Icon,
+  Cancel01Icon,
   DragDropVerticalIcon,
   PauseIcon,
   PencilEdit01Icon,
@@ -89,7 +90,7 @@ function kpiCardAppearance(
   now: number,
   palette: KpiPalette | null
 ) {
-  if (entry.entryType === "SHADOW") {
+  if (entry.entryType === "SHADOW" || entry.suspended) {
     return { color: null, style: undefined }
   }
 
@@ -115,6 +116,10 @@ function assignedWorkerNames(entry: TaskBoardEntryDto) {
   return Array.from(
     new Set(
       entry.assignments
+        .filter(
+          (assignment) =>
+            assignment.status === "ACTIVE" || assignment.status === "PAUSED"
+        )
         .map((assignment) => assignment.workerName?.trim())
         .filter((name): name is string => Boolean(name))
     )
@@ -125,6 +130,10 @@ function assignedGroupNames(entry: TaskBoardEntryDto) {
   return Array.from(
     new Set(
       entry.assignments
+        .filter(
+          (assignment) =>
+            assignment.status === "ACTIVE" || assignment.status === "PAUSED"
+        )
         .map((assignment) => assignment.workerGroupName?.trim())
         .filter((name): name is string => Boolean(name))
     )
@@ -209,13 +218,29 @@ function cardActionVisibility(
   canEdit: boolean
 ) {
   const showTake =
-    canEdit && entry.entryType === "REAL" && entry.status === "WAITING"
-  const showEdit = canEdit && canEditMaintenanceRepair(entry)
+    canEdit &&
+    !entry.suspended &&
+    entry.entryType === "REAL" &&
+    entry.status === "WAITING"
+  const showEdit =
+    !entry.suspended && canEdit && canEditMaintenanceRepair(entry)
   const showDetails = entry.source?.type === "MAINTENANCE_REPAIR"
   const showPause =
-    entry.entryType === "REAL" && !mobile && entry.status === "IN_PROGRESS"
+    entry.entryType === "REAL" &&
+    !entry.suspended &&
+    !mobile &&
+    entry.status === "IN_PROGRESS"
   const showResume =
-    entry.entryType === "REAL" && !mobile && entry.status === "PAUSED"
+    entry.entryType === "REAL" &&
+    !entry.suspended &&
+    !mobile &&
+    entry.status === "PAUSED"
+  const showSuspend =
+    canEdit &&
+    !entry.suspended &&
+    entry.entryType === "REAL" &&
+    (entry.status === "IN_PROGRESS" || entry.status === "PAUSED")
+  const showRestore = canEdit && entry.entryType === "REAL" && entry.suspended
   const showFullRoute = entry.entryType === "REAL"
 
   return {
@@ -224,6 +249,8 @@ function cardActionVisibility(
     showDetails,
     showPause,
     showResume,
+    showSuspend,
+    showRestore,
     showFullRoute,
     showActions:
       showTake ||
@@ -266,6 +293,9 @@ function TaskBoardCardContent({
         ) : null}
         {entry.entryType === "SHADOW" ? (
           <Badge variant="secondary">После предыдущего этапа</Badge>
+        ) : null}
+        {entry.suspended ? (
+          <Badge variant="secondary">Временно отключено</Badge>
         ) : null}
         <Badge variant="outline">
           Этап {entry.routeIndex + 1} из {entry.routeLength}
@@ -359,6 +389,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
       className={cn(
         "w-full data-[size=sm]:[--card-spacing:--spacing(3)]",
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
+        entry.suspended && "border-muted bg-muted",
         routeHighlighted && "ring-2 ring-primary"
       )}
       data-kpi-color={appearance.color ?? undefined}
@@ -503,6 +534,8 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   onTake,
   onPause,
   onResume,
+  onSuspend,
+  onRestore,
   onPin,
   onFutureAvailabilityChange,
   onShowFullRoute,
@@ -526,6 +559,8 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
+  onSuspend: (entry: TaskBoardEntryDto) => void
+  onRestore: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
   onFutureAvailabilityChange: (
     entry: TaskBoardEntryDto,
@@ -542,6 +577,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     !actionPending &&
     entry.entryType === "REAL" &&
     entry.status === "WAITING" &&
+    !entry.suspended &&
     !entry.pinned
   const {
     attributes,
@@ -558,6 +594,8 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     showDetails,
     showPause,
     showResume,
+    showSuspend,
+    showRestore,
     showFullRoute,
     showActions,
   } = cardActionVisibility(entry, mobile, canEdit)
@@ -584,6 +622,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
           !appearance.color &&
           entry.status === "IN_PROGRESS" &&
           "border-primary",
+        entry.suspended && "border-muted bg-muted",
         (entry.status === "DONE" || entry.status === "CANCELLED") &&
           "opacity-65",
         routeHighlighted && "ring-2 ring-primary"
@@ -615,7 +654,9 @@ export const TaskBoardCard = memo(function TaskBoardCard({
               size="icon-sm"
               variant={entry.pinned ? "secondary" : "ghost"}
               title={entry.pinned ? "Открепить" : "Закрепить"}
-              disabled={actionPending || entry.entryType === "SHADOW"}
+              disabled={
+                actionPending || entry.entryType === "SHADOW" || entry.suspended
+              }
               aria-pressed={entry.pinned}
               aria-label={
                 entry.pinned
@@ -662,7 +703,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
             ))}
           </CardDescription>
         ) : null}
-        {futureAvailabilityEligible ? (
+        {futureAvailabilityEligible && !entry.suspended ? (
           <Field
             orientation="horizontal"
             className="w-full gap-2 rounded-md border border-border/70 px-2 py-1.5"
@@ -771,6 +812,32 @@ export const TaskBoardCard = memo(function TaskBoardCard({
             >
               <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
               Продолжить
+            </Button>
+          ) : null}
+          {showSuspend ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              className="w-full"
+              title="Временно отключить всю задачу и освободить исполнителей"
+              disabled={actionPending}
+              onClick={() => onSuspend(entry)}
+            >
+              <HugeiconsIcon icon={Cancel01Icon} data-icon="inline-start" />
+              Отменить задание
+            </Button>
+          ) : null}
+          {showRestore ? (
+            <Button
+              type="button"
+              size="sm"
+              className="w-full"
+              disabled={actionPending}
+              onClick={() => onRestore(entry)}
+            >
+              <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
+              Восстановить
             </Button>
           ) : null}
         </CardFooter>

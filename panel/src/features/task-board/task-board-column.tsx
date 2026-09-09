@@ -84,7 +84,10 @@ function queueKindLabel(queue: TaskBoardQueueDto) {
 
 function isReorderableEntry(entry: TaskBoardEntryDto) {
   return (
-    entry.entryType === "REAL" && entry.status === "WAITING" && !entry.pinned
+    entry.entryType === "REAL" &&
+    entry.status === "WAITING" &&
+    !entry.pinned &&
+    !entry.suspended
   )
 }
 
@@ -206,6 +209,8 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onTake,
   onPause,
   onResume,
+  onSuspend,
+  onRestore,
   onPin,
   onFutureAvailabilityChange,
   onScrollTopChange,
@@ -243,6 +248,8 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
+  onSuspend: (entry: TaskBoardEntryDto) => void
+  onRestore: (entry: TaskBoardEntryDto) => void
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
   onFutureAvailabilityChange: (
     entry: TaskBoardEntryDto,
@@ -270,10 +277,13 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
     })
   )
   const nextWaiting = visibleEntries.find(
-    (entry) => entry.entryType === "REAL" && entry.status === "WAITING"
+    (entry) =>
+      entry.entryType === "REAL" &&
+      entry.status === "WAITING" &&
+      !entry.suspended
   )
   const inProgress = visibleEntries.find(
-    (entry) => entry.status === "IN_PROGRESS"
+    (entry) => entry.status === "IN_PROGRESS" && !entry.suspended
   )
 
   useEffect(() => {
@@ -486,6 +496,8 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
                 onTake={onTake}
                 onPause={onPause}
                 onResume={onResume}
+                onSuspend={onSuspend}
+                onRestore={onRestore}
                 onPin={onPin}
                 onFutureAvailabilityChange={onFutureAvailabilityChange}
                 onShowFullRoute={onShowFullRoute}

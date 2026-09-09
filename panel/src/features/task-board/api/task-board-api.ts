@@ -6,7 +6,9 @@ import {
   pinHttpTaskBoardEntry,
   reorderHttpTaskBoardEntry,
   resumeHttpTaskBoardEntry,
+  restoreHttpTaskBoardTask,
   setHttpFutureTaskBoardEntryAvailability,
+  suspendHttpTaskBoardTask,
   takeHttpTaskBoardEntry,
   updateHttpTaskBoardWorkerPlan,
 } from "@/features/task-board/api/http-task-board-client"
@@ -118,4 +120,18 @@ export function completeTaskBoardEntry(
   entry: TaskBoardEntryDto
 ) {
   return completeHttpTaskBoardEntry(accessToken, entry)
+}
+
+export function suspendTaskBoardTask(
+  accessToken: string,
+  entry: TaskBoardEntryDto
+) {
+  return suspendHttpTaskBoardTask(accessToken, entry)
+}
+
+export function restoreTaskBoardTask(
+  accessToken: string,
+  entry: TaskBoardEntryDto
+) {
+  return restoreHttpTaskBoardTask(accessToken, entry)
 }

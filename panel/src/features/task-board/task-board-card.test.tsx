@@ -54,6 +54,7 @@ function taskEntry(source: TaskBoardSourceDto | null): TaskBoardEntryDto {
     scheduledDate: "2026-07-18",
     priority: 3,
     pinned: false,
+    suspended: false,
     status: "WAITING",
     taskText: null,
     plannedDurationMinutes: null,
@@ -72,6 +73,8 @@ function renderCard(
     onDetails = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onEdit = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onTake = vi.fn<(entry: TaskBoardEntryDto) => void>(),
+    onSuspend = vi.fn<(entry: TaskBoardEntryDto) => void>(),
+    onRestore = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onPin = vi.fn<(entry: TaskBoardEntryDto, pinned: boolean) => void>(),
     onFutureAvailabilityChange = vi.fn<
       (entry: TaskBoardEntryDto, available: boolean) => void
@@ -93,6 +96,8 @@ function renderCard(
     onDetails?: (entry: TaskBoardEntryDto) => void
     onEdit?: (entry: TaskBoardEntryDto) => void
     onTake?: (entry: TaskBoardEntryDto) => void
+    onSuspend?: (entry: TaskBoardEntryDto) => void
+    onRestore?: (entry: TaskBoardEntryDto) => void
     onPin?: (entry: TaskBoardEntryDto, pinned: boolean) => void
     onFutureAvailabilityChange?: (
       entry: TaskBoardEntryDto,
@@ -132,6 +137,8 @@ function renderCard(
       onTake={onTake}
       onPause={vi.fn()}
       onResume={vi.fn()}
+      onSuspend={onSuspend}
+      onRestore={onRestore}
       onPin={onPin}
       onFutureAvailabilityChange={onFutureAvailabilityChange}
       onShowFullRoute={onShowFullRoute}
@@ -166,6 +173,8 @@ function CollapsibleCard() {
       onTake={vi.fn()}
       onPause={vi.fn()}
       onResume={vi.fn()}
+      onSuspend={vi.fn()}
+      onRestore={vi.fn()}
       onPin={vi.fn()}
       onFutureAvailabilityChange={vi.fn()}
       onShowFullRoute={vi.fn()}
@@ -176,6 +185,44 @@ function CollapsibleCard() {
 }
 
 describe("TaskBoardCard source details", () => {
+  it("temporarily disables a taken task and restores a suspended task", async () => {
+    const user = userEvent.setup()
+    const onSuspend = vi.fn()
+    const activeEntry = renderCard(null, {
+      entryPatch: { status: "IN_PROGRESS" },
+      onSuspend,
+    })
+
+    const suspend = screen.getByRole("button", { name: "Отменить задание" })
+    expect(suspend.getAttribute("title")).toBe(
+      "Временно отключить всю задачу и освободить исполнителей"
+    )
+    await user.click(suspend)
+    expect(onSuspend).toHaveBeenCalledWith(activeEntry)
+
+    cleanup()
+    const onRestore = vi.fn()
+    const suspendedEntry = renderCard(null, {
+      entryPatch: { status: "IN_PROGRESS", suspended: true },
+      onRestore,
+    })
+
+    const card = document.querySelector(
+      `[data-entry-id="${suspendedEntry.id}"]`
+    )
+    expect(card?.className).toContain("bg-muted")
+    expect(screen.getByText("Временно отключено")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Восстановить" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Пауза" })).toBeNull()
+    expect(
+      screen.getByRole("button", {
+        name: `Закрепить этап ${suspendedEntry.unitNumber}`,
+      })
+    ).toHaveProperty("disabled", true)
+    await user.click(screen.getByRole("button", { name: "Восстановить" }))
+    expect(onRestore).toHaveBeenCalledWith(suspendedEntry)
+  })
+
   it("keeps full cabin numbers visible beside an accessible compact pin action", async () => {
     const user = userEvent.setup()
     const onPin = vi.fn()
@@ -674,6 +721,56 @@ describe("TaskBoardCard KPI timer presentation", () => {
       expect(card.classList.contains("border-primary")).toBe(false)
     }
   )
+
+  it("keeps a suspended real card neutral despite an active KPI palette", () => {
+    renderCard(null, {
+      palette: kpiPalette,
+      entryPatch: {
+        suspended: true,
+        status: "IN_PROGRESS",
+        plannedDurationMinutes: 20,
+        timerSnapshot: {
+          countedActiveSeconds: 600,
+          remainingSeconds: 600,
+          remainingPercent: 50,
+          timerState: "WORKING",
+          nextTransitionAt: null,
+          serverTime: "2026-07-18T10:00:00Z",
+        },
+      },
+    })
+
+    const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
+    expect(card.dataset.kpiColor).toBeUndefined()
+    expect(card.style.backgroundColor).toBe("")
+    expect(card.className).toContain("bg-muted")
+  })
+
+  it("does not present cancelled assignment history as current executors", () => {
+    renderCard(null, {
+      entryPatch: {
+        assignments: [
+          {
+            id: "assignment-1",
+            version: 1,
+            workerId: "worker-1",
+            workerName: "Иван",
+            workerGroupId: "group-1",
+            workerGroupName: "Ремонтники",
+            status: "CANCELLED",
+            assignedAt: "2026-07-18T09:00:00Z",
+            startedAt: "2026-07-18T09:00:00Z",
+            pausedAt: null,
+            finishedAt: "2026-07-18T10:00:00Z",
+          },
+        ],
+      },
+    })
+
+    expect(screen.getByText("Не назначена")).toBeTruthy()
+    expect(screen.getByText("Не назначены")).toBeTruthy()
+    expect(screen.queryByText("Иван")).toBeNull()
+  })
 
   it("keeps the existing neutral card when no active palette is available", () => {
     renderCard(null, {

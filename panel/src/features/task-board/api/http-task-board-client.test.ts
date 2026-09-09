@@ -6,7 +6,9 @@ import {
   listHttpEligibleWorkerGroups,
   pinHttpTaskBoardEntry,
   reorderHttpTaskBoardEntry,
+  restoreHttpTaskBoardTask,
   setHttpFutureTaskBoardEntryAvailability,
+  suspendHttpTaskBoardTask,
   updateHttpTaskBoardWorkerPlan,
 } from "@/features/task-board/api/http-task-board-client"
 import { ApiError } from "@/lib/api-client"
@@ -46,6 +48,7 @@ const boardResponse = {
           scheduledDate: "2026-07-18",
           priority: 1,
           pinned: true,
+          suspended: false,
           queueId,
           routeIndex: 0,
           queuePosition: 3,
@@ -79,6 +82,7 @@ const boardResponse = {
           scheduledDate: "2026-07-18",
           priority: 1,
           pinned: true,
+          suspended: false,
           queueId,
           routeIndex: 1,
           queuePosition: 4,
@@ -260,6 +264,29 @@ describe("public task-board HTTP client", () => {
       expectedTaskVersion: 42,
       pinned: false,
     })
+  })
+
+  it.each([
+    ["suspend", suspendHttpTaskBoardTask],
+    ["restore", restoreHttpTaskBoardTask],
+  ] as const)("%ss a task with task-version CAS", async (effect, command) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(boardResponse))
+      .mockResolvedValueOnce(json(boardResponse))
+    vi.stubGlobal("fetch", fetchMock)
+    const entry = (await getHttpTaskBoard("task-board-token", warehouseId))
+      .queues[0]!.entries[0]!
+
+    const snapshot = await command("task-board-token", entry)
+
+    expect(snapshot.warehouseId).toBe(warehouseId)
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toContain(
+      `/api/task-board/warehouses/${warehouseId}/task-board/tasks/${taskId}/${effect}`
+    )
+    expect(init.method).toBe("POST")
+    expect(JSON.parse(String(init.body))).toEqual({ expectedTaskVersion: 42 })
   })
 
   it("updates the WorkerApp plan with queue-version CAS", async () => {

@@ -35,9 +35,11 @@ import {
   pauseTaskBoardEntry,
   pinTaskBoardEntry,
   reorderTaskBoardEntry,
+  restoreTaskBoardTask,
   resumeTaskBoardEntry,
   setFutureTaskBoardEntryAvailability,
   takeTaskBoardEntry,
+  suspendTaskBoardTask,
   TASK_BOARD_QUERY_KEY,
   taskBoardQueryKey,
   updateTaskBoardWorkerPlan,
@@ -77,6 +79,10 @@ type BoardAction =
   | { kind: "pause"; entry: TaskBoardEntryDto }
   | { kind: "resume"; entry: TaskBoardEntryDto }
   | { kind: "complete"; entry: TaskBoardEntryDto }
+
+type SuspensionAction =
+  | { kind: "suspend"; entry: TaskBoardEntryDto }
+  | { kind: "restore"; entry: TaskBoardEntryDto }
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
@@ -121,6 +127,7 @@ function withReorderedEntry(
       const reorderablePositions = queue.entries.flatMap((entry, index) =>
         entry.entryType === "REAL" &&
         entry.status === "WAITING" &&
+        !entry.suspended &&
         !entry.pinned
           ? [index]
           : []
@@ -202,8 +209,7 @@ function TaskBoardWarehousePage() {
   const { selectedWarehouse } = useWarehouse()
   const warehouseId = selectedWarehouse?.id ?? null
   const [initialViewPreferences] = useState<TaskBoardViewPreferences | null>(
-    () =>
-      warehouseId ? readTaskBoardViewPreferences(warehouseId) : null
+    () => (warehouseId ? readTaskBoardViewPreferences(warehouseId) : null)
   )
   const canEdit = Boolean(
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
@@ -294,7 +300,12 @@ function TaskBoardWarehousePage() {
     if (collapsedPreferencesReadyRef.current === warehouseId) {
       writeLatestViewPreferences()
     }
-  }, [collapsedQueues, showFutureSubtasks, warehouseId, writeLatestViewPreferences])
+  }, [
+    collapsedQueues,
+    showFutureSubtasks,
+    warehouseId,
+    writeLatestViewPreferences,
+  ])
 
   useEffect(
     () => () => {
@@ -392,7 +403,9 @@ function TaskBoardWarehousePage() {
             queue.entries
               .filter(
                 (entry) =>
-                  entry.entryType === "REAL" && entry.status === "WAITING"
+                  entry.entryType === "REAL" &&
+                  entry.status === "WAITING" &&
+                  !entry.suspended
               )
               .slice(0, queue.availableTaskLimit)
               .map((entry) => entry.id)
@@ -538,7 +551,8 @@ function TaskBoardWarehousePage() {
       return
     }
     const previous = collapsedSettingsRef.current
-    const persistedQueueKeys = initialViewPreferences?.collapsedQueueKeys ?? null
+    const persistedQueueKeys =
+      initialViewPreferences?.collapsedQueueKeys ?? null
     const firstWarehouseMerge = previous?.warehouseId !== warehouseId
     const merged =
       firstWarehouseMerge && persistedQueueKeys !== null
@@ -673,6 +687,51 @@ function TaskBoardWarehousePage() {
       await invalidateTaskBoard()
     },
   })
+  const suspensionMutation = useMutation({
+    mutationFn: (action: SuspensionAction) => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к доске заданий.")
+      }
+      return action.kind === "suspend"
+        ? suspendTaskBoardTask(accessToken, action.entry)
+        : restoreTaskBoardTask(accessToken, action.entry)
+    },
+    onMutate: async (action) => {
+      setNotice(null)
+      setError(null)
+      await queryClient.cancelQueries({
+        queryKey: taskBoardQueryKey(action.entry.warehouseId),
+        exact: true,
+      })
+    },
+    onSuccess: (snapshot, action) => {
+      setError(null)
+      setNotice(
+        action.kind === "suspend"
+          ? "Задание временно отключено, исполнители освобождены."
+          : "Задание восстановлено."
+      )
+      queryClient.setQueryData(
+        taskBoardQueryKey(action.entry.warehouseId),
+        snapshot
+      )
+    },
+    onError: async (unknownError, action) => {
+      setNotice(null)
+      setError(
+        errorMessage(
+          unknownError,
+          action.kind === "suspend"
+            ? "Не удалось временно отключить задание"
+            : "Не удалось восстановить задание"
+        )
+      )
+      await queryClient.invalidateQueries({
+        queryKey: taskBoardQueryKey(action.entry.warehouseId),
+        exact: true,
+      })
+    },
+  })
   const workerPlanMutation = useMutation({
     mutationFn: (params: {
       warehouseId: string
@@ -781,10 +840,7 @@ function TaskBoardWarehousePage() {
     },
   })
   const futureAvailabilityMutation = useMutation({
-    mutationFn: (params: {
-      entry: TaskBoardEntryDto
-      available: boolean
-    }) => {
+    mutationFn: (params: { entry: TaskBoardEntryDto; available: boolean }) => {
       if (!accessToken) {
         throw new Error("Не получен токен доступа к доске заданий.")
       }
@@ -823,6 +879,7 @@ function TaskBoardWarehousePage() {
   const busy =
     actionMutation.isPending ||
     pinMutation.isPending ||
+    suspensionMutation.isPending ||
     workerPlanMutation.isPending ||
     reorderMutation.isPending ||
     futureAvailabilityMutation.isPending
@@ -1043,6 +1100,7 @@ function TaskBoardWarehousePage() {
                       (candidate) =>
                         candidate.entryType === "REAL" &&
                         candidate.status === "WAITING" &&
+                        !candidate.suspended &&
                         !candidate.pinned
                     )
                     .at(targetIndex)?.id
@@ -1080,23 +1138,60 @@ function TaskBoardWarehousePage() {
                   setError(null)
                 }}
                 onPause={(entry) => {
-                  if (canEdit && entry.entryType === "REAL") {
+                  if (
+                    canEdit &&
+                    entry.entryType === "REAL" &&
+                    !entry.suspended
+                  ) {
                     actionMutation.mutate({ kind: "pause", entry })
                   }
                 }}
                 onResume={(entry) => {
-                  if (canEdit && entry.entryType === "REAL") {
+                  if (
+                    canEdit &&
+                    entry.entryType === "REAL" &&
+                    !entry.suspended
+                  ) {
                     actionMutation.mutate({ kind: "resume", entry })
                   }
                 }}
                 onPin={(entry, pinned) => {
-                  if (canEdit && entry.entryType === "REAL") {
+                  if (
+                    canEdit &&
+                    entry.entryType === "REAL" &&
+                    !entry.suspended
+                  ) {
                     pinMutation.mutate({ entry, pinned })
                   }
                 }}
                 onFutureAvailabilityChange={(entry, available) => {
-                  if (!canEdit || !futureEntryIds.has(entry.id)) return
+                  if (
+                    !canEdit ||
+                    entry.suspended ||
+                    !futureEntryIds.has(entry.id)
+                  )
+                    return
                   futureAvailabilityMutation.mutate({ entry, available })
+                }}
+                onSuspend={(entry) => {
+                  if (
+                    canEdit &&
+                    entry.entryType === "REAL" &&
+                    !entry.suspended &&
+                    (entry.status === "IN_PROGRESS" ||
+                      entry.status === "PAUSED")
+                  ) {
+                    suspensionMutation.mutate({ kind: "suspend", entry })
+                  }
+                }}
+                onRestore={(entry) => {
+                  if (
+                    canEdit &&
+                    entry.entryType === "REAL" &&
+                    entry.suspended
+                  ) {
+                    suspensionMutation.mutate({ kind: "restore", entry })
+                  }
                 }}
                 onScrollTopChange={(queueKey, scrollTop) => {
                   queueScrollTopsRef.current.set(queueKey, scrollTop)

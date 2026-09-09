@@ -40,6 +40,7 @@ function entry(patch: Partial<TaskBoardEntryDto> = {}): TaskBoardEntryDto {
     scheduledDate: "2026-07-30",
     priority: 3,
     pinned: false,
+    suspended: false,
     status: "IN_PROGRESS",
     taskText: null,
     plannedDurationMinutes: 20,

@@ -80,6 +80,7 @@ function entry(id: string, status: TaskBoardEntryDto["status"]) {
     scheduledDate: "2026-08-21",
     priority: 1,
     pinned: false,
+    suspended: false,
     status,
     taskText: null,
     plannedDurationMinutes: null,
@@ -159,6 +160,8 @@ function renderColumn(params: {
       onTake={params.onTake ?? vi.fn()}
       onPause={vi.fn()}
       onResume={vi.fn()}
+      onSuspend={vi.fn()}
+      onRestore={vi.fn()}
       onPin={vi.fn()}
       onFutureAvailabilityChange={vi.fn()}
       onScrollTopChange={vi.fn()}
