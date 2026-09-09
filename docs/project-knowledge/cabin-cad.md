@@ -70,27 +70,29 @@ location allows 80 MiB bodies and uses 50-second proxy read/send timeouts. The
 gateway receives the private CAD upstream through `CAD_SERVICE_URL`.
 
 The interactive OIDC client is `rwms-cad`, with callback
-`/cabin-cad/auth/callback`. Every collaboration operation needs a verified USER
-Bearer JWT with `cad.project`; issuer, audience, signature, `exp`, `iat` and
-`sub` are checked before current project membership is resolved. Missing,
-revoked or inaccessible membership deliberately appears as a project-not-found
-response rather than client-side cached access. The browser uses Authorization
-Code with PKCE through `oidc-client-ts`; its OIDC user and transaction state
-are tab-scoped `sessionStorage`, and refresh failure requires a new login.
+`/cabin-cad/auth/callback`. Account operations need a verified USER Bearer JWT
+with `cad.project`; issuer, audience, signature, `exp`, `iat` and `sub` are
+checked before current project membership is resolved. Invitation acceptance is
+public. Its signed capability creates a stable guest subject scoped to that
+project and then acts as the guest Bearer credential. The service rechecks the
+capability, current membership and revocation for every protected guest request.
+The browser uses Authorization Code with PKCE through `oidc-client-ts` only for
+account access; OIDC state and the guest capability are tab-scoped.
 
-After login, `OnlineProjects` lists memberships, opens a chosen server project,
-or creates one from the captured local snapshots. A creator can issue the
-one-client invitation from the collaboration bar. An invitation arriving before
-login is retained only across that login in session storage, then accepted for
-the authenticated subject; it never selects a role in the browser. The project
-list and invitation acceptance always fetch their result from cad-service.
+After login, `OnlineProjects` lists account memberships, opens a chosen server
+project, or creates one from the captured local snapshots. A creator can issue a
+client invitation from the collaboration bar. An invited client needs no login:
+the browser captures the fragment capability into tab session storage, removes
+it from the visible URL, accepts it publicly and opens the returned project as
+the server-derived guest. The project list and invitation acceptance always
+fetch their result from cad-service.
 
-A project creator is assigned `designer`. A signed invitation is valid for 24
-hours, may be accepted once by a signed-in recipient, and always assigns that
-recipient `client`; neither create nor accept lets a caller choose the
-designer role. The raw invitation capability is HMAC-derived after its durable
-receipt is stored and is not retained in project state or the operation-receipt
-table.
+A project creator is assigned `designer`. A signed invitation must first be
+accepted within 24 hours and always assigns its project-scoped guest `client`;
+neither create nor accept lets a caller choose the designer role. The same
+capability can safely replay acceptance and authenticates only that guest until
+membership is revoked. It is HMAC-derived after its durable receipt is stored
+and is not retained in project state or the operation-receipt table.
 
 Project, document, template, annotation and control have separate positive
 revisions. A controller writes the document under both document and control
