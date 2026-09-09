@@ -91,9 +91,9 @@ paths:
       description: >-
         No account or OIDC session is required. The signed invitation capability
         derives a project-scoped guest subject and assigns only the `client`
-        role. The same capability is then used as Bearer authentication for that
-        guest until the designer revokes the membership. An exact acceptance
-        retry returns the same guest identity and visible project state.
+        role. The same capability is then used with the `CadGuest` authorization
+        scheme for that guest until the designer revokes the membership. An
+        exact acceptance retry returns the same guest identity and visible project state.
         Invitations must first be accepted within 24 hours of creation.
       requestBody:
         required: true
@@ -525,14 +525,14 @@ components:
         scope claim. The server verifies signature, `exp`, `iat`, `sub`, issuer
         and audience before resolving project membership.
     guestInvitation:
-      type: http
-      scheme: bearer
-      bearerFormat: CAD invitation capability
+      type: apiKey
+      in: header
+      name: Authorization
       description: >-
-        The complete `projectId.invitationId.token` capability from an accepted
-        invitation. The server verifies its HMAC, accepted guest identity,
-        current membership and revocation state on every request. It grants no
-        access to any other project and must never be logged.
+        `CadGuest projectId.invitationId.token`, using the complete capability
+        from an accepted invitation. The server verifies its HMAC, accepted
+        guest identity, current membership and revocation state on every request.
+        It grants no access to any other project and must never be logged.
   parameters:
     ProjectId:
       name: projectId
@@ -551,7 +551,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/CadProblem' }
     Unauthorized:
-      description: Missing or invalid OIDC or guest Bearer credential.
+      description: Missing or invalid OIDC Bearer or CadGuest credential.
       headers:
         WWW-Authenticate:
           schema: { type: string, const: Bearer }

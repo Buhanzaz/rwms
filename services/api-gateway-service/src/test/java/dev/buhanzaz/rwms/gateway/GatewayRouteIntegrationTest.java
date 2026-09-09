@@ -688,10 +688,55 @@ class GatewayRouteIntegrationTest {
   }
 
   @Test
-  void cadPublicRouteRequiresAuthenticationAndPrivateAliasesStayBlocked() throws Exception {
+  void cadInvitationAcceptanceIsAnonymousWhileOtherRoutesStayProtected() throws Exception {
     CAD_REQUESTS.clear();
 
+    String requestBody =
+        "{\"projectId\":\"project-1\",\"invitationId\":\"invitation-1\",\"token\":\"capability\"}";
+    mvc.perform(
+            publicPost("/api/cad/v1/invitations/accept")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .contentType("application/json")
+                .content(requestBody))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/cad/v1/invitations/accept"));
+
+    assertThat(CAD_REQUESTS)
+        .singleElement()
+        .satisfies(
+            request -> {
+              assertThat(request.authorization()).isNull();
+              assertThat(request.cookie()).isNull();
+              assertThat(request.body()).isEqualTo(requestBody);
+            });
+
+    CAD_REQUESTS.clear();
     mvc.perform(publicGet("/api/cad/v1/projects")).andExpect(status().isUnauthorized());
+    mvc.perform(
+            publicGet("/api/cad/v1/projects")
+                .header(HttpHeaders.AUTHORIZATION, "CadGuest malformed"))
+        .andExpect(status().isUnauthorized());
+    assertThat(CAD_REQUESTS).isEmpty();
+
+    String guestAuthorization =
+        "CadGuest 10000000-0000-0000-0000-000000000014."
+            + "20000000-0000-0000-0000-000000000014."
+            + "A".repeat(43);
+    mvc.perform(
+            publicGet("/api/cad/v1/projects/10000000-0000-0000-0000-000000000014")
+                .header(HttpHeaders.AUTHORIZATION, guestAuthorization)
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk());
+
+    assertThat(CAD_REQUESTS)
+        .singleElement()
+        .satisfies(
+            request -> {
+              assertThat(request.authorization()).isEqualTo(guestAuthorization);
+              assertThat(request.cookie()).isNull();
+            });
+
+    CAD_REQUESTS.clear();
     mvc.perform(
             publicGet("/api/cad/internal/v1/projects")
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))

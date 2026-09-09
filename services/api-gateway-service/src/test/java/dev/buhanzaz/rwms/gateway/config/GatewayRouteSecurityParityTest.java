@@ -60,6 +60,11 @@ class GatewayRouteSecurityParityTest {
   private static final Set<String> HTTP_METHODS =
       Set.of("get", "post", "put", "delete", "patch", "options", "head", "trace");
   private static final String CONCRETE_ID = "10000000-0000-0000-0000-000000000014";
+  private static final String CAD_GUEST_AUTHORIZATION =
+      "CadGuest "
+          + CONCRETE_ID
+          + ".20000000-0000-0000-0000-000000000014."
+          + "A".repeat(43);
   private static final Comparator<RouteKey> ROUTE_ORDER =
       Comparator.comparing(RouteKey::path).thenComparing(route -> route.method().name());
   private static final Map<RouteKey, String> SPECIAL_ROUTES = specialRoutes();
@@ -240,15 +245,35 @@ class GatewayRouteSecurityParityTest {
       for (GatewayOperation operation : inventory.publicDomain()) {
         AtomicBoolean dispatched = new AtomicBoolean();
         int status = filter(security, operation.gatewayRoute(), false, dispatched);
-        if (operation.security() == SecurityRequirement.BEARER_JWT) {
-          assertThat(status)
-              .as("%s must reject an unauthenticated edge request", operation.gatewayRoute())
-              .isEqualTo(401);
-          assertThat(dispatched.get()).as("dispatch for %s", operation.gatewayRoute()).isFalse();
-        } else {
-          assertThat(dispatched.get())
-              .as("%s must pass the edge security chain anonymously", operation.gatewayRoute())
-              .isTrue();
+        switch (operation.security()) {
+          case BEARER_JWT -> {
+            assertThat(status)
+                .as("%s must reject an unauthenticated edge request", operation.gatewayRoute())
+                .isEqualTo(401);
+            assertThat(dispatched.get()).as("dispatch for %s", operation.gatewayRoute()).isFalse();
+          }
+          case BEARER_JWT_OR_CAD_GUEST -> {
+            assertThat(status)
+                .as("%s must reject a missing credential", operation.gatewayRoute())
+                .isEqualTo(401);
+            assertThat(dispatched.get()).as("dispatch for %s", operation.gatewayRoute()).isFalse();
+            AtomicBoolean guestDispatched = new AtomicBoolean();
+            assertThat(
+                    filter(
+                        security,
+                        operation.gatewayRoute(),
+                        CAD_GUEST_AUTHORIZATION,
+                        guestDispatched))
+                .as("%s must admit a shaped CAD guest credential", operation.gatewayRoute())
+                .isEqualTo(204);
+            assertThat(guestDispatched.get())
+                .as("guest dispatch for %s", operation.gatewayRoute())
+                .isTrue();
+          }
+          case ANONYMOUS ->
+              assertThat(dispatched.get())
+                  .as("%s must pass the edge security chain anonymously", operation.gatewayRoute())
+                  .isTrue();
         }
       }
 
@@ -319,10 +344,23 @@ class GatewayRouteSecurityParityTest {
       boolean authenticated,
       AtomicBoolean dispatched)
       throws Exception {
+    return filter(
+        security,
+        route,
+        authenticated ? "Bearer route-parity-probe" : null,
+        dispatched);
+  }
+
+  private static int filter(
+      FilterChainProxy security,
+      RouteKey route,
+      String authorization,
+      AtomicBoolean dispatched)
+      throws Exception {
     MockHttpServletRequest request =
         new MockHttpServletRequest(route.method().name(), concretePath(route.path()));
-    if (authenticated) {
-      request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer route-parity-probe");
+    if (authorization != null) {
+      request.addHeader(HttpHeaders.AUTHORIZATION, authorization);
     }
     MockHttpServletResponse response = new MockHttpServletResponse();
     security.doFilter(
@@ -704,6 +742,24 @@ class GatewayRouteSecurityParityTest {
     if (requirements.isEmpty()) {
       return SecurityRequirement.ANONYMOUS;
     }
+    if (requirements.size() == 2) {
+      Map<String, Map<?, ?>> alternatives = new LinkedHashMap<>();
+      for (Object alternative : requirements) {
+        assertThat(alternative).as("security for %s", label).isInstanceOf(Map.class);
+        Map<?, ?> requirement = (Map<?, ?>) alternative;
+        assertThat(requirement).as("security alternative for %s", label).hasSize(1);
+        Object schemeName = requirement.keySet().iterator().next();
+        assertThat(schemeName).as("security scheme name for %s", label).isInstanceOf(String.class);
+        alternatives.put((String) schemeName, requirement);
+      }
+      assertThat(alternatives.keySet())
+          .as("alternative security schemes for %s", label)
+          .containsExactlyInAnyOrder("bearerJwt", "guestInvitation");
+      assertBearerScheme(securitySchemes, alternatives.get("bearerJwt"), "bearerJwt", label);
+      assertCadGuestScheme(
+          securitySchemes, alternatives.get("guestInvitation"), "guestInvitation", label);
+      return SecurityRequirement.BEARER_JWT_OR_CAD_GUEST;
+    }
     assertThat(requirements).as("security for %s", label).hasSize(1);
     assertThat(requirements.getFirst()).as("security for %s", label).isInstanceOf(Map.class);
     Map<?, ?> requirement = (Map<?, ?>) requirements.getFirst();
@@ -719,17 +775,37 @@ class GatewayRouteSecurityParityTest {
     assertThat(requirement.size()).as("security scheme count for %s", label).isEqualTo(1);
     Object schemeName = requirement.keySet().iterator().next();
     assertThat(schemeName).as("security scheme name for %s", label).isInstanceOf(String.class);
-    assertThat(requirement.get(schemeName))
-        .as("bearer scopes for %s", label)
-        .isEqualTo(List.of());
     String scheme = (String) schemeName;
+    assertBearerScheme(securitySchemes, requirement, scheme, label);
+    return SecurityRequirement.BEARER_JWT;
+  }
+
+  private static void assertBearerScheme(
+      Map<String, Object> securitySchemes,
+      Map<?, ?> requirement,
+      String scheme,
+      String label) {
+    assertThat(requirement.get(scheme)).as("bearer scopes for %s", label).isEqualTo(List.of());
     Map<String, Object> definition = map(securitySchemes.get(scheme));
     assertThat(definition.get("type")).as("security type for %s", label).isEqualTo("http");
     assertThat(definition.get("scheme")).as("security scheme for %s", label).isEqualTo("bearer");
     assertThat(definition.get("bearerFormat"))
         .as("bearer format for %s", label)
         .isEqualTo("JWT");
-    return SecurityRequirement.BEARER_JWT;
+  }
+
+  private static void assertCadGuestScheme(
+      Map<String, Object> securitySchemes,
+      Map<?, ?> requirement,
+      String scheme,
+      String label) {
+    assertThat(requirement.get(scheme)).as("guest scopes for %s", label).isEqualTo(List.of());
+    Map<String, Object> definition = map(securitySchemes.get(scheme));
+    assertThat(definition.get("type")).as("guest type for %s", label).isEqualTo("apiKey");
+    assertThat(definition.get("in")).as("guest location for %s", label).isEqualTo("header");
+    assertThat(definition.get("name"))
+        .as("guest header for %s", label)
+        .isEqualTo(HttpHeaders.AUTHORIZATION);
   }
 
   /** Validates one half of the exact cookie-plus-header CSRF requirement delegated to auth-service. */
@@ -847,6 +923,7 @@ class GatewayRouteSecurityParityTest {
   /** Supported canonical authentication classifications at the public edge. */
   private enum SecurityRequirement {
     BEARER_JWT,
+    BEARER_JWT_OR_CAD_GUEST,
     ANONYMOUS
   }
 

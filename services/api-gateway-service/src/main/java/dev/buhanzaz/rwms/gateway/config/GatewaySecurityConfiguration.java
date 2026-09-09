@@ -5,17 +5,19 @@ import dev.buhanzaz.rwms.gateway.web.CanonicalCorrelationRequestFilter;
 import dev.buhanzaz.rwms.platform.security.JwtAudienceValidatorFactory;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.authorization.AuthorizationDecision;
-import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
@@ -33,11 +35,18 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
  *
  * <p>Private service routes are denied at the edge, worker task routes require their dedicated
  * scope, explicitly published presentation reads remain anonymous, and all other public API routes
- * require a locally validated Bearer JWT. Authorization decisions inside individual domain
- * services are deliberately not replicated here.
+ * require a locally validated Bearer JWT. CAD collaboration routes additionally admit a strictly
+ * shaped guest capability which cad-service validates authoritatively on every request.
+ * Authorization decisions inside individual domain services are deliberately not replicated here.
  */
 @Configuration
 public class GatewaySecurityConfiguration {
+  private static final Pattern CAD_GUEST_AUTHORIZATION =
+      Pattern.compile(
+          "^CadGuest [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\."
+              + "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\."
+              + "[a-z0-9_-]{43}$",
+          Pattern.CASE_INSENSITIVE);
 
   /**
    * Builds the ordered gateway security chain and maps authentication failures to RWMS Problem
@@ -96,6 +105,10 @@ public class GatewaySecurityConfiguration {
                     "/api/logistics/public/v1/contractor-route-shares/*/tasks/*/entries/*/actions",
                     "/api/logistics/public/v1/contractor-route-shares/*/tasks/*/entries/*/evidence/*")
                 .permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/cad/v1/invitations/accept")
+                .permitAll()
+                .requestMatchers("/api/cad/v1/**")
+                .access(cadCredential())
                 .requestMatchers(
                     "/auth/**",
                     "/api/logistics/public/v1/client-presentations/**",
@@ -156,6 +169,24 @@ public class GatewaySecurityConfiguration {
           principal.getAuthorities().stream()
               .anyMatch(authority -> forbiddenAuthority.equals(authority.getAuthority()));
       return new AuthorizationDecision(principal.isAuthenticated() && required && !forbidden);
+    };
+  }
+
+  /**
+   * Accepts either a validated gateway principal or a structurally valid CAD guest capability.
+   *
+   * <p>The gateway intentionally performs no capability signature or membership check; cad-service
+   * owns those decisions and repeats them for every operation.
+   */
+  private static AuthorizationManager<RequestAuthorizationContext> cadCredential() {
+    return (authentication, context) -> {
+      var principal = authentication.get();
+      boolean authenticated =
+          principal.isAuthenticated() && !(principal instanceof AnonymousAuthenticationToken);
+      String authorization = context.getRequest().getHeader(HttpHeaders.AUTHORIZATION);
+      boolean guest =
+          authorization != null && CAD_GUEST_AUTHORIZATION.matcher(authorization).matches();
+      return new AuthorizationDecision(authenticated || guest);
     };
   }
 
