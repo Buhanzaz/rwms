@@ -102,6 +102,25 @@ class MaintenanceInboundEnvelopeValidatorTest {
   }
 
   @Test
+  void acceptsOptionalSuspensionWithoutMakingItATerminalRepairCommand() {
+    UUID id = UUID.randomUUID();
+    var envelope = mapper.readTree(boardTaskEnvelope(id, 2, "task-board.board-task.changed.v1"));
+    var payload = (tools.jackson.databind.node.ObjectNode) envelope.required("payload");
+    for (boolean suspended : new boolean[] {true, false}) {
+      payload.put("suspended", suspended);
+      var event = validator.validate(MaintenanceTransportTopics.BOARD_TASK, key(id),
+          mapper.writeValueAsBytes(envelope));
+      assertThat(event.actionable()).isFalse();
+      assertThat(event.payload().required("status").stringValue()).isEqualTo("ACTIVE");
+      assertThat(event.payload().required("suspended").booleanValue()).isEqualTo(suspended);
+    }
+    payload.put("suspended", "true");
+    assertThatThrownBy(() -> validator.validate(MaintenanceTransportTopics.BOARD_TASK, key(id),
+        mapper.writeValueAsBytes(envelope)))
+        .isInstanceOf(MaintenanceInboundValidationException.class);
+  }
+
+  @Test
   void acceptsCanonicalQueueEntryBudgetsWithoutHistoricalQueueName() throws Exception {
     UUID aggregateId = UUID.randomUUID();
     byte[] current = queueEntryEnvelope(aggregateId);

@@ -221,9 +221,7 @@ public class LogisticsInboundEnvelopeValidator {
   }
 
   private void validateBoardTask(String aggregateId, JsonNode payload) {
-    requireExactObject(
-        payload,
-        Set.of(
+    Set<String> fields = new HashSet<>(Set.of(
             "boardTaskId",
             "warehouseId",
             "externalTaskId",
@@ -231,12 +229,37 @@ public class LogisticsInboundEnvelopeValidator {
             "plannedDurationMinutes",
             "deadlineAt",
             "doneAt",
-            "deleted"),
-        "board-task payload");
+            "deleted"));
+    for (String optional : Set.of("scheduledDate", "lane", "priority", "pinned", "suspended",
+        "driverAudience", "plannedDriverWorkerId")) {
+      if (payload.has(optional)) fields.add(optional);
+    }
+    requireExactObject(payload, fields, "board-task payload");
     requireIdentity(payload, "boardTaskId", aggregateId);
     requireUuid(payload, "warehouseId");
     requireNullableUuid(payload, "externalTaskId");
     requireEnum(payload, "status", Set.of("ACTIVE", "DONE", "CANCELLED"));
+    if (payload.has("scheduledDate")) requireDate(payload, "scheduledDate");
+    if (payload.has("lane")) requireEnum(payload, "lane", Set.of("SCHEDULED", "CURRENT"));
+    if (payload.has("priority")) {
+      requireLong(payload, "priority", 1);
+      require(payload.required("priority").longValue() <= 5, "priority must not exceed 5");
+    }
+    if (payload.has("pinned")) requireBoolean(payload, "pinned");
+    if (payload.has("suspended")) requireBoolean(payload, "suspended");
+    if (payload.has("driverAudience") || payload.has("plannedDriverWorkerId")) {
+      JsonNode audience = payload.get("driverAudience");
+      JsonNode plannedWorker = payload.get("plannedDriverWorkerId");
+      require(audience != null, "A planned driver requires a driver audience");
+      if (!audience.isNull()) {
+        requireEnum(payload, "driverAudience", Set.of("UNASSIGNED", "ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"));
+      }
+      if (plannedWorker != null) requireNullableUuid(payload, "plannedDriverWorkerId");
+      require(
+          "ASSIGNED_DRIVER".equals(audience.isNull() ? null : audience.stringValue())
+              == (plannedWorker != null && !plannedWorker.isNull()),
+          "Driver audience and planned worker are inconsistent");
+    }
     requireNullableLong(payload, "plannedDurationMinutes", 0);
     requireNullableTimestamp(payload, "deadlineAt");
     requireNullableTimestamp(payload, "doneAt");

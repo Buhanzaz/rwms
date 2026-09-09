@@ -69,6 +69,25 @@ public class BoardTask extends AbstractVersionedEntity {
   @Column(name = "status", nullable = false, length = 32)
   private TaskStatus status = TaskStatus.ACTIVE;
 
+  @Column(name = "suspended", nullable = false)
+  private boolean suspended;
+
+  public boolean isSuspended() {
+    return suspended;
+  }
+
+  /** Disables unfinished execution without changing the source-owned task lifecycle. */
+  public void suspend() {
+    if (status != TaskStatus.ACTIVE) throw new IllegalStateException("Task is not active");
+    suspended = true;
+  }
+
+  /** Restores availability; assignment history is never reactivated implicitly. */
+  public void restore() {
+    if (status != TaskStatus.ACTIVE) throw new IllegalStateException("Task is not active");
+    suspended = false;
+  }
+
   @Column(name = "planned_duration_minutes")
   private Integer plannedDurationMinutes;
 

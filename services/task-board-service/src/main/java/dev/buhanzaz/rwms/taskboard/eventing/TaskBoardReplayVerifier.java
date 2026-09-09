@@ -264,6 +264,13 @@ public class TaskBoardReplayVerifier {
       compatible.remove("driverAudience");
       compatible.remove("plannedDriverWorkerId");
     }
+    if (type == TaskBoardAggregateType.BOARD_TASK
+        && !stored.has("suspended") && !live.path("suspended").asBoolean()) {
+      if (compatible == null) {
+        compatible = (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+      }
+      compatible.remove("suspended");
+    }
     if (type == TaskBoardAggregateType.WORK_QUEUE) {
       for (String field : List.of("availableTaskLimit", "workerFeedEnabled")) {
         if (!stored.has(field)) {

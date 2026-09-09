@@ -140,6 +140,28 @@ public class TaskBoardController {
     return service.cancelTask(warehouseId, externalTaskId, request);
   }
 
+  /** Temporarily disables ordinary work; native worker principals cannot invoke this command. */
+  @PostMapping("/tasks/{taskId}/suspend")
+  public TaskBoardSnapshot suspend(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody TaskSuspensionRequest request) {
+    userWrite(jwt, warehouseId);
+    return service.suspendTask(warehouseId, taskId, request);
+  }
+
+  /** Restores availability without restoring previous assignments. */
+  @PostMapping("/tasks/{taskId}/restore")
+  public TaskBoardSnapshot restore(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody TaskSuspensionRequest request) {
+    userWrite(jwt, warehouseId);
+    return service.restoreTask(warehouseId, taskId, request);
+  }
+
   /** Resolves the registration and route state for an external task UUID. */
   @GetMapping("/tasks/by-external-id/{externalTaskId}")
   public BoardTaskRegistrationDto registration(

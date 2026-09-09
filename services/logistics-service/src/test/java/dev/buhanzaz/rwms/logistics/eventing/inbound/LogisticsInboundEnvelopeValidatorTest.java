@@ -13,6 +13,49 @@ class LogisticsInboundEnvelopeValidatorTest {
       new LogisticsInboundEnvelopeValidator(new ObjectMapper());
 
   @Test
+  void acceptsHistoricalAndSuspensionAwareTaskFactsWithStrictBooleanValidation() {
+    UUID taskId = UUID.randomUUID();
+    var mapper = new ObjectMapper();
+    var root = (tools.jackson.databind.node.ObjectNode)
+        mapper.readTree(rentalEvent(UUID.randomUUID(), taskId, 2, "FREE"));
+    root.put("producer", "task-board-service");
+    root.put("aggregateType", "BOARD_TASK");
+    root.put("eventType", "task-board.board-task.changed.v1");
+    var payload = root.putObject("payload");
+    payload.put("boardTaskId", taskId.toString());
+    payload.put("warehouseId", UUID.randomUUID().toString());
+    payload.putNull("externalTaskId");
+    payload.put("status", "ACTIVE");
+    payload.putNull("plannedDurationMinutes");
+    payload.putNull("deadlineAt");
+    payload.putNull("doneAt");
+    payload.put("deleted", false);
+    assertThat(validator.validate(LogisticsInboundTransportTopics.BOARD_TASK, taskId.toString(),
+        mapper.writeValueAsBytes(root))).isNotNull();
+    payload.put("lane", "SCHEDULED");
+    payload.put("priority", 3);
+    payload.put("pinned", false);
+    payload.putNull("driverAudience");
+    payload.putNull("plannedDriverWorkerId");
+    for (boolean suspended : new boolean[] {true, false}) {
+      payload.put("suspended", suspended);
+      var event = validator.validate(LogisticsInboundTransportTopics.BOARD_TASK, taskId.toString(),
+          mapper.writeValueAsBytes(root));
+      assertThat(event.payload().required("suspended").booleanValue()).isEqualTo(suspended);
+      assertThat(event.payload().required("status").stringValue()).isEqualTo("ACTIVE");
+    }
+    payload.put("suspended", "true");
+    assertThatThrownBy(() -> validator.validate(LogisticsInboundTransportTopics.BOARD_TASK,
+        taskId.toString(), mapper.writeValueAsBytes(root)))
+        .isInstanceOf(LogisticsInboundValidationException.class);
+    payload.put("suspended", true);
+    payload.put("unexpected", true);
+    assertThatThrownBy(() -> validator.validate(LogisticsInboundTransportTopics.BOARD_TASK,
+        taskId.toString(), mapper.writeValueAsBytes(root)))
+        .isInstanceOf(LogisticsInboundValidationException.class);
+  }
+
+  @Test
   void acceptsAnExactDeclaredAssetFactWithItsAggregateKafkaKey() {
     UUID eventId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();

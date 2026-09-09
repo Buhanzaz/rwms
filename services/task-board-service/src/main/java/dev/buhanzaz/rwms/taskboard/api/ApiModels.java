@@ -1080,6 +1080,9 @@ public final class ApiModels {
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotBlank @Size(max = 1000) String reason) {}
 
+  /** Manager-only reversible suspension command fenced by the observed task version. */
+  public record TaskSuspensionRequest(@NotNull @Min(0) Long expectedTaskVersion) {}
+
   public enum PreStartCancellationOutcome {
     CANCELLED,
     ALREADY_CANCELLED,
@@ -1297,7 +1300,8 @@ public final class ApiModels {
       List<AssignmentDto> assignments,
       TaskTimerSnapshot timerSnapshot,
       TaskSourceReferenceDto source,
-      @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience) {}
+      @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience,
+      boolean suspended) {}
 
   /** Complete manager column or a server-selected native-surface subset of one physical queue. */
   public record BoardColumnDto(

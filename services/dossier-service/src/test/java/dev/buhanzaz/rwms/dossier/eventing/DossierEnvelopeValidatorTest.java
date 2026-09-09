@@ -331,6 +331,28 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void acceptsSuspensionAndRestorationFactsButRejectsNonBooleanSuspension() {
+    UUID taskId = UUID.randomUUID();
+    String payload = """
+        {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":null,"status":"ACTIVE",
+        "lane":"SCHEDULED","suspended":%s,"plannedDurationMinutes":null,
+        "deadlineAt":null,"doneAt":null,"deleted":false}
+        """;
+    for (boolean suspended : new boolean[] {true, false}) {
+      var event = validator.validate("rwms.task-board.board-task.v1", 0, 5, taskId.toString(),
+          envelope("task-board.board-task.changed.v1", "task-board-service", "BOARD_TASK", taskId,
+              payload.formatted(taskId, WAREHOUSE_ID, suspended)).getBytes(StandardCharsets.UTF_8));
+      assertThat(event.payload().required("suspended").booleanValue()).isEqualTo(suspended);
+      assertThat(event.activityCode()).isNull();
+    }
+    assertThatThrownBy(() -> validator.validate("rwms.task-board.board-task.v1", 0, 5,
+        taskId.toString(), envelope("task-board.board-task.changed.v1", "task-board-service",
+            "BOARD_TASK", taskId, payload.formatted(taskId, WAREHOUSE_ID, "\"true\""))
+            .getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(DossierValidationException.class);
+  }
+
+  @Test
   void validatesDirectCabinMediaAsACabinSubject() {
     UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000003");
     UUID folderId = UUID.fromString("40000000-0000-0000-0000-000000000004");

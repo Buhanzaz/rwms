@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventStore;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -24,6 +25,8 @@ import java.util.UUID;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Executes worker-owned task transitions, timers, assignments and interruption recovery.
@@ -56,6 +59,8 @@ class TaskBoardWorkerExecutionService {
   private final WorkerQueuePlanPolicy workerQueuePlans;
   private final PlanningReplanHoldFence replanHolds;
   private final LinkedQueueContinuationPolicy linkedQueues;
+  private final WorkerInvalidationHub workerInvalidations;
+  private final WorkerFeedRevisionStore workerFeedRevisions;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -77,7 +82,9 @@ class TaskBoardWorkerExecutionService {
       MaintenanceTaskExecutionPackageService executionPackages,
       WorkerQueuePlanPolicy workerQueuePlans,
       PlanningReplanHoldFence replanHolds,
-      LinkedQueueContinuationPolicy linkedQueues) {
+      LinkedQueueContinuationPolicy linkedQueues,
+      WorkerInvalidationHub workerInvalidations,
+      WorkerFeedRevisionStore workerFeedRevisions) {
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -98,6 +105,8 @@ class TaskBoardWorkerExecutionService {
     this.workerQueuePlans = workerQueuePlans;
     this.replanHolds = replanHolds;
     this.linkedQueues = linkedQueues;
+    this.workerInvalidations = workerInvalidations;
+    this.workerFeedRevisions = workerFeedRevisions;
   }
 
   CancelledTaskDto cancelTask(
@@ -203,6 +212,92 @@ class TaskBoardWorkerExecutionService {
   }
 
 
+  /**
+   * Reversibly disables the complete unfinished ordinary route under the same warehouse lock as
+   * TAKE. Assignments end, but time history, evidence, route identity and source lifecycle remain.
+   * The next responsibility segment uses the established return policy for its remaining budget.
+   */
+  void setTaskSuspended(
+      UUID warehouseId, UUID taskId, TaskSuspensionRequest request, boolean suspended) {
+    queuePositions.lockQueueMutation(warehouseId);
+    BoardTask task = tasks.findById(taskId)
+        .filter(value -> value.getWarehouseId().equals(warehouseId))
+        .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
+    if (task.getStatus() != TaskStatus.ACTIVE) {
+      throw new ConflictException("Изменить доступность можно только незавершенной задачи");
+    }
+    List<QueueEntry> route = entries.findAllByTaskIdOrderByRouteIndexAsc(taskId);
+    if (route.isEmpty()
+        || route.stream().anyMatch(entry -> entry.getQueue().getPurpose() != QueuePurpose.GENERAL)) {
+      throw new ConflictException("Приостановка доступна только для обычных очередей");
+    }
+    if (task.isSuspended() == suspended) return;
+    if (suspended && route.stream().noneMatch(entry ->
+        entry.getStatus() == EntryStatus.IN_PROGRESS || entry.getStatus() == EntryStatus.PAUSED)) {
+      throw new ConflictException("Приостановить можно только взятую задачу");
+    }
+    List<QueueEntry> unfinished = route.stream()
+        .filter(entry -> UNFINISHED.contains(entry.getStatus())).toList();
+    Set<QueueEntry> streams = new LinkedHashSet<>(unfinished);
+    if (suspended) streams.addAll(interruptionNeighbours(unfinished));
+    var streamVersions = queuePositions.lockTaskAndEntryStreams(task, streams);
+    OffsetDateTime now = now();
+    Set<UUID> kpiGroups = new LinkedHashSet<>();
+    if (suspended) {
+      task.suspend();
+      for (QueueEntry entry : unfinished) {
+        kpiGroups.addAll(kpiEvidence.returnSegment(warehouseId, entry, now));
+        stopTimer(entry, now);
+        for (TaskAssignment assignment : assignments.findAllByQueueEntryIdAndStatusIn(
+            entry.getId(), Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))) {
+          assignment.setStatus(AssignmentStatus.CANCELLED);
+          assignment.setPausedAt(null);
+          assignment.setFinishedAt(now);
+          projectionWriter.save(assignments, assignment);
+          event(entry, assignment.getWorker(), assignment.getWorkerGroup(),
+              TimeEventType.CANCELLED, "Задача временно приостановлена руководителем", null, now);
+        }
+        resolveInterruptions(entry, now);
+        closeInterruptedLinks(entry, now);
+        Long originalBudget = entry.getOriginalBudgetSeconds();
+        Long currentBudget = entry.getCurrentBudgetSeconds();
+        if (originalBudget != null && currentBudget != null) {
+          long remaining = currentBudget - entry.getActiveWorkSeconds();
+          entry.resetResponsibilitySegment(remaining > 0 ? remaining : originalBudget);
+        } else {
+          entry.setActiveWorkSeconds(0);
+        }
+        entry.setStatus(EntryStatus.WAITING);
+        entry.setPausedAt(null);
+        entry.setPauseOrigin(null);
+        projectionWriter.save(entries, entry);
+      }
+    } else {
+      task.restore();
+    }
+    task = projectionWriter.saveAndFlush(tasks, task);
+    projectionWriter.flush();
+    for (QueueEntry entry : streams) {
+      eventSourcing.entryChanged(entry,
+          queuePositions.streamVersion(streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, entry.getId()),
+          suspended && unfinished.contains(entry)
+              ? TaskBoardEventTypes.QUEUE_ENTRY_RETURNING : TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
+    }
+    eventSourcing.taskChanged(task,
+        queuePositions.streamVersion(streamVersions, TaskBoardAggregateType.BOARD_TASK, taskId),
+        TaskBoardEventTypes.BOARD_TASK_CHANGED);
+    unfinished.forEach(entry -> ownerProofs.publish(warehouseId, entry.getId(), !suspended));
+    kpiGroups.forEach(groupId -> kpiEvidence.refreshGroup(warehouseId, groupId, now));
+    kpiEvidence.refreshWarehouse(warehouseId, now);
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCommit() {
+        workerInvalidations.feedChanged(warehouseId, workerFeedRevisions.current(warehouseId));
+      }
+    });
+  }
+
   List<UUID> returnActiveWorkForGroup(UUID warehouseId, UUID groupId) {
     workforce.requireGroup(warehouseId, groupId);
     List<QueueEntry> affected =
@@ -298,6 +393,7 @@ class TaskBoardWorkerExecutionService {
     // to the loser before it validates WAITING, so a started entry cannot be cancelled by a
     // concurrent source compensation command and a cancelled entry cannot be resurrected.
     var entry = requireEntryForUpdate(warehouseId, entryId);
+    requireNotSuspended(entry);
     replanHolds.requireExecutionAllowed(entry.getTask());
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     boolean joiningSecondary = entry.getStatus() == EntryStatus.IN_PROGRESS;
@@ -534,7 +630,9 @@ class TaskBoardWorkerExecutionService {
   /** Pauses a taken entry under its observed version. */
   QueueEntry pause(
       UUID warehouseId, UUID entryId, PauseEntryRequest request, UUID authenticatedWorkerId) {
+    queuePositions.lockQueueMutation(warehouseId);
     var entry = requireEntry(warehouseId, entryId);
+    requireNotSuspended(entry);
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     long streamVersion = eventSourcing.lock(TaskBoardAggregateType.QUEUE_ENTRY, entryId);
     assertAssigned(entry, authenticatedWorkerId);
@@ -558,7 +656,9 @@ class TaskBoardWorkerExecutionService {
   /** Resumes a paused entry under its observed version. */
   QueueEntry resume(
       UUID warehouseId, UUID entryId, VersionCommand request, UUID authenticatedWorkerId) {
+    queuePositions.lockQueueMutation(warehouseId);
     var entry = requireEntry(warehouseId, entryId);
+    requireNotSuspended(entry);
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     long streamVersion = eventSourcing.lock(TaskBoardAggregateType.QUEUE_ENTRY, entryId);
     assertAssigned(entry, authenticatedWorkerId);
@@ -586,6 +686,7 @@ class TaskBoardWorkerExecutionService {
       UUID warehouseId, UUID entryId, VersionCommand request, UUID authenticatedWorkerId) {
     queuePositions.lockQueueMutation(warehouseId);
     var entry = requireEntry(warehouseId, entryId);
+    requireNotSuspended(entry);
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     assertAssigned(entry, authenticatedWorkerId);
     if (entry.getStatus() != EntryStatus.IN_PROGRESS)
@@ -926,6 +1027,7 @@ class TaskBoardWorkerExecutionService {
     }
     for (var old : affected)
       if (old.getStatus() == EntryStatus.PAUSED
+          && !old.getTask().isSuspended()
           && old.getPauseOrigin() == PauseOrigin.AUTO
           && !interruptions.existsByInterruptedEntryIdAndActiveTrue(old.getId()))
         resumeEntry(
@@ -1002,6 +1104,12 @@ class TaskBoardWorkerExecutionService {
       event(entry, a.getWorker(), a.getWorkerGroup(), type, reason, relatedEntryId, now);
     }
     projectionWriter.save(entries, entry);
+  }
+
+  private void requireNotSuspended(QueueEntry entry) {
+    if (entry.getTask().isSuspended()) {
+      throw new ConflictException("Задача временно приостановлена руководителем");
+    }
   }
 
   private void stopTimer(QueueEntry entry, OffsetDateTime now) {

@@ -638,7 +638,8 @@ class TaskBoardReadProjectionService {
         entryAssignments,
         timerSnapshot(e, serverTime),
         source,
-        driverAudiences.dto(t));
+        driverAudiences.dto(t),
+        t.isSuspended());
   }
 
   /** Materializes all visible-card assignments in one fetch and groups them by route entry. */

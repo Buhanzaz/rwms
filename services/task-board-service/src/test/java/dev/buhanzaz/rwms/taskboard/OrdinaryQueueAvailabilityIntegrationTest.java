@@ -9,6 +9,9 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
@@ -37,9 +40,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -47,6 +53,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Integration coverage for complete ordinary-board projection and canonical SES gating. */
 @SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
 @ActiveProfiles("test")
+@AutoConfigureMockMvc
 class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSupport {
   private static final UUID WAREHOUSE_ID =
       UUID.fromString("00000000-0000-0000-0000-000000000611");
@@ -62,11 +69,152 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
   @org.springframework.beans.factory.annotation.Autowired WorkerTaskBoardService workerTasks;
   @org.springframework.beans.factory.annotation.Autowired TransactionTemplate transactions;
   @MockitoSpyBean WorkerInvalidationHub workerInvalidations;
+  @org.springframework.beans.factory.annotation.Autowired
+  dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore feedRevisions;
+  @org.springframework.beans.factory.annotation.Autowired MockMvc mockMvc;
 
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
     clearInvocations(workerInvalidations);
+  }
+
+  @Test
+  void managerSuspensionReleasesWorkersPreservesTimeAndRestoresTheSameTask() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("suspension"));
+    WorkQueueDto queue = queue("suspension", QueueType.REPAIR, 1, 1, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    workforce.setCurrentGroup(WAREHOUSE_ID, worker.id(),
+        new SetCurrentGroupRequest(worker.version(), group.id()));
+    BoardEntryDto first = entry(create(queue.definitionId(), "suspended-first", LocalDate.now(), 3),
+        "suspended-first");
+    BoardEntryDto second = entry(create(queue.definitionId(), "available-next", LocalDate.now(), 3),
+        "available-next");
+    BoardEntryDto taken = board.takeFromMobile(MobileTaskSurface.WORKER, WAREHOUSE_ID, first.id(),
+        new TakeEntryRequest(first.version(), group.id(), worker.id()), worker.id());
+    jdbc.update("update queue_entry set active_work_seconds=120, original_budget_seconds=600, "
+        + "current_budget_seconds=600 where id=?", first.id());
+    long beforeSuspend = feedRevisions.current(WAREHOUSE_ID);
+    clearInvocations(workerInvalidations);
+    transactions.executeWithoutResult(transaction -> {
+      board.suspendTask(WAREHOUSE_ID, taken.taskId(), new TaskSuspensionRequest(taken.taskVersion()));
+      verify(workerInvalidations, never()).feedChanged(eq(WAREHOUSE_ID), anyLong());
+      transaction.setRollbackOnly();
+    });
+    verify(workerInvalidations, never()).feedChanged(eq(WAREHOUSE_ID), anyLong());
+    assertThat(feedRevisions.current(WAREHOUSE_ID)).isEqualTo(beforeSuspend);
+    assertThat(board.entry(WAREHOUSE_ID, first.id()).suspended()).isFalse();
+    BoardEntryDto suspended = entry(board.suspendTask(WAREHOUSE_ID, taken.taskId(),
+        new TaskSuspensionRequest(taken.taskVersion())), "suspended-first");
+    long afterSuspend = feedRevisions.current(WAREHOUSE_ID);
+    assertThat(afterSuspend).isGreaterThan(beforeSuspend);
+    verify(workerInvalidations).feedChanged(WAREHOUSE_ID, afterSuspend);
+    assertThat(suspended.suspended()).isTrue();
+    assertThat(suspended.taskStatus()).isEqualTo(TaskStatus.ACTIVE);
+    assertThat(suspended.status()).isEqualTo(EntryStatus.WAITING);
+    assertThat(suspended.activeStartedAt()).isNull();
+    assertThat(suspended.activeWorkSeconds()).isZero();
+    assertThat(jdbc.queryForObject("select current_budget_seconds from queue_entry where id=?",
+        Long.class, first.id())).isBetween(470L, 480L);
+    assertThat(board.history(WAREHOUSE_ID, first.id())).hasSize(2);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from task_assignment where queue_entry_id=? and status in ('ACTIVE','PAUSED')",
+        Integer.class, first.id())).isZero();
+    assertThat(column(board.workerSnapshot(WAREHOUSE_ID, worker.id()), queue.id()).entries())
+        .extracting(BoardEntryDto::id).containsExactly(second.id());
+    assertThatThrownBy(() -> board.take(WAREHOUSE_ID, first.id(),
+        new TakeEntryRequest(suspended.version(), group.id(), worker.id()), null))
+        .isInstanceOf(ConflictException.class).hasMessageContaining("приостановлена");
+    assertThatThrownBy(() -> board.complete(WAREHOUSE_ID, first.id(),
+        new VersionCommand(suspended.version()), worker.id()))
+        .isInstanceOf(ConflictException.class);
+    assertThatThrownBy(() -> board.restoreTask(WAREHOUSE_ID, first.taskId(),
+        new TaskSuspensionRequest(taken.taskVersion())))
+        .isInstanceOf(ConflictException.class);
+    verify(workerInvalidations, times(1)).feedChanged(eq(WAREHOUSE_ID), anyLong());
+    assertThat(board.takeFromMobile(MobileTaskSurface.WORKER, WAREHOUSE_ID, second.id(),
+        new TakeEntryRequest(second.version(), group.id(), worker.id()), worker.id()).status())
+        .isEqualTo(EntryStatus.IN_PROGRESS);
+    clearInvocations(workerInvalidations);
+    long beforeRestore = feedRevisions.current(WAREHOUSE_ID);
+    BoardEntryDto restored = entry(board.restoreTask(WAREHOUSE_ID, first.taskId(),
+        new TaskSuspensionRequest(suspended.taskVersion())), "suspended-first");
+    assertThat(feedRevisions.current(WAREHOUSE_ID)).isGreaterThan(beforeRestore);
+    verify(workerInvalidations).feedChanged(WAREHOUSE_ID, feedRevisions.current(WAREHOUSE_ID));
+    assertThat(restored.suspended()).isFalse();
+    assertThat(restored.id()).isEqualTo(first.id());
+    assertThat(restored.taskId()).isEqualTo(first.taskId());
+    assertThat(restored.activeWorkSeconds()).isEqualTo(suspended.activeWorkSeconds());
+    assertThat(restored.assignments()).allSatisfy(assignment ->
+        assertThat(assignment.status()).isEqualTo(dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus.CANCELLED));
+    assertThat(column(board.workerSnapshot(WAREHOUSE_ID, worker.id()), queue.id()).entries())
+        .extracting(BoardEntryDto::id).contains(first.id(), second.id());
+    assertThat(jdbc.queryForList(
+        "select event_type from domain_event where aggregate_id in (?,?)", String.class,
+        first.id().toString(), first.taskId().toString()))
+        .doesNotContain("task-board.board-task.cancelled.v1", "task-board.queue-entry.cancelled.v1");
+  }
+
+  @Test
+  void suspensionCoversTheWholeRouteAndResumesOtherAutoInterruptedWork() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("suspension-interruption"));
+    WorkQueueDto normal = queue("normal", QueueType.REPAIR, 2, 0, workerClass.id());
+    WorkQueueDto urgent = queue("urgent", QueueType.REPAIR, 2, 0, workerClass.id());
+    WorkQueueDto later = queue("later", QueueType.REPAIR, 2, 0, workerClass.id());
+    jdbc.update("update work_queue_class_binding set stop_task_on_take=true where queue_id=?", urgent.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    BoardEntryDto normalEntry = entry(create(normal.definitionId(), "interrupted", LocalDate.now(), 3),
+        "interrupted");
+    board.take(WAREHOUSE_ID, normalEntry.id(),
+        new TakeEntryRequest(normalEntry.version(), group.id(), worker.id()), null);
+    TaskBoardSnapshot route = parallelRoute("interrupting", urgent, later);
+    BoardEntryDto urgentEntry = entry(column(route, urgent.id()).entries(), "interrupting");
+    BoardEntryDto laterEntry = entry(column(route, later.id()).entries(), "interrupting");
+    BoardEntryDto taken = board.take(WAREHOUSE_ID, urgentEntry.id(),
+        new TakeEntryRequest(urgentEntry.version(), group.id(), worker.id()), null);
+    assertThat(board.entry(WAREHOUSE_ID, normalEntry.id()).status()).isEqualTo(EntryStatus.PAUSED);
+    board.suspendTask(WAREHOUSE_ID, taken.taskId(), new TaskSuspensionRequest(taken.taskVersion()));
+    assertThat(board.entry(WAREHOUSE_ID, normalEntry.id()).status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    assertThat(board.entry(WAREHOUSE_ID, urgentEntry.id()).suspended()).isTrue();
+    assertThat(board.entry(WAREHOUSE_ID, laterEntry.id()).suspended()).isTrue();
+    assertThat(jdbc.queryForObject("select count(*) from task_auto_interruption where active=true",
+        Integer.class)).isZero();
+  }
+
+  @Test
+  void suspensionAndRestoreArePanelOnlyAndVersionFenced() throws Exception {
+    WorkerClassDto workerClass = registry.createClass(workerClass("suspension-auth"));
+    WorkQueueDto queue = queue("suspension-auth", QueueType.REPAIR, 1, 1, workerClass.id());
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    BoardEntryDto first = entry(create(queue.definitionId(), "auth-first", LocalDate.now(), 3), "auth-first");
+    BoardEntryDto taken = board.take(WAREHOUSE_ID, first.id(),
+        new TakeEntryRequest(first.version(), group.id(), worker.id()), null);
+    for (String action : List.of("suspend", "restore")) {
+      mockMvc.perform(post("/api/warehouses/{warehouseId}/task-board/tasks/{taskId}/" + action,
+              WAREHOUSE_ID, first.taskId())
+          .with(jwt().jwt(token -> token.claim("principal_type", "WORKER")
+              .claim("worker_id", worker.id().toString()).claim("scope", "rwms.write")))
+          .contentType(MediaType.APPLICATION_JSON)
+          .content("{\"expectedTaskVersion\":" + taken.taskVersion() + "}"))
+          .andExpect(status().isForbidden());
+    }
+    var admin = jwt().jwt(token -> token.claim("principal_type", "USER")
+        .claim("global_role", "SYSTEM_ADMIN").claim("scope", "rwms.write"));
+    String path = "/api/warehouses/{warehouseId}/task-board/tasks/{taskId}/suspend";
+    mockMvc.perform(post(path, WAREHOUSE_ID, first.taskId()).with(admin)
+        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+        .andExpect(status().isBadRequest());
+    mockMvc.perform(post(path, WAREHOUSE_ID, first.taskId()).with(admin)
+        .contentType(MediaType.APPLICATION_JSON)
+        .content("{\"expectedTaskVersion\":" + taken.taskVersion() + "}"))
+        .andExpect(status().isOk());
+    mockMvc.perform(post(path, WAREHOUSE_ID, first.taskId()).with(admin)
+        .contentType(MediaType.APPLICATION_JSON)
+        .content("{\"expectedTaskVersion\":" + taken.taskVersion() + "}"))
+        .andExpect(status().isConflict());
   }
 
   @Test

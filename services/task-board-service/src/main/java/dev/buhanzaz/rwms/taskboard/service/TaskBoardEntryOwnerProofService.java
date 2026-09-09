@@ -116,6 +116,7 @@ public class TaskBoardEntryOwnerProofService {
 
   private boolean isOpen(QueueEntry entry) {
     return entry.getTask().getStatus() == TaskStatus.ACTIVE
+        && !entry.getTask().isSuspended()
         && OPEN_ENTRIES.contains(entry.getStatus());
   }
 

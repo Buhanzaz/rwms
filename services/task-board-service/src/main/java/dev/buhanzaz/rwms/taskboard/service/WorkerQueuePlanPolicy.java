@@ -42,7 +42,7 @@ class WorkerQueuePlanPolicy {
     int waitingCount = 0;
     List<QueueEntry> result = new ArrayList<>();
     for (QueueEntry entry : OrdinaryQueueAvailabilityPolicy.orderedEntries(candidates)) {
-      if (entry.getEntryType() != EntryType.REAL) continue;
+      if (entry.getEntryType() != EntryType.REAL || entry.getTask().isSuspended()) continue;
       if (entry.getStatus() == EntryStatus.IN_PROGRESS || entry.getStatus() == EntryStatus.PAUSED) {
         result.add(entry);
       } else if (entry.getStatus() == EntryStatus.WAITING
@@ -55,6 +55,7 @@ class WorkerQueuePlanPolicy {
 
   /** Returns whether a direct WorkerApp lookup is still inside the current publication window. */
   boolean isVisible(QueueEntry entry) {
+    if (entry.getTask().isSuspended()) return false;
     WorkQueue queue = entry.getQueue();
     if (queue == null || queue.getPurpose() != QueuePurpose.GENERAL) return true;
     if (!isPublished(queue)

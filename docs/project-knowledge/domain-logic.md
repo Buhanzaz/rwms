@@ -286,6 +286,19 @@ non-published baseline facts. It does not change workforce data or credential ma
 Existing streams and subsequent optimistic concurrency remain unchanged. Evidence:
 [`V53 workforce adoption`](../../services/task-board-service/src/main/resources/db/migration/V53__restore_missing_workforce_event_streams.sql).
 
+Only a warehouse `EDIT` user can temporarily suspend a taken ordinary task through the panel
+commands `POST /api/task-board/warehouses/{warehouseId}/task-board/tasks/{taskId}/suspend`
+and `/restore`, fenced by `expectedTaskVersion`. Native worker principals cannot invoke them.
+Suspension releases the unfinished route's assignments and stops timers while preserving task,
+route and external identities, completed work, evidence and elapsed-work history. Suspended
+cards remain in the manager snapshot but are excluded from the worker plan before its limit is
+counted, allowing the next eligible work to appear. Restoration makes the same task available
+without reattaching previous workers. This is not terminal cancellation: the task stays `ACTIVE`,
+and `BOARD_TASK_CHANGED`/`QUEUE_ENTRY_RETURNING` facts do not cancel the source repair. The optional
+event `suspended` boolean is accepted by maintenance, logistics and dossier; old events remain
+valid. Evidence: [task-board contract](../../contracts/openapi/task-board-service.yaml),
+[execution owner](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java).
+
 A route uses one mandatory phase sequence: SES, welding, exterior, interior,
 electrical, then plumbing. The first existing unfinished phase is `REAL` by
 default; absent or completed phases are skipped and all later work starts as

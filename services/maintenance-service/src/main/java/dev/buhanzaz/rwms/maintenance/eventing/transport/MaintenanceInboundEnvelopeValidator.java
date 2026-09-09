@@ -54,6 +54,7 @@ public class MaintenanceInboundEnvelopeValidator {
           "scheduledDate",
           "priority",
           "pinned",
+          "suspended",
           "driverAudience",
           "plannedDriverWorkerId");
   private static final Set<String> QUEUE_ENTRY_BASE_FIELDS =
@@ -222,6 +223,9 @@ public class MaintenanceInboundEnvelopeValidator {
       }
       if (payload.has("pinned")) {
         requireBoolean(payload, "pinned");
+      }
+      if (payload.has("suspended")) {
+        requireBoolean(payload, "suspended");
       }
       validateDriverAudience(payload);
     }

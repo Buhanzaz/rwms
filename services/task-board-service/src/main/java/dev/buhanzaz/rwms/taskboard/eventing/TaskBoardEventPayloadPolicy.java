@@ -60,7 +60,7 @@ public class TaskBoardEventPayloadPolicy {
   private static final Map<Class<?>, Set<String>> OPTIONAL_COMPATIBILITY_FIELDS =
       Map.of(
           BoardTaskFact.class,
-          Set.of("driverAudience", "plannedDriverWorkerId"),
+          Set.of("driverAudience", "plannedDriverWorkerId", "suspended"),
           WorkQueueFact.class,
           Set.of("availableTaskLimit", "workerFeedEnabled"));
 
@@ -98,7 +98,13 @@ public class TaskBoardEventPayloadPolicy {
     try {
       Class<?> payloadType = PAYLOAD_TYPES.get(aggregateType);
       requireCanonicalRecordShape(payloadType, payload);
-      strictObjectMapper.readerFor(payloadType).readValue(payload);
+      JsonNode typedPayload = payload;
+      if (payloadType == BoardTaskFact.class && !payload.has("suspended")) {
+        var compatible = (tools.jackson.databind.node.ObjectNode) payload.deepCopy();
+        compatible.put("suspended", false);
+        typedPayload = compatible;
+      }
+      strictObjectMapper.readerFor(payloadType).readValue(typedPayload);
     } catch (RuntimeException exception) {
       throw new IllegalArgumentException("Task-board event payload failed typed semantic validation", exception);
     }
@@ -118,6 +124,10 @@ public class TaskBoardEventPayloadPolicy {
   private static void requireCanonicalRecordShape(Class<?> recordType, JsonNode payload) {
     if (!recordType.isRecord() || !payload.isObject()) {
       throw new IllegalArgumentException("Task-board event payload must use a record object");
+    }
+    if (recordType == BoardTaskFact.class
+        && payload.has("suspended") && !payload.get("suspended").isBoolean()) {
+      throw new IllegalArgumentException("Task-board suspension must be a boolean");
     }
     if (recordType == BoardTaskFact.class
         && payload.has("plannedDriverWorkerId")

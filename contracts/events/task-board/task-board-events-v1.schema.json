@@ -436,6 +436,10 @@
         "lane": {"enum": ["SCHEDULED", "CURRENT"]},
         "priority": {"type": "integer", "minimum": 1, "maximum": 5},
         "pinned": {"type": "boolean"},
+        "suspended": {
+          "type": "boolean", "default": false,
+          "description": "Reversible manager suspension of ordinary work; absent in older events means false. Does not cancel the source-domain task."
+        },
         "driverAudience": {
           "oneOf": [
             {"enum": ["UNASSIGNED", "ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"]},

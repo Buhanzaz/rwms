@@ -136,6 +136,22 @@ public class TaskBoardService {
     return workerExecutions.cancelTask(warehouseId, externalTaskId, request);
   }
 
+  /** Suspends ordinary work without cancelling its source-owned business task. */
+  @Transactional
+  public TaskBoardSnapshot suspendTask(
+      UUID warehouseId, UUID taskId, TaskSuspensionRequest request) {
+    workerExecutions.setTaskSuspended(warehouseId, taskId, request, true);
+    return readProjections.snapshot(warehouseId);
+  }
+
+  /** Restores the same route without reattaching previous workers. */
+  @Transactional
+  public TaskBoardSnapshot restoreTask(
+      UUID warehouseId, UUID taskId, TaskSuspensionRequest request) {
+    workerExecutions.setTaskSuspended(warehouseId, taskId, request, false);
+    return readProjections.snapshot(warehouseId);
+  }
+
   @Transactional(readOnly = true)
   /** Resolves an external-task registration in the supplied warehouse scope. */
   public BoardTaskRegistrationDto registration(UUID warehouseId, UUID externalTaskId) {

@@ -10,6 +10,18 @@ state or workforce tables directly.
 
 ## Why it exists
 
+Managers may suspend a taken ordinary task with version-fenced `tasks/{taskId}/suspend`
+and restore it through `tasks/{taskId}/restore`. Suspension leaves the task `ACTIVE` with
+`suspended=true`, keeps its complete route visible on the manager board, stops timers and
+ends active/paused assignments while preserving evidence and immutable time history. The next
+responsibility segment starts with the remaining budget (or the original budget if exhausted),
+as when active work is returned after a group is disabled.
+The unfinished route is excluded from worker availability, so another task can be taken.
+Restore retains the same task and entry IDs without reassigning previous workers.
+Both commands reject worker principals and do not cancel the source-domain repair or
+emit terminal task/entry cancellation events. Older board-task events without `suspended`
+mean `false`; new events carry the flag explicitly.
+
 Maintenance, logistics, inventory, and managers all need operational work, but
 one queue entry must have one owner for ordering, assignment, execution, pause,
 completion, and history. Task-board centralizes that operational truth while

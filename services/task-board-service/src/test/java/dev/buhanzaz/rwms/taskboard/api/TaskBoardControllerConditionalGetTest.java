@@ -272,7 +272,8 @@ class TaskBoardControllerConditionalGetTest {
             List.of(),
             timer,
             null,
-            null);
+            null,
+            false);
     return new TaskBoardSnapshot(
         WAREHOUSE,
         List.of(

@@ -64,6 +64,7 @@ class TaskBoardEventPayloadPolicyTest {
     assertThat(payload.required("scheduledDate").stringValue()).isEqualTo("2026-07-24");
     assertThat(payload.required("priority").intValue()).isOne();
     assertThat(payload.required("pinned").booleanValue()).isTrue();
+    assertThat(payload.required("suspended").booleanValue()).isFalse();
     assertThat(payload.required("driverAudience").stringValue())
         .isEqualTo("ASSIGNED_DRIVER");
     assertThat(payload.required("plannedDriverWorkerId").stringValue())
@@ -93,6 +94,7 @@ class TaskBoardEventPayloadPolicyTest {
     var legacyObject = (tools.jackson.databind.node.ObjectNode) legacy;
     legacyObject.remove("driverAudience");
     legacyObject.remove("plannedDriverWorkerId");
+    legacyObject.remove("suspended");
 
     assertThatCode(
             () ->
@@ -103,6 +105,11 @@ class TaskBoardEventPayloadPolicyTest {
                     legacyObject))
         .doesNotThrowAnyException();
 
+    legacyObject.putNull("suspended");
+    assertThatThrownBy(() -> policy.validateNode(TaskBoardEventTypes.BOARD_TASK_CHANGED,
+        TaskBoardAggregateType.BOARD_TASK, taskId, legacyObject))
+        .isInstanceOf(IllegalArgumentException.class);
+    legacyObject.remove("suspended");
     legacyObject.put("plannedDriverWorkerId", UUID.randomUUID().toString());
     assertThatThrownBy(
             () ->

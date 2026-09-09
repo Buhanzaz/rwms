@@ -584,6 +584,61 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/tasks/{taskId}/suspend:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      operationId: suspendBoardTask
+      description: >-
+        USER with rwms.write and warehouse EDIT access only; WORKER is forbidden.
+        Temporarily disables a taken ordinary task's entire unfinished route, detaches all
+        active and paused assignments and stops timers while retaining time history and evidence.
+        The next responsibility segment uses the remaining budget, or the original if exhausted.
+        The task stays ACTIVE, remains visible to managers and is excluded from worker availability.
+        Does not cancel the source-domain repair or publish terminal cancellation events.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskSuspensionRequest' }
+      responses:
+        '200':
+          description: Complete manager board including suspended cards
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskBoardSnapshot' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/tasks/{taskId}/restore:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      operationId: restoreBoardTask
+      description: >-
+        USER with rwms.write and warehouse EDIT access only; WORKER is forbidden.
+        Restores a suspended ordinary task with the same identity, route, evidence and time history.
+        Previous workers are not reassigned; a new TAKE is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskSuspensionRequest' }
+      responses:
+        '200':
+          description: Complete manager board after restoration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskBoardSnapshot' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /internal/task-board/v1/tasks:
     post:
       operationId: registerExternalBoardTask
@@ -2571,6 +2626,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     QueueReferenceType:
       name: type
       in: path
@@ -3842,7 +3902,7 @@ components:
       additionalProperties: false
     BoardEntry:
       type: object
-      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, driverAudience, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, assignments, timerSnapshot]
+      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, driverAudience, suspended, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, assignments, timerSnapshot]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -3853,6 +3913,9 @@ components:
         title: { type: string }
         unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
         taskStatus: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        suspended:
+          type: boolean
+          description: Reversible manager suspension; unfinished cards remain visible but cannot execute.
         scheduledDate: { type: string, format: date }
         lane: { $ref: '#/components/schemas/TaskLane' }
         priority: { type: integer, minimum: 1, maximum: 5 }
@@ -4477,6 +4540,12 @@ components:
       properties:
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
         pinned: { type: boolean }
+      additionalProperties: false
+    TaskSuspensionRequest:
+      type: object
+      required: [expectedTaskVersion]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
       additionalProperties: false
     CancelTaskRequest:
       type: object
