@@ -231,6 +231,39 @@ class DriverTaskWorkflowStore {
   }
 
   /**
+   * Repairs the former capital movement snapshot that assigned cabin photos to both load and move.
+   * The first work retains each photo; all operations and the complete gallery remain intact.
+   * Removing the duplicates makes this a one-time retry through the existing registration relay.
+   */
+  @Transactional
+  public boolean recoverRejectedCapitalRegistration(UUID taskId) {
+    DriverLogisticsTask task = locked(taskId);
+    if (!task.canRecoverRejectedCapitalRegistration()) return false;
+    DriverTaskWorkerContent content = workerContentCodec.decode(task.getWorkerContentJson());
+    java.util.Set<UUID> assigned = new java.util.HashSet<>();
+    List<DriverTaskWorkerContent.Work> works =
+        content.works().stream()
+            .map(
+                work ->
+                    new DriverTaskWorkerContent.Work(
+                        work.id(),
+                        work.name(),
+                        work.quantity(),
+                        work.unit(),
+                        work.durationMinutes(),
+                        work.comment(),
+                        work.sourceMediaIds().stream().filter(assigned::add).toList()))
+            .toList();
+    if (works.equals(content.works())) return false;
+    task.recoverRejectedCapitalRegistration(
+        workerContentCodec.encode(
+            new DriverTaskWorkerContent(
+                content.taskText(), works, content.materials(), content.comments(), content.sourceMedia())));
+    tasks.saveAndFlush(task);
+    return true;
+  }
+
+  /**
    * Restores a recoverable task-board dependency checkpoint only after a matching authoritative
    * snapshot has been read. The existing aggregate transition then resumes scheduled, current,
    * finalizing or cancelled recovery without inventing local status.

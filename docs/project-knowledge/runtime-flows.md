@@ -2517,7 +2517,14 @@ and
    finalizing/cancelled workflow; compensation and business reconciliation
    codes remain terminal. A full page advances the next-pass cursor so those
    retained rows cannot starve later recoverable work. Members cannot be reordered
-   independently and the move never changes audience. Evidence:
+   independently and the move never changes audience. The pass also repairs the former
+   capital snapshot's duplicate source-photo ownership, but only for an unregistered
+   `CAPITAL_TO_PRODUCTION` task rejected with
+   `TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION`. Photos remain assigned to their first
+   work and the complete gallery, operations and external identity are retained.
+   Registration resumes once through the same relay; registered work and other
+   failures are not reopened, and another rejection cannot repeat this repair once
+   the duplicate references are gone. Evidence:
    [`DriverTaskRelay`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskRelay.java),
    [`DriverTaskWorkflowStore`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskWorkflowStore.java), and
    [`DriverLogisticsTaskRepository`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/repository/DriverLogisticsTaskRepository.java).

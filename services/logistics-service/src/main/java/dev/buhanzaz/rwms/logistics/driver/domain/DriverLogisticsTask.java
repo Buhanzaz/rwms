@@ -796,6 +796,30 @@ public class DriverLogisticsTask {
     touch();
   }
 
+  /** Identifies unregistered capital work rejected before task-board accepted its snapshot. */
+  public boolean canRecoverRejectedCapitalRegistration() {
+    return kind == DriverTaskKind.CAPITAL_TO_PRODUCTION
+        && state == DriverTaskState.RECONCILIATION_REQUIRED
+        && taskBoardTaskId == null
+        && "TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION".equals(failureCode);
+  }
+
+  /**
+   * Retries the same external identity after the workflow repairs proven duplicate photo ownership.
+   * Registered tasks and other reconciliation causes cannot reopen through this transition.
+   */
+  public void recoverRejectedCapitalRegistration(String canonicalJson) {
+    if (!canRecoverRejectedCapitalRegistration()) {
+      throw new IllegalStateException("Only rejected unregistered capital work can be recovered");
+    }
+    if (canonicalJson == null || canonicalJson.isBlank()) {
+      throw new IllegalArgumentException("Worker content JSON is required");
+    }
+    workerContentJson = canonicalJson;
+    state = DriverTaskState.REGISTERING;
+    resumeImmediatelyAfterConfirmation();
+  }
+
   /** Applies the authoritative audience echoed by task-board without changing execution state. */
   public void observeAudience(
       DriverTaskAudienceMode audienceMode, UUID workerId, String workerName) {

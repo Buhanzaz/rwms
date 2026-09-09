@@ -21,6 +21,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -73,6 +74,72 @@ class DriverTaskWorkflowStoreTest {
           rentalTerms,
           capacityFence,
           new DriverTaskWorkerContentCodec(new ObjectMapper()));
+
+  @Test
+  void rejectedCapitalRecoveryOnlyRepairsDuplicatePhotoOwnershipOnce() {
+    var codec = new DriverTaskWorkerContentCodec(new ObjectMapper());
+    UUID mediaId = UUID.randomUUID();
+    var content =
+        new DriverTaskWorkerContent(
+            "Капитальный ремонт",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Загрузить", 1, "шт.", null, null, List.of(mediaId)),
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Переместить", 1, "шт.", null, null, List.of(mediaId))),
+            List.of(),
+            List.of(),
+            List.of(new DriverTaskWorkerContent.SourceMedia(mediaId, 1, null, null, OffsetDateTime.now(ZoneOffset.UTC))));
+    DriverLogisticsTask task = rejectedCapitalTask(codec.encode(content));
+    UUID externalTaskId = task.getExternalTaskId();
+
+    assertThat(store.recoverRejectedCapitalRegistration(task.getId())).isTrue();
+
+    assertThat(task.getExternalTaskId()).isEqualTo(externalTaskId);
+    assertThat(task.getState()).isEqualTo(DriverTaskState.REGISTERING);
+    assertThat(task.getFailureCode()).isNull();
+    assertThat(task.getNextAttemptAt()).isNotNull();
+    var recovered = codec.decode(task.getWorkerContentJson());
+    assertThat(recovered.sourceMedia()).isEqualTo(content.sourceMedia());
+    assertThat(recovered.works().getFirst()).isEqualTo(content.works().getFirst());
+    assertThat(recovered.works().get(1).sourceMediaIds()).isEmpty();
+    assertThat(recovered.works().get(1).id()).isEqualTo(content.works().get(1).id());
+    task.requireReconciliation("TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION");
+
+    assertThat(store.recoverRejectedCapitalRegistration(task.getId())).isFalse();
+    verify(tasks, times(1)).saveAndFlush(task);
+  }
+
+  @Test
+  void capitalRecoveryDoesNotReopenRegisteredOtherKindOrOtherFailureTasks() {
+    for (String guard : List.of("registered", "kind", "failure", "state")) {
+      DriverLogisticsTask task = rejectedCapitalTask("{}");
+      switch (guard) {
+        case "registered" -> ReflectionTestUtils.setField(task, "taskBoardTaskId", UUID.randomUUID());
+        case "kind" -> ReflectionTestUtils.setField(task, "kind", DriverTaskKind.DELIVER_TO_REPAIR);
+        case "failure" -> task.requireReconciliation("MAINTENANCE_COMPENSATION_GUARD_UNKNOWN");
+        case "state" -> ReflectionTestUtils.setField(task, "state", DriverTaskState.REGISTERING);
+        default -> throw new AssertionError(guard);
+      }
+      assertThat(store.recoverRejectedCapitalRegistration(task.getId())).as(guard).isFalse();
+      verify(tasks, never()).saveAndFlush(task);
+    }
+  }
+
+  private DriverLogisticsTask rejectedCapitalTask(String contentJson) {
+    UUID repairId = UUID.randomUUID();
+    var task =
+        DriverLogisticsTask.create(
+            UUID.randomUUID(), UUID.randomUUID(), repairId, DriverTaskSourceType.CAPITAL_REPAIR,
+            repairId, DriverTaskKind.CAPITAL_TO_PRODUCTION, DriverTaskPlanningMode.AUTO,
+            LocalDate.now(ZoneOffset.UTC), 3, null, "Б-1", UUID.randomUUID(), UUID.randomUUID(),
+            UUID.randomUUID(), "a".repeat(64));
+    ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+    task.captureWorkerContent(contentJson);
+    task.requireReconciliation("TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION");
+    when(tasks.findForUpdate(task.getId())).thenReturn(Optional.of(task));
+    return task;
+  }
 
   @Test
   void reconciliationWithdrawsExpiryOnlyForAnAuthoritativelyRescheduledWaitingTrip() {

@@ -63,12 +63,17 @@ public class DriverTaskProcessor {
 
   /**
    * Reconciles a terminal dependency-failure checkpoint from task-board's authoritative snapshot.
-   * A failed read leaves the checkpoint untouched for the next bounded relay pass.
+   * A rejected, unregistered capital snapshot with duplicate photo ownership is repaired once
+   * before retrying the same external registration. A failed read leaves other checkpoints untouched.
    *
    * @param taskId durable logistics task identity
    */
   public void reconcileFromTaskBoard(UUID taskId) {
     if (taskId == null) throw new IllegalArgumentException("taskId is required");
+    if (store.recoverRejectedCapitalRegistration(taskId)) {
+      processUntilIdle(taskId);
+      return;
+    }
     Optional<UUID> externalTaskId = store.recoverableReconciliationExternalTaskId(taskId);
     if (externalTaskId.isEmpty()) return;
     try {

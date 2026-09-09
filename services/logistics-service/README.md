@@ -592,6 +592,13 @@ scheduled, current, finalizing or cancelled workflow. Compensation and other bus
 reconciliation codes remain terminal and are never reopened by this pass. A full page advances the
 bounded cursor, so retained business rows cannot indefinitely hide later recoverable work.
 
+Capital-movement source photos belong to the loading work only; all three operations and the full
+source gallery are retained. For an unregistered `CAPITAL_TO_PRODUCTION` task with
+`TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION`, the same reconciliation pass repairs proven duplicate
+photo ownership in the persisted snapshot and retries registration with its original external ID.
+This repair runs only while duplicate references remain; it cannot reopen registered work or
+continually retry another rejection. Invalid references to absent source photos remain errors.
+
 `GET` and `PUT /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings` own the
 warehouse-scoped maximum cabin count for one newly created grouped trip. The lazily materialized
 default is one cabin; GET requires read/VIEW scope and PUT requires write/MANAGE scope with an

@@ -51,6 +51,10 @@ class CapitalRepairDriverTaskContentServiceTest {
             "Переместить бытовку №510 на производство",
             "Выгрузить бытовку №510");
     assertThat(content.works().getFirst().sourceMediaIds()).containsExactly(mediaId);
+    assertThat(content.works().get(1).sourceMediaIds()).isEmpty();
+    assertThat(content.works().get(2).sourceMediaIds()).isEmpty();
+    assertThat(content.works().stream().flatMap(work -> work.sourceMediaIds().stream()))
+        .containsExactly(mediaId);
     assertThat(content.sourceMedia())
         .singleElement()
         .satisfies(

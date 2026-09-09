@@ -17,6 +17,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
+import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
+import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
+import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskWorkerContentCodec;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -76,6 +85,9 @@ class DriverCapitalRepairPromotionIntegrationTest {
 
   @Autowired MockMvc mvc;
   @Autowired JdbcTemplate jdbc;
+  @Autowired DriverLogisticsTaskRepository tasks;
+  @Autowired DriverTaskProcessor processor;
+  @Autowired DriverTaskWorkerContentCodec workerContentCodec;
   @MockitoBean LogisticsDependencyGateway dependencies;
 
   private final AtomicReference<LogisticsDependencyGateway.DriverBoardTask> boardTask =
@@ -168,6 +180,10 @@ class DriverCapitalRepairPromotionIntegrationTest {
               LocalDate scheduledDate = invocation.getArgument(7);
               int priority = invocation.getArgument(8);
               LogisticsDependencyGateway.DriverTaskAudience audience = invocation.getArgument(9);
+              DriverTaskWorkerContent content = invocation.getArgument(10);
+              // Task-board rejects photos assigned to more than one work in the same route step.
+              assertThat(content.works().stream().flatMap(work -> work.sourceMediaIds().stream()))
+                  .doesNotHaveDuplicates();
               LogisticsDependencyGateway.DriverBoardTask registered =
                   new LogisticsDependencyGateway.DriverBoardTask(
                       UUID.nameUUIDFromBytes(("board:" + localTaskId).getBytes()),
@@ -298,6 +314,70 @@ class DriverCapitalRepairPromotionIntegrationTest {
               boardTask.set(cancelled);
               return cancelled;
             });
+  }
+
+  @Test
+  void recoversPersistedRejectedCapitalMovementWithoutLosingWorkOrCreatingAnotherTask() {
+    UUID photoId = UUID.randomUUID();
+    UUID secondPhotoId = UUID.randomUUID();
+    List<UUID> photoIds = List.of(photoId, secondPhotoId);
+    OffsetDateTime recordedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    var original =
+        new DriverTaskWorkerContent(
+            "Капитальный ремонт · бытовка №901",
+            List.of(
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Загрузить бытовку №901", 1, "шт.", null,
+                    "Сверить номер и исходное состояние", photoIds),
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Переместить бытовку №901 на производство", 1, "шт.",
+                    null, "Капитальный ремонт", photoIds),
+                new DriverTaskWorkerContent.Work(
+                    UUID.randomUUID(), "Выгрузить бытовку №901", 1, "шт.", null,
+                    "Подтвердить фактическую выгрузку", List.of())),
+            List.of(new DriverTaskWorkerContent.Material(UUID.randomUUID(), "Бытовка №901", 1, "шт.")),
+            List.of(new DriverTaskWorkerContent.Comment(UUID.randomUUID(), "Исходное состояние", null, recordedAt)),
+            List.of(
+                new DriverTaskWorkerContent.SourceMedia(photoId, 3, "image/jpeg", null, recordedAt),
+                new DriverTaskWorkerContent.SourceMedia(secondPhotoId, 2, "image/jpeg", null, recordedAt)));
+    var task =
+        DriverLogisticsTask.create(
+            WAREHOUSE, CABIN, REPAIR, DriverTaskSourceType.CAPITAL_REPAIR, REPAIR,
+            DriverTaskKind.CAPITAL_TO_PRODUCTION, DriverTaskPlanningMode.AUTO,
+            LocalDate.now(ZoneOffset.UTC), 3, null, "БЫТ-901", QUEUE_DEFINITION,
+            ACTOR, UUID.randomUUID(), "a".repeat(64));
+    task.captureWorkerContent(workerContentCodec.encode(original));
+    task.requireReconciliation("TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION");
+    task = tasks.saveAndFlush(task);
+    UUID taskId = task.getId();
+    UUID externalTaskId = task.getExternalTaskId();
+
+    processor.reconcileFromTaskBoard(taskId);
+    processor.reconcileFromTaskBoard(taskId);
+
+    var reloaded = tasks.findById(taskId).orElseThrow();
+    assertThat(reloaded.getState()).isEqualTo(DriverTaskState.SCHEDULED);
+    assertThat(reloaded.getFailureCode()).isNull();
+    assertThat(reloaded.getExternalTaskId()).isEqualTo(externalTaskId);
+    assertThat(reloaded.getTaskBoardTaskId()).isEqualTo(boardTask.get().taskId());
+    assertThat(boardTask.get().externalTaskId()).isEqualTo(externalTaskId);
+    assertThat(tasks.count()).isOne();
+    assertThat(registrations).hasValue(1);
+    var recovered = workerContentCodec.decode(reloaded.getWorkerContentJson());
+    assertThat(recovered.taskText()).isEqualTo(original.taskText());
+    assertThat(recovered.materials()).isEqualTo(original.materials());
+    assertThat(recovered.comments()).isEqualTo(original.comments());
+    assertThat(recovered.sourceMedia()).isEqualTo(original.sourceMedia());
+    assertThat(recovered.works()).hasSize(3);
+    for (int index = 0; index < original.works().size(); index++) {
+      assertThat(recovered.works().get(index))
+          .usingRecursiveComparison().ignoringFields("sourceMediaIds")
+          .isEqualTo(original.works().get(index));
+    }
+    assertThat(recovered.works().getFirst().sourceMediaIds()).containsExactlyElementsOf(photoIds);
+    assertThat(recovered.works().get(1).sourceMediaIds()).isEmpty();
+    assertThat(recovered.works().get(2).sourceMediaIds()).isEmpty();
+    verify(dependencies, never()).transitionRepairPlace(any(), any(), any(), anyLong(), any());
   }
 
   @Test

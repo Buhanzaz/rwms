@@ -58,7 +58,7 @@ public class CapitalRepairDriverTaskContentService {
             "move",
             "Переместить бытовку №" + number + " на производство",
             "Капитальный ремонт",
-            photoIds));
+            List.of()));
     works.add(
         work(
             repair.repairId(),
