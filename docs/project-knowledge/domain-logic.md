@@ -1563,7 +1563,10 @@ When separately enabled, the planner queues one complete active capacity
 snapshot for the selected warehouse in the same transaction as its local
 capacity mutation. The local generation and publication cursor expose
 `PENDING`, `PUBLISHED` or `FAILED` independently of the already committed
-business change. A leased `SKIP LOCKED` worker retries only due current
+business change. Generation allocation refreshes the locked warehouse and floors
+the next sequence value at its retained generation plus one; sequence drift cannot
+regress a pending publication or block workload creation and capacity reconciliation.
+A leased `SKIP LOCKED` worker retries only due current
 generations with bounded backoff; delayed completion of an older generation
 cannot hide newer pending work. The explicit endpoint remains an operational
 reconciliation boundary rather than a browser-owned retry loop.

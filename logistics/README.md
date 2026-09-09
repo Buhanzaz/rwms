@@ -842,7 +842,10 @@ Warehouse resource mutations and generated-workload replacement publish one
 versioned complete snapshot of generated delivery/pickup demand, active
 period-based shifts, vehicle capacity and that warehouse's complete hourly tariff list. Each committed
 mutation advances a warehouse capacity generation, so retries are idempotent
-and delayed older generations are rejected. Manual requests and imported RWMS
+and delayed older generations are rejected. Allocation rereads the locked warehouse
+and uses at least its retained generation plus one, even if the database sequence
+has fallen behind. Workload creation and explicit capacity reconciliation therefore
+remain usable without resetting published state. Manual requests and imported RWMS
 orders are not re-published as generated demand; replacing capacity never
 deletes a real RWMS booking. Regeneration deletes a saved plan only when every
 referenced request is generator-owned. A real, mixed or confirmed plan causes
