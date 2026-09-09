@@ -17,13 +17,13 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Verifies that startup windows and adaptive launchers use the compact worker mark. */
+/** Verifies that startup windows and adaptive launchers use the full safe-zone worker mark. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], manifest = Config.NONE)
 class WorkerSplashIconTest {
     @Test
     @Config(sdk = [28])
-    fun `pre android 12 theme uses compact worker startup background`() {
+    fun `pre android 12 theme uses full worker startup background`() {
         val application = RuntimeEnvironment.getApplication()
         val context = ContextThemeWrapper(application, R.style.Theme_RwmsWorker)
 
@@ -39,8 +39,8 @@ class WorkerSplashIconTest {
         assertThat(icon).isInstanceOf(AdaptiveIconDrawable::class.java)
         val foreground = (icon as AdaptiveIconDrawable).foreground
         assertThat(foreground).isInstanceOf(LayerDrawable::class.java)
-        assertThat(foreground.intrinsicWidth).isEqualTo(52.dp(resources))
-        assertThat(foreground.intrinsicHeight).isEqualTo((49.05f * resources.displayMetrics.density).roundToInt())
+        assertThat(foreground.intrinsicWidth).isEqualTo(66.dp(resources))
+        assertThat(foreground.intrinsicHeight).isEqualTo((62.23f * resources.displayMetrics.density).roundToInt())
     }
 
     @Test
@@ -60,7 +60,7 @@ class WorkerSplashIconTest {
     }
 
     @Test
-    fun `api 31 theme uses compact foreground on worker blue splash`() {
+    fun `api 31 theme uses full foreground on worker blue splash`() {
         val application = RuntimeEnvironment.getApplication()
         val context = ContextThemeWrapper(application, R.style.Theme_RwmsWorker)
 

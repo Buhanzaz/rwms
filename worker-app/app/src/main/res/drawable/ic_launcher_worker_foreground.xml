@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Keep the complete worker mark inside Android's adaptive/splash safe zone. -->
+    <!-- Fill Android's 66dp adaptive/splash safe-zone diameter without clipping the mark. -->
     <item
-        android:width="52dp"
-        android:height="49.05dp"
+        android:width="66dp"
+        android:height="62.23dp"
         android:gravity="center">
         <bitmap android:src="@drawable/ic_launcher_worker_artwork" android:gravity="fill" />
     </item>
