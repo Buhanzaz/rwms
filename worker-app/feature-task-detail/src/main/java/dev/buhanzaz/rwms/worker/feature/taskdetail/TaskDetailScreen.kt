@@ -1,7 +1,9 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
@@ -41,6 +44,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -380,7 +384,14 @@ fun TaskDetailScreen(
                         OutlinedButton(
                             onClick = { showProblemReport = true },
                             enabled = actionPresentation.actionsEnabled && photoCapture.enabled,
-                            modifier = Modifier.fillMaxWidth().testTag("task-report-problem"),
+                            border = null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(
+                                    BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
+                                    RoundedCornerShape(16.dp),
+                                )
+                                .testTag("task-report-problem"),
                         ) {
                             Icon(Icons.Filled.ReportProblem, contentDescription = null, modifier = Modifier.size(20.dp))
                             Text("Сообщить о проблеме", modifier = Modifier.padding(start = 8.dp))
