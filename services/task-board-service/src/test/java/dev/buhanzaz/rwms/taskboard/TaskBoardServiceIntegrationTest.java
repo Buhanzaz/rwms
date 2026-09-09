@@ -78,6 +78,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @org.springframework.beans.factory.annotation.Autowired WorkerMediaEventProcessor mediaEvents;
   @org.springframework.beans.factory.annotation.Autowired FakeCredentials credentials;
   @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
+  @org.springframework.beans.factory.annotation.Autowired
+  org.springframework.transaction.PlatformTransactionManager transactionManager;
 
   @org.springframework.beans.factory.annotation.Autowired
   OAuth2ResourceServerProperties resourceServer;
@@ -2398,6 +2400,76 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
               assertThat(retained.workerClass().id()).isEqualTo(workerClass.id());
               assertThat(retained.comment()).isEqualTo("Основная");
             });
+  }
+
+  @Test
+  void missingWorkforceStreamsAreAdoptedWithoutChangingDataAndAdminCommandsWork() throws Exception {
+    var workerClass = registry.createClass(workerClass("STREAM_RECOVERY"));
+    var healthy = workforce.createWorker(W1, worker("Healthy", "healthy.login", "password-123", List.of()));
+    var healthyEvents = jdbc.queryForList(
+        "select * from domain_event where aggregate_type = 'WORKER' and aggregate_id = ?",
+        healthy.id().toString());
+    UUID workerId = UUID.randomUUID();
+    UUID groupId = UUID.randomUUID();
+    jdbc.update("""
+        insert into worker(id, version, revision_marker, warehouse_id, display_name, app_login, credential_status)
+        values (?, 3, ?, ?, 'Imported worker', 'imported.login', 'ACTIVE')
+        """, workerId, UUID.randomUUID(), W1);
+    jdbc.update("""
+        insert into worker_class_assignment(id, worker_id, worker_class_id) values (?, ?, ?)
+        """, UUID.randomUUID(), workerId, workerClass.id());
+    jdbc.update("""
+        insert into worker_group(id, version, revision_marker, warehouse_id, worker_class_id, name)
+        values (?, 1, ?, ?, ?, 'Imported group')
+        """, groupId, UUID.randomUUID(), W1, workerClass.id());
+    var groupRequest = new WorkerGroupRequest(
+        1L, workerClass.id(), "Imported group", null, true,
+        List.of(new GroupMemberRequest(workerId, true)),
+        List.of(new CurrentGroupChangeRequest(workerId, 3L, true)));
+    assertThatThrownBy(() -> workforce.updateGroup(W1, groupId, groupRequest))
+        .isInstanceOf(org.springframework.dao.EmptyResultDataAccessException.class);
+    assertThatThrownBy(() -> workforce.resetPassword(W1, workerId, 3L, "new-password-123"))
+        .isInstanceOf(org.springframework.dao.EmptyResultDataAccessException.class);
+    assertThat(credentials.resets).hasValue(0);
+    var workerBefore = jdbc.queryForMap("select * from worker where id = ?", workerId);
+    var groupBefore = jdbc.queryForMap("select * from worker_group where id = ?", groupId);
+    String migration = new org.springframework.core.io.ClassPathResource(
+        "db/migration/V53__restore_missing_workforce_event_streams.sql")
+        .getContentAsString(StandardCharsets.UTF_8);
+    var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+    transaction.executeWithoutResult(ignored -> jdbc.execute(migration));
+    transaction.executeWithoutResult(ignored -> jdbc.execute(migration));
+    assertThat(jdbc.queryForMap("select * from worker where id = ?", workerId)).isEqualTo(workerBefore);
+    assertThat(jdbc.queryForMap("select * from worker_group where id = ?", groupId)).isEqualTo(groupBefore);
+    assertThat(jdbc.queryForList(
+        "select * from domain_event where aggregate_type = 'WORKER' and aggregate_id = ?",
+        healthy.id().toString())).isEqualTo(healthyEvents);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from domain_event event
+        join event_stream_head head using (aggregate_type, aggregate_id)
+        join projection_checkpoint checkpoint using (aggregate_type, aggregate_id, aggregate_version)
+        where event.aggregate_id in (?, ?) and event.baseline and event.occurred_at is null
+          and event.aggregate_version = head.current_version
+          and event.payload_sha256 = checkpoint.projection_sha256
+          and event.payload_sha256 = encode(sha256(convert_to(event.payload::text, 'UTF8')), 'hex')
+          and not jsonb_exists_any(event.payload, array['appLogin', 'password', 'displayName'])
+        """, Integer.class, workerId.toString(), groupId.toString())).isEqualTo(2);
+    assertThat(jdbc.queryForObject("select count(*) from outbox_event where aggregate_id in (?, ?)",
+        Integer.class, workerId.toString(), groupId.toString())).isZero();
+    var group = workforce.updateGroup(W1, groupId, groupRequest);
+    var assignedWorker = workforce.listWorkers(W1).stream()
+        .filter(value -> value.id().equals(workerId)).findFirst().orElseThrow();
+    assertThat(group.members()).hasSize(1);
+    assertThat(assignedWorker.currentGroupId()).isEqualTo(groupId);
+    var reset = workforce.resetPassword(W1, workerId, assignedWorker.version(), "new-password-123");
+    assertThat(reset.appLogin()).isEqualTo("imported.login");
+    assertThat(reset.credentialStatus()).isEqualTo(CredentialStatus.ACTIVE);
+    assertThat(credentials.resets).hasValue(1);
+    assertThatThrownBy(() -> workforce.updateGroup(W1, groupId, groupRequest))
+        .isInstanceOf(ConflictException.class);
+    assertThatThrownBy(() -> workforce.resetPassword(W1, workerId, 3L, "new-password-123"))
+        .isInstanceOf(ConflictException.class);
+    assertThat(credentials.resets).hasValue(1);
   }
 
   @Test
@@ -5618,6 +5690,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     final AtomicBoolean failDelete = new AtomicBoolean();
     final AtomicInteger deletes = new AtomicInteger();
     final AtomicInteger disables = new AtomicInteger();
+    final AtomicInteger resets = new AtomicInteger();
     final AtomicReference<String> lastConfiguredLogin = new AtomicReference<>();
     final AtomicReference<String> externalAppLogin = new AtomicReference<>();
     final AtomicReference<String> externalCredentialState = new AtomicReference<>();
@@ -5631,6 +5704,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
       failDelete.set(false);
       deletes.set(0);
       disables.set(0);
+      resets.set(0);
       lastConfiguredLogin.set(null);
       externalAppLogin.set(null);
       externalCredentialState.set(null);
@@ -5647,6 +5721,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     }
 
     public void reset(UUID workerId, String password) {
+      resets.incrementAndGet();
       if (!delayReset.get()) return;
       resetEntered.countDown();
       try {

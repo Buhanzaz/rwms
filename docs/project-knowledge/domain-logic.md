@@ -280,6 +280,12 @@ TAKE starts the next timer; unlinking releases the reservation. Assignment
 `primaryParticipation` is immutable event evidence, independent of later group
 class edits. Historical unknown roles remain unknown and create no reservation.
 
+Workforce commands require event-stream fencing. Flyway V53 adopts only worker/group
+projections with no stream or historical event evidence, at their existing versions, using
+non-published baseline facts. It does not change workforce data or credential material.
+Existing streams and subsequent optimistic concurrency remain unchanged. Evidence:
+[`V53 workforce adoption`](../../services/task-board-service/src/main/resources/db/migration/V53__restore_missing_workforce_event_streams.sql).
+
 A route uses one mandatory phase sequence: SES, welding, exterior, interior,
 electrical, then plumbing. The first existing unfinished phase is `REAL` by
 default; absent or completed phases are skipped and all later work starts as

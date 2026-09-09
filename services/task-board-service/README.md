@@ -35,6 +35,12 @@ warehouse authorization rules when a warehouse ID is supplied directly.
 
 ## Command and task flow
 
+Flyway V53 adopts workers and groups that lack an event stream using a baseline at their
+existing projection version. It preserves profiles, credentials and membership, emits no
+business outbox event, and leaves existing streams untouched. Conflicting historical evidence
+blocks adoption rather than replacing history. Subsequent workforce commands retain normal
+version fencing.
+
 ```text
 manager / source service
           |
