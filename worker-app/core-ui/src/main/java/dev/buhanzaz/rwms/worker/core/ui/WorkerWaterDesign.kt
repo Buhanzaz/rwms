@@ -20,6 +20,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -28,6 +29,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -136,14 +140,20 @@ fun WorkerStoreLaunchGate(content: @Composable () -> Unit) {
         if (greetingFinished) {
             content()
         } else {
-            Box(
-                modifier = Modifier.fillMaxSize().testTag("worker-hello-screen"),
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .testTag("worker-hello-screen"),
                 contentAlignment = Alignment.Center,
             ) {
+                val logoWidth = (minOf(maxWidth, 520.dp) - 76.dp).coerceAtLeast(0.dp)
                 WorkerStoreLogo(
                     modifier = Modifier
+                        .requiredSize(logoWidth, logoWidth * (96f / 234f))
                         .workerGreetingWave { greeting.value }
                         .testTag("worker-hello-logo"),
+                    horizontalPadding = 0.dp,
                 )
             }
         }

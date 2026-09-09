@@ -1,7 +1,6 @@
 package dev.buhanzaz.rwms.worker.feature.login
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -88,15 +87,10 @@ fun LoginScreen(
             val formHeight = with(density) { formHeightPx.toDp() }
             val formTop = maxHeight - formHeight
             val centeredLogoTop = (maxHeight - logoHeight) / 2
-            val targetLogoTop = minOf(
+            val logoTop = minOf(
                 centeredLogoTop,
                 formTop - WorkerLoginContentGap - logoHeight,
             ).coerceAtLeast(0.dp)
-            val logoTop by animateDpAsState(
-                targetValue = targetLogoTop,
-                animationSpec = tween(WorkerLoginActionRevealDurationMillis),
-                label = "worker-login-logo-position",
-            )
 
             LaunchedEffect(Unit) {
                 actionReveal.animateTo(

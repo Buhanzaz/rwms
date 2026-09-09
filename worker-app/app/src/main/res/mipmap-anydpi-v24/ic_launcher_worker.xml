@@ -7,8 +7,17 @@
     android:viewportWidth="141"
     android:viewportHeight="132">
     <path
-        android:fillColor="#B9D4E6"
         android:pathData="M0 16C0 7.16344 7.16344 0 16 0H124C132.837 0 140 7.16344 140 16V116C140 124.837 132.837 132 124 132H16C7.16344 132 0 124.837 0 116V16Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="140.0000000000"
+                android:startY="0.0000000000"
+                android:endX="0.0000006403"
+                android:endY="132.0000000000">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#BF549AC5" />
+            </gradient>
+        </aapt:attr>
     </path>
     <path
         android:pathData="M16 0.5H124C132.56 0.5 139.5 7.43959 139.5 16V116C139.5 124.56 132.56 131.5 124 131.5H16C7.43959 131.5 0.5 124.56 0.5 116V16C0.5 7.43959 7.43959 0.5 16 0.5Z"
