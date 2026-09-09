@@ -46,7 +46,7 @@ class WorkerGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(13)
+        assertThat(expected).hasSize(15)
         assertWithMessage(
             "WorkerGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -231,6 +231,70 @@ class WorkerGatewayApiContractBoundaryTest {
                 detailFixture.replace("  \"routeStepCount\":3,\n", ""),
             )
         }
+    }
+
+    @Test
+    fun `problem report fixtures preserve atomic attachments and author owned refresh shape`() {
+        val attachment = EvidenceReservationRequestDto(
+            operationId = "88888888-8888-8888-8888-888888888888",
+            evidenceId = "66666666-6666-6666-6666-666666666666",
+            routeIndex = 0,
+            capturedAt = "2026-08-09T08:02:00Z",
+            offlineLeaseId = "33333333-3333-3333-3333-333333333333",
+            sizeBytes = 128,
+            sha256 = "a".repeat(64),
+        )
+        val request = WorkerProblemReportRequestDto(
+            operationId = "99999999-9999-9999-9999-999999999999",
+            comment = "Broken light",
+            occurredAt = "2026-08-09T08:03:00Z",
+            offlineLeaseId = attachment.offlineLeaseId,
+            attachments = listOf(attachment),
+        )
+        val response = json.decodeFromString<WorkerProblemReportDto>(
+            """
+            {
+              "reportId":"99999999-9999-9999-9999-999999999999",
+              "entryId":"44444444-4444-4444-4444-444444444444",
+              "taskId":"55555555-5555-5555-5555-555555555555",
+              "routeIndex":0,
+              "entryTitle":"Inspect cabin",
+              "comment":"Broken light",
+              "occurredAt":"2026-08-09T08:03:00Z",
+              "recordedAt":"2026-08-09T08:03:01Z",
+              "attachments":[{
+                "evidenceId":"66666666-6666-6666-6666-666666666666",
+                "version":1,
+                "entryId":"44444444-4444-4444-4444-444444444444",
+                "routeIndex":0,
+                "workerId":"11111111-1111-1111-1111-111111111111",
+                "workerGroupId":null,
+                "capturedAt":"2026-08-09T08:02:00Z",
+                "recordedAt":"2026-08-09T08:03:01Z",
+                "state":"READY",
+                "mediaId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "mediaGeneration":1,
+                "reviewReason":null,
+                "contentType":"image/webp",
+                "readPath":"/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/original?generation=1",
+                "thumbnailPath":"/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/variants/SMALL/content?generation=1"
+              }]
+            }
+            """.trimIndent(),
+        )
+        val requestJson = json.encodeToString(request)
+
+        assertThat(json.parseToJsonElement(requestJson).jsonObject.keys).containsExactly(
+            "operationId",
+            "comment",
+            "occurredAt",
+            "offlineLeaseId",
+            "attachments",
+        )
+        assertThat(requestJson).contains("\"evidenceId\":\"${attachment.evidenceId}\"")
+        assertThat(response.reportId).isEqualTo(request.operationId)
+        assertThat(response.attachments.single().state).isEqualTo("READY")
+        assertThat(response.attachments.single().readPath).startsWith("/api/media/")
     }
 
     @Test
@@ -446,6 +510,8 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
         "workerTaskDetail" to route("GET", "/api/task-board/worker/v1/entries/{entryId}", "$taskBoard /worker/v1/entries/{entryId}"),
         "applyAction" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/actions", "$taskBoard /worker/v1/entries/{entryId}/actions"),
         "reserveEvidence" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/evidence-reservations", "$taskBoard /worker/v1/entries/{entryId}/evidence-reservations"),
+        "createProblemReport" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/problem-reports", "$taskBoard /worker/v1/entries/{entryId}/problem-reports"),
+        "workerProblemReport" to route("GET", "/api/task-board/worker/v1/problem-reports/{reportId}", "$taskBoard /worker/v1/problem-reports/{reportId}"),
         "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "unregisterDevice" to route("DELETE", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "createUploadSession" to route("POST", "/api/media/v1/upload-sessions", "$media /api/media/v1/upload-sessions"),

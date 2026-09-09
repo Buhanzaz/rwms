@@ -6,7 +6,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.database.PendingEvidenceReservation
+import dev.buhanzaz.rwms.worker.core.database.DraftProblemReportEvidenceInput
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
 import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
 import dev.buhanzaz.rwms.worker.core.media.WorkerEvidenceBundlePreparer
 import dev.buhanzaz.rwms.worker.core.media.WorkerGalleryJpegImporter
@@ -47,6 +49,7 @@ class CameraViewModel @Inject constructor(
     private val bundlePreparer: WorkerEvidenceBundlePreparer,
     private val galleryImporter: WorkerGalleryJpegImporter,
     private val localStore: WorkerLocalStore,
+    private val problemReports: WorkerProblemReportStore,
     private val scheduler: WorkerSyncScheduler,
     private val json: Json,
 ) : ViewModel() {
@@ -86,6 +89,7 @@ class CameraViewModel @Inject constructor(
         temporaryFiles: List<File>,
         requestSyncAfterSave: Boolean = true,
         completeAfterSave: Boolean = false,
+        problemReportId: String? = null,
     ) {
         if (mutableState.value.saving) return
         val selectedFiles = remainingWorkerCameraCaptures(
@@ -122,6 +126,7 @@ class CameraViewModel @Inject constructor(
                                 completeAfterEvidence = completeAfterSave &&
                                     failures.isEmpty() &&
                                     index == selectedFiles.lastIndex,
+                                problemReportId = problemReportId,
                             )
                             saved += temporaryFile to evidenceId
                             temporaryFile.delete()
@@ -133,7 +138,9 @@ class CameraViewModel @Inject constructor(
                     }
                 }
             } catch (error: CancellationException) {
-                if (saved.isNotEmpty()) runCatching { scheduler.requestAfterMutation(userId) }
+                if (saved.isNotEmpty() && problemReportId == null) {
+                    runCatching { scheduler.requestAfterMutation(userId) }
+                }
                 throw error
             }
 
@@ -141,6 +148,7 @@ class CameraViewModel @Inject constructor(
             accumulatedCameraCapturePaths += saved.map { it.first.absolutePath }
             val syncFailure = if (
                 accumulatedCameraEvidenceIds.isNotEmpty() &&
+                problemReportId == null &&
                 (failures.isNotEmpty() || requestSyncAfterSave || completeAfterSave)
             ) {
                 runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
@@ -185,6 +193,7 @@ class CameraViewModel @Inject constructor(
         uris: List<Uri>,
         requestSyncAfterSave: Boolean = true,
         completeAfterSave: Boolean = false,
+        problemReportId: String? = null,
     ) {
         if (mutableState.value.saving) return
         val selectedUris = uris.toList()
@@ -210,6 +219,7 @@ class CameraViewModel @Inject constructor(
                                     completeAfterEvidence = completeAfterSave &&
                                         failures.isEmpty() &&
                                         index == selectedUris.lastIndex,
+                                    problemReportId = problemReportId,
                                 )
                             } finally {
                                 temporaryFile.delete()
@@ -222,12 +232,15 @@ class CameraViewModel @Inject constructor(
                     }
                 }
             } catch (error: CancellationException) {
-                if (savedEvidenceIds.isNotEmpty()) runCatching { scheduler.requestAfterMutation(userId) }
+                if (savedEvidenceIds.isNotEmpty() && problemReportId == null) {
+                    runCatching { scheduler.requestAfterMutation(userId) }
+                }
                 throw error
             }
 
             val syncFailure = if (
                 savedEvidenceIds.isNotEmpty() &&
+                problemReportId == null &&
                 (failures.isNotEmpty() || requestSyncAfterSave || completeAfterSave)
             ) {
                 runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
@@ -265,6 +278,7 @@ class CameraViewModel @Inject constructor(
         routeIndex: Int,
         temporaryFile: File,
         completeAfterEvidence: Boolean,
+        problemReportId: String?,
     ): String = withContext(Dispatchers.IO) {
         val lease = requireNotNull(localStore.leaseFor(userId)) { "Сначала синхронизируйте задание" }
         val evidenceId = UUID.randomUUID().toString()
@@ -272,31 +286,49 @@ class CameraViewModel @Inject constructor(
             lease.estimatedServerNow(SystemClock.elapsedRealtime()),
         ).toString()
         val persisted = bundlePreparer.prepareAndPersist(userId, evidenceId, temporaryFile)
-        val reservation = PendingEvidenceReservation(
-            operationId = evidenceId,
-            evidenceId = evidenceId,
-            routeIndex = routeIndex,
-            capturedAt = capturedAt,
-            offlineLeaseId = requireNotNull(localStore.currentLeaseId(userId)),
-            contentType = "image/webp",
-            sizeBytes = persisted.aggregateContentLength,
-            sha256 = persisted.manifestSha256,
-        )
         try {
-            localStore.enqueueEvidenceReservation(
-                userId = userId,
-                entryId = entryId,
-                evidenceId = evidenceId,
-                encryptedFilePath = persisted.originalEncryptedPath,
-                fileName = "$evidenceId.webp",
-                routeIndex = routeIndex,
-                capturedAt = capturedAt,
-                sizeBytes = persisted.aggregateContentLength,
-                sha256 = persisted.manifestSha256,
-                variantManifestJson = json.encodeToString(persisted.variants),
-                reservationPayload = json.encodeToString(reservation),
-                completeAfterEvidence = completeAfterEvidence,
-            )
+            if (problemReportId != null) {
+                require(!completeAfterEvidence) { "Фото проблемы не завершает задание" }
+                problemReports.attachPreparedPhoto(
+                    userId,
+                    problemReportId,
+                    DraftProblemReportEvidenceInput(
+                        evidenceId = evidenceId,
+                        encryptedFilePath = persisted.originalEncryptedPath,
+                        fileName = "$evidenceId.webp",
+                        routeIndex = routeIndex,
+                        capturedAt = capturedAt,
+                        sizeBytes = persisted.aggregateContentLength,
+                        sha256 = persisted.manifestSha256,
+                        variantManifestJson = json.encodeToString(persisted.variants),
+                    ),
+                )
+            } else {
+                val reservation = PendingEvidenceReservation(
+                    operationId = evidenceId,
+                    evidenceId = evidenceId,
+                    routeIndex = routeIndex,
+                    capturedAt = capturedAt,
+                    offlineLeaseId = requireNotNull(localStore.currentLeaseId(userId)),
+                    contentType = "image/webp",
+                    sizeBytes = persisted.aggregateContentLength,
+                    sha256 = persisted.manifestSha256,
+                )
+                localStore.enqueueEvidenceReservation(
+                    userId = userId,
+                    entryId = entryId,
+                    evidenceId = evidenceId,
+                    encryptedFilePath = persisted.originalEncryptedPath,
+                    fileName = "$evidenceId.webp",
+                    routeIndex = routeIndex,
+                    capturedAt = capturedAt,
+                    sizeBytes = persisted.aggregateContentLength,
+                    sha256 = persisted.manifestSha256,
+                    variantManifestJson = json.encodeToString(persisted.variants),
+                    reservationPayload = json.encodeToString(reservation),
+                    completeAfterEvidence = completeAfterEvidence,
+                )
+            }
         } catch (error: Throwable) {
             fileStore.deleteBundle(persisted.originalEncryptedPath, persisted.variants)
             throw error

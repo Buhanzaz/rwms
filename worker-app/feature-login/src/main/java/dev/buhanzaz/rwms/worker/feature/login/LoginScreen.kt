@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -78,9 +79,17 @@ fun LoginScreen(
     Box(
         modifier = Modifier.fillMaxSize().testTag("worker-login-screen"),
     ) {
-        WorkerStoreLogo(
-            modifier = Modifier.align(Alignment.Center).widthIn(max = 330.dp),
-        )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // The IME may reduce the viewport height. Keep the logo width based on the screen
+            // width so it moves with the viewport without being scaled down.
+            val logoWidth = minOf(maxWidth, 330.dp)
+            WorkerStoreLogo(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .requiredSize(width = logoWidth, height = logoWidth * (96f / 234f))
+                    .testTag("worker-login-logo"),
+            )
+        }
 
         BoxWithConstraints(
             modifier = Modifier

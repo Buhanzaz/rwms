@@ -2229,6 +2229,15 @@ pipeline. A non-null `worker_task_evidence.problem_report_id` excludes these
 photos from result counts, selection, worker result detail and result-history
 facts while retaining media inbox processing and owner-proof recovery.
 
+WorkerApp keeps the editable comment and encrypted photo bundles in a Room
+draft. Submission freezes one immutable outbox declaration and atomically
+activates its photos. Per-entry replay posts this declaration before uploads
+and COMPLETE; the media pipeline polls the author-owned report instead of task
+detail for these attachments. A closed task does not remove submitted-report
+recovery from Downloads. Report failures require explicit immutable retry;
+ordinary transport failures remain bounded background retries. Room 11→12
+adds a nullable local report ID, leaving prior result evidence unchanged.
+
 The warehouse `task-problem-reports` read returns a bounded cursor page and a
 per-user unread count. `PUT .../{reportId}/read` records only that user's read
 receipt under USER/read/warehouse-VIEW authorization. Later attachment readiness

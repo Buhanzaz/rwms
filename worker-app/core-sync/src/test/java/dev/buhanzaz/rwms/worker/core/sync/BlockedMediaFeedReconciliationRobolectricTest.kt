@@ -31,6 +31,8 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayApi
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.network.WorkerIdentityDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerOfflineLeaseDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerProblemReportDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerProblemReportRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerProfileAvatarScopeDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import java.io.IOException
@@ -683,6 +685,14 @@ class BlockedMediaFeedReconciliationRobolectricTest {
             idempotencyKey: String,
             request: EvidenceReservationRequestDto,
         ): Response<TaskEvidenceDto> = unused()
+
+        override suspend fun createProblemReport(
+            entryId: String,
+            idempotencyKey: String,
+            request: WorkerProblemReportRequestDto,
+        ): Response<WorkerProblemReportDto> = unused()
+
+        override suspend fun workerProblemReport(reportId: String): Response<WorkerProblemReportDto> = unused()
 
         override suspend fun registerDevice(
             installationId: String,

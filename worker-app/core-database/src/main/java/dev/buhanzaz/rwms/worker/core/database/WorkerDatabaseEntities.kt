@@ -180,7 +180,14 @@ data class WorkerOutboxEntity(
     val lastError: String?,
 )
 
-@Entity(tableName = "task_evidence", indices = [Index(value = ["userId", "entryId"]), Index(value = ["userId", "state"])])
+@Entity(
+    tableName = "task_evidence",
+    indices = [
+        Index(value = ["userId", "entryId"]),
+        Index(value = ["userId", "state"]),
+        Index(value = ["userId", "problemReportId"]),
+    ],
+)
 /**
  * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
  */
@@ -209,6 +216,8 @@ data class TaskEvidenceEntity(
     /** Encrypted SMALL/MEDIUM/LARGE WebP metadata required to resume an interrupted upload. */
     @ColumnInfo(defaultValue = "'[]'")
     val variantManifestJson: String = "[]",
+    /** Null is completion evidence; a non-null value associates this photo with one immutable report. */
+    val problemReportId: String? = null,
 )
 
 /** One encrypted client-produced WebP part persisted until task-board confirms evidence READY. */

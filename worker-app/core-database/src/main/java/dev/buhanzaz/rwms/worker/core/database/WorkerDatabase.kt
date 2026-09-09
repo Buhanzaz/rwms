@@ -28,7 +28,7 @@ import org.json.JSONObject
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 /**
@@ -479,6 +479,16 @@ abstract class WorkerDatabase : RoomDatabase() {
                 }
             }
         }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `task_evidence` ADD COLUMN `problemReportId` TEXT")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_task_evidence_userId_problemReportId` " +
+                        "ON `task_evidence` (`userId`, `problemReportId`)",
+                )
+            }
+        }
     }
 }
 
@@ -503,6 +513,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_8_9,
                 WorkerDatabase.MIGRATION_9_10,
                 WorkerDatabase.MIGRATION_10_11,
+                WorkerDatabase.MIGRATION_11_12,
             )
             .build()
 }

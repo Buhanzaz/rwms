@@ -759,6 +759,59 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationElevenToTwelvePreservesExistingResultPhotos() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-problem-report-migration.db"
+        context.deleteDatabase(name)
+        val versionEleven = openHelper(
+            context = context,
+            name = name,
+            version = 11,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `task_evidence` (
+                        `evidenceId` TEXT NOT NULL PRIMARY KEY,
+                        `userId` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `encryptedFilePath` TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    "INSERT INTO `task_evidence` VALUES ('old-photo', 'worker', 'UPLOADING', 'encrypted-photo')",
+                )
+            },
+        )
+        versionEleven.writableDatabase
+        versionEleven.close()
+
+        val versionTwelve = openHelper(
+            context = context,
+            name = name,
+            version = 12,
+            onCreate = { error("Expected the version 11 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_11_12.migrate(database) },
+        )
+        val database = versionTwelve.writableDatabase
+        database.query("SELECT `state`, `encryptedFilePath`, `problemReportId` FROM `task_evidence`").use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEqualTo("UPLOADING")
+            assertThat(cursor.getString(1)).isEqualTo("encrypted-photo")
+            assertThat(cursor.isNull(2)).isTrue()
+            assertThat(cursor.moveToNext()).isFalse()
+        }
+        database.query("PRAGMA index_info(`index_task_evidence_userId_problemReportId`)").use { cursor ->
+            val indexedColumns = buildList {
+                while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+            }
+            assertThat(indexedColumns).containsExactly("userId", "problemReportId").inOrder()
+        }
+        versionTwelve.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

@@ -50,6 +50,16 @@ interface WorkerGatewayApi {
         @Body request: EvidenceReservationRequestDto,
     ): Response<TaskEvidenceDto>
 
+    @POST("/api/task-board/worker/v1/entries/{entryId}/problem-reports")
+    suspend fun createProblemReport(
+        @Path("entryId") entryId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: WorkerProblemReportRequestDto,
+    ): Response<WorkerProblemReportDto>
+
+    @GET("/api/task-board/worker/v1/problem-reports/{reportId}")
+    suspend fun workerProblemReport(@Path("reportId") reportId: String): Response<WorkerProblemReportDto>
+
     @PUT("/api/task-board/worker/v1/devices/{installationId}")
     suspend fun registerDevice(
         @Path("installationId") installationId: String,

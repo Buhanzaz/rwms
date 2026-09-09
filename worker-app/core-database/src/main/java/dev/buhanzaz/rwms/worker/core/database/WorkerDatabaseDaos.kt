@@ -203,6 +203,86 @@ interface WorkerOutboxDao {
 
     @Query(
         """
+        SELECT * FROM worker_outbox
+        WHERE userId = :userId
+          AND entryId = :entryId
+          AND kind = 'PROBLEM_REPORT'
+          AND state = 'DRAFT'
+        ORDER BY createdAtEpochMillis DESC
+        LIMIT 1
+        """,
+    )
+    fun observeProblemReportDraft(userId: String, entryId: String): Flow<WorkerOutboxEntity?>
+
+    @Query(
+        """
+        SELECT * FROM worker_outbox
+        WHERE userId = :userId
+          AND entryId = :entryId
+          AND kind = 'PROBLEM_REPORT'
+          AND state = 'DRAFT'
+        ORDER BY createdAtEpochMillis DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun problemReportDraft(userId: String, entryId: String): WorkerOutboxEntity?
+
+    @Query("SELECT * FROM worker_outbox WHERE userId = :userId AND operationId = :reportId AND kind = 'PROBLEM_REPORT' LIMIT 1")
+    suspend fun problemReport(userId: String, reportId: String): WorkerOutboxEntity?
+
+    @Query(
+        """
+        SELECT * FROM worker_outbox
+        WHERE userId = :userId
+          AND entryId = :entryId
+          AND kind = 'PROBLEM_REPORT'
+          AND state != 'REPORTED'
+        ORDER BY createdAtEpochMillis DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun latestUnresolvedProblemReport(userId: String, entryId: String): WorkerOutboxEntity?
+
+    @Query("SELECT * FROM worker_outbox WHERE userId = :userId AND entryId = :entryId AND kind = 'PROBLEM_REPORT' ORDER BY createdAtEpochMillis DESC")
+    fun observeEntryProblemReports(userId: String, entryId: String): Flow<List<WorkerOutboxEntity>>
+
+    @Query("SELECT * FROM worker_outbox WHERE userId = :userId AND kind = 'PROBLEM_REPORT' AND state != 'DRAFT' ORDER BY createdAtEpochMillis DESC")
+    fun observeSubmittedProblemReports(userId: String): Flow<List<WorkerOutboxEntity>>
+
+    @Query(
+        """
+        SELECT * FROM worker_outbox
+        WHERE userId = :userId
+          AND kind = 'PROBLEM_REPORT'
+          AND state IN ('REPORTED', 'PENDING', 'RETRY', 'REVIEW_REQUIRED', 'CONFLICT')
+        ORDER BY createdAtEpochMillis ASC
+        """,
+    )
+    suspend fun submittedProblemReports(userId: String): List<WorkerOutboxEntity>
+
+    @Query(
+        """
+        UPDATE worker_outbox
+        SET encryptedPayload = :encryptedPayload,
+            state = :state,
+            retryCount = :retryCount,
+            lastError = :lastError,
+            updatedAtEpochMillis = :now
+        WHERE operationId = :operationId
+          AND kind = 'PROBLEM_REPORT'
+        """,
+    )
+    suspend fun updateProblemReport(
+        operationId: String,
+        encryptedPayload: String,
+        state: String,
+        retryCount: Int,
+        lastError: String?,
+        now: Long,
+    ): Int
+
+    @Query(
+        """
         SELECT COUNT(*) FROM worker_outbox
         WHERE userId = :userId
           AND entryId = :entryId
@@ -250,7 +330,21 @@ interface TaskEvidenceDao {
     @Upsert
     suspend fun upsert(evidence: TaskEvidenceEntity)
 
-    @Query("SELECT * FROM task_evidence WHERE userId = :userId AND state IN ('CAPTURED', 'RESERVED', 'UPLOADING', 'PROCESSING') ORDER BY createdAtEpochMillis")
+    @Query(
+        """
+        SELECT evidence.* FROM task_evidence AS evidence
+        LEFT JOIN worker_outbox AS report
+          ON report.operationId = evidence.problemReportId
+         AND report.kind = 'PROBLEM_REPORT'
+        WHERE evidence.userId = :userId
+          AND evidence.state IN ('CAPTURED', 'RESERVED', 'UPLOADING', 'PROCESSING')
+          AND (
+            evidence.problemReportId IS NULL
+            OR report.state IN ('PENDING', 'RETRY', 'REPORTED')
+          )
+        ORDER BY evidence.createdAtEpochMillis
+        """,
+    )
     suspend fun pending(userId: String): List<TaskEvidenceEntity>
 
     @Query("SELECT * FROM task_evidence WHERE evidenceId = :evidenceId AND userId = :userId LIMIT 1")
@@ -261,6 +355,7 @@ interface TaskEvidenceDao {
         """
         SELECT * FROM task_evidence
         WHERE userId = :userId
+          AND problemReportId IS NULL
           AND state = 'REVIEW_REQUIRED'
           AND mediaId IS NULL
           AND (reviewReason = :reviewReason OR lastError = :reviewReason)
@@ -269,7 +364,7 @@ interface TaskEvidenceDao {
     )
     suspend fun reviewRequiredByReason(userId: String, reviewReason: String): List<TaskEvidenceEntity>
 
-    @Query("SELECT evidenceId FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
+    @Query("SELECT evidenceId FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND problemReportId IS NULL AND state = 'READY'")
     suspend fun readyIds(userId: String, entryId: String): List<String>
 
     @Query(
@@ -278,6 +373,7 @@ interface TaskEvidenceDao {
             SELECT 1 FROM task_evidence
             WHERE userId = :userId
               AND entryId = :entryId
+              AND problemReportId IS NULL
               AND state IN ('CAPTURED', 'RESERVED', 'UPLOADING', 'PROCESSING', 'READY')
         )
         """,
@@ -286,6 +382,26 @@ interface TaskEvidenceDao {
 
     @Query("SELECT * FROM task_evidence WHERE userId = :userId ORDER BY createdAtEpochMillis DESC")
     fun observeAll(userId: String): Flow<List<TaskEvidenceEntity>>
+
+    @Query("SELECT * FROM task_evidence WHERE userId = :userId AND problemReportId = :reportId ORDER BY createdAtEpochMillis")
+    fun observeForProblemReport(userId: String, reportId: String): Flow<List<TaskEvidenceEntity>>
+
+    @Query("SELECT * FROM task_evidence WHERE userId = :userId AND problemReportId = :reportId ORDER BY createdAtEpochMillis")
+    suspend fun forProblemReport(userId: String, reportId: String): List<TaskEvidenceEntity>
+
+    @Query("DELETE FROM task_evidence WHERE userId = :userId AND evidenceId = :evidenceId AND problemReportId = :reportId AND state = 'DRAFT'")
+    suspend fun deleteDraftProblemReportEvidence(userId: String, reportId: String, evidenceId: String): Int
+
+    @Query(
+        """
+        UPDATE task_evidence
+        SET state = 'CAPTURED', updatedAtEpochMillis = :now
+        WHERE userId = :userId
+          AND problemReportId = :reportId
+          AND state = 'DRAFT'
+        """,
+    )
+    suspend fun submitProblemReportEvidence(userId: String, reportId: String, now: Long): Int
 
     @Query("UPDATE task_evidence SET state = :state, mediaId = :mediaId, mediaGeneration = :generation, reviewReason = :reviewReason, updatedAtEpochMillis = :now WHERE evidenceId = :evidenceId")
     suspend fun updateState(evidenceId: String, state: String, mediaId: String?, generation: Long?, reviewReason: String?, now: Long)

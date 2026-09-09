@@ -1,12 +1,15 @@
 package dev.buhanzaz.rwms.worker.core.sync
 
+import androidx.room.withTransaction
 import dev.buhanzaz.rwms.worker.core.database.PendingEvidenceReservation
+import dev.buhanzaz.rwms.worker.core.database.PendingWorkerProblemReport
 import dev.buhanzaz.rwms.worker.core.database.PendingWorkerAction
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerCategoryEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerDatabase
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerOutboxEntity
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerSessionEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerSyncProgressEntity
 import dev.buhanzaz.rwms.worker.core.media.EvidenceUploadResult
@@ -20,6 +23,8 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerContextDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedCategoryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedResponse
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.WorkerProblemReportDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerProblemReportRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import dev.buhanzaz.rwms.worker.core.network.gatewayFailureDisposition
 import dev.buhanzaz.rwms.worker.core.network.gatewayProblemUserMessage
@@ -114,7 +119,7 @@ private data class EvidenceUploadAttempt(
 
 /**
  * Executes the only permitted per-entry ordering for offline work:
- * prerequisite actions, evidence reservations, media upload/finalization,
+ * prerequisite actions, problem reports, evidence reservations, media upload/finalization,
  * then completion actions. Room is the UI source of truth during every stage;
  * a blocked entry never stalls another entry owned by the same worker.
  */
@@ -153,6 +158,7 @@ class WorkerSyncCoordinator @Inject constructor(
 
             val outbox = localStore.pendingOutbox(userId)
             val actions = outbox.filter { it.kind == WorkerLocalStore.OUTBOX_ACTION }
+            val reports = database.outboxDao().submittedProblemReports(userId)
             val pendingEvidence = database.evidenceDao().pending(userId)
             // Captured rows already exist before their reservation outbox row is
             // applied, so count media once up front for a stable progress total.
@@ -162,6 +168,7 @@ class WorkerSyncCoordinator @Inject constructor(
             val entryOutcomes = mutableListOf<WorkerSyncOutcome>()
             val entryIds = (
                 outbox.map { it.entryId to it.createdAtEpochMillis } +
+                    reports.map { it.entryId to it.createdAtEpochMillis } +
                     pendingEvidence.map { it.entryId to it.createdAtEpochMillis }
                 )
                 .sortedBy { it.second }
@@ -175,6 +182,7 @@ class WorkerSyncCoordinator @Inject constructor(
                 val reservations = outbox.filter {
                     it.entryId == entryId && it.kind == WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION
                 }
+                val entryReports = reports.filter { it.entryId == entryId }
                 var entryBlocked = false
 
                 for (operation in prerequisites) {
@@ -182,6 +190,25 @@ class WorkerSyncCoordinator @Inject constructor(
                     completed += result.completedUnits
                     result.outcome?.let(entryOutcomes::add)
                     updateProgress(userId, "COMMANDS", completed, total, null, null, "Передаём действия")
+                    if (result.blocksEntry) {
+                        entryBlocked = true
+                        break
+                    }
+                }
+                if (entryBlocked) return@forEach
+
+                entryReports.firstOrNull { it.state in REPORT_TERMINAL_STATES }?.let { report ->
+                    entryOutcomes += WorkerSyncOutcome.Conflict(
+                        report.lastError ?: "Отправка обращения требует внимания",
+                    )
+                    return@forEach
+                }
+
+                for (operation in entryReports.filter { it.state in REPORT_PENDING_STATES }) {
+                    val result = submitProblemReport(userId, operation)
+                    completed += result.completedUnits
+                    result.outcome?.let(entryOutcomes::add)
+                    updateProgress(userId, "REPORT", completed, total, null, null, "Передаём обращение")
                     if (result.blocksEntry) {
                         entryBlocked = true
                         break
@@ -223,6 +250,8 @@ class WorkerSyncCoordinator @Inject constructor(
                     if (result.blocksEntry) break
                 }
             }
+
+            refreshSubmittedProblemReports(userId).forEach(entryOutcomes::add)
 
             val passOutcome = highestPriorityOutcome(entryOutcomes)
             when (val feed = fetchFeed(userId, context)) {
@@ -435,6 +464,161 @@ class WorkerSyncCoordinator @Inject constructor(
                 outcome = WorkerSyncOutcome.Failed(SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE),
             )
         }
+    }
+
+    /** Posts one immutable report before any linked media can start uploading. */
+    private suspend fun submitProblemReport(userId: String, operation: WorkerOutboxEntity): EntryOperationResult {
+        val pending = runCatching {
+            json.decodeFromString<PendingWorkerProblemReport>(localStore.decryptOutboxPayload(operation))
+        }.getOrElse { throw TerminalSyncException("Локальное обращение повреждено", it) }
+        try {
+            val remote = gateway.createProblemReport(
+                operation.entryId,
+                WorkerProblemReportRequestDto(
+                    operationId = pending.operationId,
+                    comment = pending.comment,
+                    occurredAt = pending.occurredAt,
+                    offlineLeaseId = pending.offlineLeaseId,
+                    attachments = pending.attachments.map { it.toRequest() },
+                ),
+            )
+            applyProblemReport(userId, operation, remote, WorkerProblemReportStore.OUTBOX_REPORTED, null)
+            return EntryOperationResult(completedUnits = 1, blocksEntry = false)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: GatewayProblemException) {
+            val message = gatewayProblemUserMessage(error.problem)
+            when (error.disposition) {
+                GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
+                GatewayFailureDisposition.RETRYABLE -> {
+                    localStore.markOutboxRetry(operation, message)
+                    return EntryOperationResult(0, true, WorkerSyncOutcome.Retry(message))
+                }
+                GatewayFailureDisposition.CONFLICT -> {
+                    recordConflict(userId, operation, error)
+                    retainProblemReport(operation, WorkerProblemReportStore.OUTBOX_CONFLICT, message)
+                    return EntryOperationResult(1, true, WorkerSyncOutcome.Conflict(message))
+                }
+                GatewayFailureDisposition.USER_ACTION_REQUIRED,
+                GatewayFailureDisposition.TERMINAL,
+                -> {
+                    retainProblemReport(operation, WorkerProblemReportStore.OUTBOX_REVIEW_REQUIRED, message)
+                    return EntryOperationResult(
+                        1,
+                        true,
+                        if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
+                            WorkerSyncOutcome.UserActionRequired(message)
+                        } else {
+                            WorkerSyncOutcome.Failed(message)
+                        },
+                    )
+                }
+            }
+        } catch (error: Throwable) {
+            val message = if (error.isProvenGatewayTransportFailure()) {
+                SAFE_PROBLEM_REPORT_RETRY_MESSAGE
+            } else {
+                SAFE_PROBLEM_REPORT_FAILURE_MESSAGE
+            }
+            localStore.markOutboxRetry(operation, message)
+            return EntryOperationResult(
+                0,
+                true,
+                if (error.isProvenGatewayTransportFailure()) WorkerSyncOutcome.Retry(message) else WorkerSyncOutcome.Failed(message),
+            )
+        }
+    }
+
+    /** Refreshes author-owned report attachment states without reopening a completed task detail. */
+    private suspend fun refreshSubmittedProblemReports(userId: String): List<WorkerSyncOutcome> {
+        val outcomes = mutableListOf<WorkerSyncOutcome>()
+        for (operation in database.outboxDao().submittedProblemReports(userId)) {
+            if (operation.state != WorkerProblemReportStore.OUTBOX_REPORTED) continue
+            if (database.evidenceDao().forProblemReport(userId, operation.operationId).none { evidence ->
+                    evidence.state in REPORT_REFRESHABLE_EVIDENCE_STATES
+                }
+            ) continue
+            try {
+                val remote = gateway.problemReport(operation.operationId)
+                applyProblemReport(userId, operation, remote, WorkerProblemReportStore.OUTBOX_REPORTED, null)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: GatewayProblemException) {
+                if (error.disposition == GatewayFailureDisposition.AUTHENTICATION_REQUIRED) throw error
+                val message = gatewayProblemUserMessage(error.problem)
+                if (error.disposition == GatewayFailureDisposition.RETRYABLE) {
+                    outcomes += WorkerSyncOutcome.Retry(message)
+                    continue
+                }
+                if (error.disposition == GatewayFailureDisposition.CONFLICT) {
+                    recordConflict(userId, operation, error)
+                }
+                retainProblemReport(
+                    operation,
+                    if (error.disposition == GatewayFailureDisposition.CONFLICT) {
+                        WorkerProblemReportStore.OUTBOX_CONFLICT
+                    } else {
+                        WorkerProblemReportStore.OUTBOX_REVIEW_REQUIRED
+                    },
+                    message,
+                )
+                outcomes += if (error.disposition == GatewayFailureDisposition.CONFLICT) {
+                    WorkerSyncOutcome.Conflict(message)
+                } else {
+                    WorkerSyncOutcome.Failed(message)
+                }
+            } catch (error: Throwable) {
+                outcomes += if (error.isProvenGatewayTransportFailure()) {
+                    WorkerSyncOutcome.Retry(SAFE_PROBLEM_REPORT_REFRESH_RETRY_MESSAGE)
+                } else {
+                    WorkerSyncOutcome.Failed(SAFE_PROBLEM_REPORT_REFRESH_FAILURE_MESSAGE)
+                }
+            }
+        }
+        return outcomes
+    }
+
+    private suspend fun applyProblemReport(
+        userId: String,
+        operation: WorkerOutboxEntity,
+        remote: WorkerProblemReportDto,
+        state: String,
+        lastError: String?,
+    ) {
+        require(remote.reportId == operation.operationId) { "Сервер вернул другое обращение" }
+        database.withTransaction {
+            remote.attachments.forEach { attachment ->
+                database.evidenceDao().updateState(
+                    evidenceId = attachment.evidenceId,
+                    state = attachment.state,
+                    mediaId = attachment.mediaId,
+                    generation = attachment.mediaGeneration,
+                    reviewReason = attachment.reviewReason,
+                    now = System.currentTimeMillis(),
+                )
+            }
+            check(
+                database.outboxDao().updateProblemReport(
+                    operationId = operation.operationId,
+                    encryptedPayload = operation.encryptedPayload,
+                    state = state,
+                    retryCount = if (state == WorkerProblemReportStore.OUTBOX_REPORTED) 0 else operation.retryCount,
+                    lastError = lastError,
+                    now = System.currentTimeMillis(),
+                ) == 1,
+            ) { "Локальное обращение изменилось" }
+        }
+    }
+
+    private suspend fun retainProblemReport(operation: WorkerOutboxEntity, state: String, message: String) {
+        database.outboxDao().updateProblemReport(
+            operationId = operation.operationId,
+            encryptedPayload = operation.encryptedPayload,
+            state = state,
+            retryCount = operation.retryCount,
+            lastError = message,
+            now = System.currentTimeMillis(),
+        )
     }
 
     /**
@@ -692,6 +876,17 @@ class WorkerSyncCoordinator @Inject constructor(
         runCatching { json.decodeFromString<PendingWorkerAction>(localStore.decryptOutboxPayload(operation)) }
             .getOrElse { throw TerminalSyncException("Локальная команда повреждена", it) }
 
+    private fun PendingEvidenceReservation.toRequest() = EvidenceReservationRequestDto(
+        operationId = operationId,
+        evidenceId = evidenceId,
+        routeIndex = routeIndex,
+        capturedAt = capturedAt,
+        offlineLeaseId = offlineLeaseId,
+        contentType = contentType,
+        sizeBytes = sizeBytes,
+        sha256 = sha256,
+    )
+
     private suspend fun recordConflict(
         userId: String,
         operation: WorkerOutboxEntity,
@@ -871,6 +1066,20 @@ internal fun cachedFeedMatchesContext(
 
 private const val MAX_FEED_PAGES = 100
 private const val MAX_PARALLEL_EVIDENCE_UPLOADS = 2
+private val REPORT_PENDING_STATES = setOf(
+    WorkerProblemReportStore.OUTBOX_PENDING,
+    WorkerProblemReportStore.OUTBOX_RETRY,
+)
+private val REPORT_TERMINAL_STATES = setOf(
+    WorkerProblemReportStore.OUTBOX_REVIEW_REQUIRED,
+    WorkerProblemReportStore.OUTBOX_CONFLICT,
+)
+private val REPORT_REFRESHABLE_EVIDENCE_STATES = setOf(
+    "CAPTURED",
+    "RESERVED",
+    "UPLOADING",
+    "PROCESSING",
+)
 private const val TERMINAL_TASK_EVIDENCE_REASON =
     "Задание уже завершено; локальная фотография сохранена на устройстве"
 private const val SYNC_CONFLICT_ENTRY_ID = "worker-feed"
@@ -890,6 +1099,14 @@ private const val SAFE_EVIDENCE_UPLOAD_RETRY_MESSAGE =
     "Не удалось загрузить фотографию. Проверьте сеть и повторите попытку."
 private const val SAFE_EVIDENCE_UPLOAD_FAILURE_MESSAGE =
     "Не удалось загрузить фотографию. Повторите отправку вручную."
+private const val SAFE_PROBLEM_REPORT_RETRY_MESSAGE =
+    "Не удалось передать обращение. Проверьте сеть и повторите попытку."
+private const val SAFE_PROBLEM_REPORT_FAILURE_MESSAGE =
+    "Не удалось передать обращение. Повторите попытку вручную."
+private const val SAFE_PROBLEM_REPORT_REFRESH_RETRY_MESSAGE =
+    "Не удалось обновить состояние обращения. Повторим при синхронизации."
+private const val SAFE_PROBLEM_REPORT_REFRESH_FAILURE_MESSAGE =
+    "Не удалось обновить состояние обращения."
 
 /** Returns whether task-board proved that no further worker evidence can be attached. */
 private fun String.isTerminalWorkerTaskStatus(): Boolean = this == "DONE" || this == "CANCELLED"

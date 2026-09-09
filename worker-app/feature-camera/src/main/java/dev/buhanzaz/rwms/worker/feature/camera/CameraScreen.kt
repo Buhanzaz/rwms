@@ -126,6 +126,8 @@ fun CameraScreen(
     onSaved: (evidenceIds: List<String>) -> Unit,
     requestSyncAfterSave: Boolean = true,
     completeAfterSave: Boolean = false,
+    problemReportId: String? = null,
+    maxPhotos: Int = Int.MAX_VALUE,
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -184,7 +186,8 @@ fun CameraScreen(
             onBack = onBack,
         )
         else -> WorkerCameraExperience(
-            title = "Фото результата",
+            title = if (problemReportId == null) "Фото результата" else "Фото проблемы",
+            maxPhotos = maxPhotos,
             saving = state.saving,
             saveError = state.error,
             persistedCapturePaths = state.persistedCapturePaths,
@@ -199,6 +202,7 @@ fun CameraScreen(
                     files,
                     requestSyncAfterSave,
                     completeAfterSave,
+                    problemReportId,
                 )
             },
         )
@@ -218,13 +222,14 @@ fun GalleryImportScreen(
     onSaved: (evidenceIds: List<String>) -> Unit,
     requestSyncAfterSave: Boolean = true,
     completeAfterSave: Boolean = false,
+    problemReportId: String? = null,
+    maxPhotos: Int = 10,
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var pickerOpened by rememberSaveable { mutableStateOf(false) }
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(10),
-    ) { uris ->
+    val selectionLimit = maxPhotos.coerceIn(1, 10)
+    val importPhotos: (List<Uri>) -> Unit = { uris ->
         if (uris.isEmpty()) {
             onBack()
         } else {
@@ -235,18 +240,26 @@ fun GalleryImportScreen(
                 uris,
                 requestSyncAfterSave,
                 completeAfterSave,
+                problemReportId,
             )
         }
+    }
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(selectionLimit.coerceAtLeast(2)),
+        onResult = importPhotos,
+    )
+    val singlePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        importPhotos(listOfNotNull(uri))
+    }
+    fun openPicker() {
+        val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        if (selectionLimit == 1) singlePicker.launch(request) else picker.launch(request)
     }
 
     LaunchedEffect(Unit) {
         if (!pickerOpened) {
             pickerOpened = true
-            picker.launch(
-                PickVisualMediaRequest(
-                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                ),
-            )
+            openPicker()
         }
     }
     LaunchedEffect(state.savedEvidenceIds) {
@@ -274,13 +287,7 @@ fun GalleryImportScreen(
                         textAlign = TextAlign.Center,
                     )
                     Button(
-                        onClick = {
-                            picker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                ),
-                            )
-                        },
+                        onClick = ::openPicker,
                         modifier = Modifier.padding(top = 16.dp),
                     ) { Text("Выбрать другие фото") }
                 }
@@ -293,6 +300,7 @@ fun GalleryImportScreen(
 @Composable
 private fun WorkerCameraExperience(
     title: String,
+    maxPhotos: Int,
     saving: Boolean,
     saveError: String?,
     persistedCapturePaths: Set<String>,
@@ -534,6 +542,10 @@ private fun WorkerCameraExperience(
             return
         }
         if (captureInProgress || saving || galleryStartIndex != null) return
+        if (capturedFiles.size + persistedCaptureCount >= maxPhotos) {
+            message = "Можно добавить фотографий: $maxPhotos"
+            return
+        }
         captureInProgress = true
         settingsOpen = false
         if (cameraMode == WorkerCameraMode.Night) {

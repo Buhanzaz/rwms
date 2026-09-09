@@ -21,6 +21,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -34,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -74,6 +76,7 @@ fun TaskDetailScreen(
         initialIndex: Int,
     ) -> Unit,
     onGallery: (routeIndex: Int) -> Unit = {},
+    onReportCapture: (reportId: String, routeIndex: Int, remainingPhotos: Int, fromGallery: Boolean) -> Unit = { _, _, _, _ -> },
     onMenu: (() -> Unit)? = null,
     profileMonogram: String? = null,
     profileAvatar: Bitmap? = null,
@@ -110,6 +113,7 @@ fun TaskDetailScreen(
     }
     val readyEvidenceCount = readyEvidenceIds.size
     var showCompletionDialog by remember(entryId) { mutableStateOf(false) }
+    var showProblemReport by rememberSaveable(entryId) { mutableStateOf(false) }
     val localEvidenceWithoutServerPhoto = state.evidence
         .filterNot { local -> local.state == "READY" }
         .filterNot { local ->
@@ -373,6 +377,14 @@ fun TaskDetailScreen(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        OutlinedButton(
+                            onClick = { showProblemReport = true },
+                            enabled = actionPresentation.actionsEnabled && photoCapture.enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("task-report-problem"),
+                        ) {
+                            Icon(Icons.Filled.ReportProblem, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Text("Сообщить о проблеме", modifier = Modifier.padding(start = 8.dp))
+                        }
                         Button(
                             onClick = { showCompletionDialog = true },
                             enabled = actionPresentation.actionsEnabled && photoCapture.enabled,
@@ -389,6 +401,16 @@ fun TaskDetailScreen(
                 }
             }
         }
+    }
+
+    if (showProblemReport && detail != null) {
+        WorkerProblemReportDialog(
+            userId = userId,
+            entryId = entryId,
+            routeIndex = detail.routeIndex,
+            onDismiss = { showProblemReport = false },
+            onCapture = onReportCapture,
+        )
     }
 
     if (showCompletionDialog) {

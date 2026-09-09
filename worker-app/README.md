@@ -21,18 +21,20 @@ Russian version: [README.ru.md](README.ru.md).
 - The application and round launcher icon resolve to the adaptive
   [`ic_launcher_worker.xml`](app/src/main/res/mipmap-anydpi-v26/ic_launcher_worker.xml)
   resource on Android 8+. The complete
-  [worker artwork](app/src/main/res/drawable-nodpi/ic_launcher_worker_artwork.png)
+  [worker vector](app/src/main/res/drawable-v24/ic_launcher_worker_logo.xml), matching
+  the root `Logo_app.svg` with Cyrillic С and Р,
   is centered by
   [`ic_launcher_worker_foreground.xml`](app/src/main/res/drawable/ic_launcher_worker_foreground.xml)
   inside the adaptive safe zone. Android 12+ uses that compact foreground on a
   worker-blue system splash instead of scaling the artwork across the screen.
-  Earlier Android versions keep the bitmap alias under `mipmap-anydpi`.
+  The pre-adaptive launcher uses a raster compiled from the same SVG. Android 6
+  also uses it for the startup foreground because native vector gradients require API 24.
 
 ### Transport contract gate
 
 [`WorkerGatewayApiContractBoundaryTest.kt`](core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt)
-pins all 11 declared `WorkerGatewayApi` methods to their canonical public
-OpenAPI source: nine fixed gateway routes and exactly two allowlisted dynamic
+pins all 15 declared `WorkerGatewayApi` methods to their canonical public
+OpenAPI source: thirteen fixed gateway routes and exactly two allowlisted dynamic
 media routes. It rejects internal/private namespaces and service origins,
 eagerly resolves every Retrofit/kotlinx.serialization request and response
 converter, and checks every active worker/task-board and media JSON root
@@ -55,6 +57,8 @@ monogram opens Profile. A silent looping water video, the exact BLOCK BOX logo,
 a three-second logo greeting, animated sign-in fields and animated gradient
 buttons are shared with CustomerApp. The video remains behind every route, and
 the task, notice and dialog surfaces stay lightly translucent.
+The drawer logo is centered. The login logo retains its width when the keyboard
+reduces the viewport height; it only changes position.
 
 The home surface renders exactly one server-authorized card instead of a task
 board: a joined active slinger task first, then the current worker/group active
@@ -115,12 +119,23 @@ follow in the same readable form. Task descriptions and manager comments are
 not rendered. Selecting a photo opens that exact item in the full-screen paged
 and zoomable viewer, whose title also identifies the work for work-linked
 photos. Breaks, off-shift time and pauses remain server-owned, but the screen
-has no pause or direct result-photo button. The unsupported
-`Сообщить о проблеме` action is not shown until a server command exists; the layout is defined in
+has no pause or direct result-photo button. An active participant can select
+`Сообщить о проблеме`; the layout is defined in
 [`TaskDetailScreen.kt`](feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt).
 The entry/resume action stays in a safe-area-aware static footer rather than
 scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
+
+The problem sheet saves its comment and up to ten encrypted photos as a Room
+draft. Its paperclip opens the camera or Android's single/multiple gallery
+picker. Closing the sheet or app preserves the draft. Sending atomically
+freezes the encrypted declaration and enables its photo uploads; sync posts
+the complete report before uploading photos or completing that task. Report
+photos are separate from result evidence and never satisfy a completion gate.
+An own-report read refreshes them even after the task closes. Downloads retains
+failed reports and their comment, with explicit immutable retry; queued is not
+displayed as delivered. Room 11→12 adds the nullable report association without
+changing existing result photos.
 
 A canonical `LOGISTICS_DRIVER_TASK` transfer is marked
 `Межскладское перемещение` on the task card and opens as `Межскладской рейс`.

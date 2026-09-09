@@ -119,6 +119,8 @@ internal data class CameraRoute(
     val captureSessionId: String,
     val completeAfterSave: Boolean,
     val fromGallery: Boolean,
+    val problemReportId: String? = null,
+    val maxPhotos: Int = Int.MAX_VALUE,
 ) : NavKey
 
 internal fun newCameraRoute(
@@ -126,12 +128,16 @@ internal fun newCameraRoute(
     routeIndex: Int,
     completeAfterSave: Boolean = true,
     fromGallery: Boolean = false,
+    problemReportId: String? = null,
+    maxPhotos: Int = Int.MAX_VALUE,
 ): CameraRoute = CameraRoute(
     entryId = entryId,
     routeIndex = routeIndex,
     captureSessionId = UUID.randomUUID().toString(),
     completeAfterSave = completeAfterSave,
     fromGallery = fromGallery,
+    problemReportId = problemReportId,
+    maxPhotos = maxPhotos,
 )
 
 @Serializable
@@ -310,6 +316,18 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                             openCamera(routeIndex to completeAfterSave)
                         },
                         onGallery = openGallery,
+                        onReportCapture = { reportId, routeIndex, remainingPhotos, fromGallery ->
+                            backStack.add(
+                                newCameraRoute(
+                                    task.entryId,
+                                    routeIndex,
+                                    completeAfterSave = false,
+                                    fromGallery = fromGallery,
+                                    problemReportId = reportId,
+                                    maxPhotos = remainingPhotos,
+                                ),
+                            )
+                        },
                         onMedia = { title, previewPaths, readPaths, initialIndex ->
                             backStack.add(PhotoRoute(title, previewPaths, readPaths, initialIndex))
                         },
@@ -349,6 +367,18 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         openCamera(routeIndex to completeAfterSave)
                     },
                     onGallery = openGallery,
+                    onReportCapture = { reportId, routeIndex, remainingPhotos, fromGallery ->
+                        backStack.add(
+                            newCameraRoute(
+                                route.entryId,
+                                routeIndex,
+                                completeAfterSave = false,
+                                fromGallery = fromGallery,
+                                problemReportId = reportId,
+                                maxPhotos = remainingPhotos,
+                            ),
+                        )
+                    },
                     onMedia = { title, previewPaths, readPaths, initialIndex ->
                         backStack.add(PhotoRoute(title, previewPaths, readPaths, initialIndex))
                     },
@@ -369,8 +399,10 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         routeIndex = route.routeIndex,
                         onBack = closeCamera,
                         onSaved = onSaved,
-                        requestSyncAfterSave = !route.completeAfterSave,
+                        requestSyncAfterSave = !route.completeAfterSave && route.problemReportId == null,
                         completeAfterSave = route.completeAfterSave,
+                        problemReportId = route.problemReportId,
+                        maxPhotos = route.maxPhotos,
                     )
                 } else {
                     CameraScreen(
@@ -379,8 +411,10 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         routeIndex = route.routeIndex,
                         onBack = closeCamera,
                         onSaved = onSaved,
-                        requestSyncAfterSave = !route.completeAfterSave,
+                        requestSyncAfterSave = !route.completeAfterSave && route.problemReportId == null,
                         completeAfterSave = route.completeAfterSave,
+                        problemReportId = route.problemReportId,
+                        maxPhotos = route.maxPhotos,
                     )
                 }
             }
@@ -452,6 +486,7 @@ private fun WorkerTaskContent(
     onProfile: () -> Unit,
     onCamera: (routeIndex: Int, completeAfterSave: Boolean) -> Unit,
     onGallery: (routeIndex: Int) -> Unit,
+    onReportCapture: (reportId: String, routeIndex: Int, remainingPhotos: Int, fromGallery: Boolean) -> Unit,
     onMedia: (
         title: String,
         previewPaths: List<String>,
@@ -472,6 +507,7 @@ private fun WorkerTaskContent(
         onProfile = onProfile,
         onCamera = onCamera,
         onGallery = onGallery,
+        onReportCapture = onReportCapture,
         onMedia = onMedia,
         onCompletionQueued = onCompletionQueued,
         takeSlingerOnOpen = takeSlingerOnOpen,
@@ -548,7 +584,7 @@ private fun WorkerDrawerContent(
         drawerContentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         WorkerStoreLogo(
-            modifier = Modifier.padding(vertical = 24.dp),
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 24.dp),
             horizontalPadding = 54.dp,
         )
         NavigationDrawerItem(

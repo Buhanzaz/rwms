@@ -46,6 +46,15 @@ class WorkerGatewayClient @Inject constructor(
     suspend fun reserveEvidence(entryId: String, request: EvidenceReservationRequestDto): TaskEvidenceDto =
         api.reserveEvidence(entryId, request.operationId, request).bodyOrProblem(json)
 
+    suspend fun createProblemReport(
+        entryId: String,
+        request: WorkerProblemReportRequestDto,
+    ): WorkerProblemReportDto =
+        api.createProblemReport(entryId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun problemReport(reportId: String): WorkerProblemReportDto =
+        api.workerProblemReport(reportId).bodyOrProblem(json)
+
     suspend fun registerDevice(installationId: String, request: WorkerDeviceRegistrationRequestDto): WorkerDeviceRegistrationDto =
         api.registerDevice(installationId, request).bodyOrProblem(json)
 

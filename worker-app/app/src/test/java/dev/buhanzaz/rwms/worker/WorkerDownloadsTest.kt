@@ -4,6 +4,8 @@ import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerOutboxEntity
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportDraftSnapshot
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
 import org.junit.Test
 
 class WorkerDownloadsTest {
@@ -63,6 +65,56 @@ class WorkerDownloadsTest {
         assertThat(items).isEmpty()
         assertThat(superseded.encryptedFilePath).isEqualTo("encrypted-file")
     }
+
+    @Test
+    fun `blocked report remains readable and retryable after its task closes`() {
+        val report = problemReport(WorkerProblemReportStore.OUTBOX_CONFLICT)
+        val items = workerDownloadItems(emptyList(), emptyList(), listOf(report))
+
+        assertThat(items).hasSize(1)
+        assertThat(items.single().comment).isEqualTo("Дверь повреждена")
+        assertThat(items.single().reportRetryId).isEqualTo(report.reportId)
+        assertThat(items.single().canRetry).isTrue()
+        assertThat(items.single().status).isEqualTo("Требуется внимание")
+    }
+
+    @Test
+    fun `pending report has one card and its draft photos are never uploads`() {
+        val report = problemReport(WorkerProblemReportStore.OUTBOX_PENDING)
+        val items = workerDownloadItems(
+            outbox = listOf(outbox(report.reportId, WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT, report.state, null)),
+            evidence = listOf(evidence("draft", "DRAFT", 0, null).copy(problemReportId = "draft-report")),
+            reports = listOf(report),
+        )
+
+        assertThat(items).hasSize(1)
+        assertThat(items.single().id).isEqualTo("report:${report.reportId}")
+        assertThat(items.single().status).isEqualTo("В очереди")
+        assertThat(items.single().canRetry).isFalse()
+    }
+
+    @Test
+    fun `accepted report hides its card while unfinished report photos retain upload progress`() {
+        val report = problemReport(WorkerProblemReportStore.OUTBOX_REPORTED)
+        val photo = evidence("problem-photo", "UPLOADING", 45, null).copy(problemReportId = report.reportId)
+
+        val items = workerDownloadItems(emptyList(), listOf(photo), listOf(report))
+
+        assertThat(items).hasSize(1)
+        assertThat(items.single().title).isEqualTo("Фото проблемы")
+        assertThat(items.single().percent).isEqualTo(45)
+    }
+
+    private fun problemReport(state: String) = WorkerProblemReportDraftSnapshot(
+        reportId = "report-1",
+        entryId = "closed-entry",
+        routeIndex = 0,
+        comment = "Дверь повреждена",
+        occurredAt = "2026-09-09T00:00:00Z",
+        state = state,
+        lastError = null,
+        attachments = emptyList(),
+    )
 
     private fun outbox(
         operationId: String,

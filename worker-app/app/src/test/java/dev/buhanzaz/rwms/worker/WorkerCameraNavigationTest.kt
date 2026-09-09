@@ -40,4 +40,21 @@ class WorkerCameraNavigationTest {
 
         assertThat(route.completeAfterSave).isTrue()
     }
+
+    @Test
+    fun `problem photo route preserves its draft identity without completing the task`() {
+        val route = newCameraRoute(
+            "entry-1",
+            2,
+            completeAfterSave = false,
+            fromGallery = true,
+            problemReportId = "report-1",
+            maxPhotos = 1,
+        )
+
+        assertThat(route.problemReportId).isEqualTo("report-1")
+        assertThat(route.maxPhotos).isEqualTo(1)
+        assertThat(route.completeAfterSave).isFalse()
+        assertThat(route.fromGallery).isTrue()
+    }
 }

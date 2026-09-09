@@ -28,11 +28,15 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerOutboxEntity
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportDraftSnapshot
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.WorkerOutlinedButton as OutlinedButton
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +44,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /**
  * Defines worker application UI or lifecycle state; it does not decide a server task transition.
@@ -52,6 +57,8 @@ data class WorkerDownloadItem(
     val percent: Int?,
     val error: String?,
     val canRetry: Boolean,
+    val reportRetryId: String? = null,
+    val comment: String? = null,
 )
 
 /**
@@ -71,9 +78,11 @@ data class WorkerDownloadsUiState(
 class WorkerDownloadsViewModel @Inject constructor(
     private val localStore: WorkerLocalStore,
     private val scheduler: WorkerSyncScheduler,
+    private val problemReports: WorkerProblemReportStore,
 ) : ViewModel() {
     private val userId = MutableStateFlow<String?>(null)
     private val retryRequestedAtEpochMillis = MutableStateFlow<Long?>(null)
+    private val retryError = MutableStateFlow<String?>(null)
 
     val state: StateFlow<WorkerDownloadsUiState> = userId.flatMapLatest { id ->
         if (id == null) {
@@ -84,11 +93,12 @@ class WorkerDownloadsViewModel @Inject constructor(
                 localStore.observeEvidence(id),
                 localStore.observeProgress(id),
                 retryRequestedAtEpochMillis,
-            ) { outbox, evidence, progress, retryRequestedAt ->
+                problemReports.observeSubmittedReports(id),
+            ) { outbox, evidence, progress, retryRequestedAt, reports ->
                 val retryStarting = retryRequestedAt != null &&
                     (progress?.updatedAtEpochMillis ?: Long.MIN_VALUE) < retryRequestedAt
                 WorkerDownloadsUiState(
-                    items = workerDownloadItems(outbox, evidence),
+                    items = workerDownloadItems(outbox, evidence, reports),
                     syncMessage = if (retryStarting) {
                         "Повтор поставлен в очередь"
                     } else {
@@ -96,6 +106,8 @@ class WorkerDownloadsViewModel @Inject constructor(
                     },
                     retryStarting = retryStarting,
                 )
+            }.combine(retryError) { state, error ->
+                if (error == null) state else state.copy(syncMessage = error)
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkerDownloadsUiState())
@@ -105,12 +117,23 @@ class WorkerDownloadsViewModel @Inject constructor(
         this.userId.value = userId
     }
 
-    fun retry() {
+    fun retry(item: WorkerDownloadItem) {
         val currentUserId = userId.value ?: return
-        // A one-millisecond lead guarantees immediate queued feedback even if the previous
-        // persisted progress update was written in the same wall-clock millisecond.
-        retryRequestedAtEpochMillis.value = System.currentTimeMillis() + 1
-        scheduler.request(currentUserId)
+        viewModelScope.launch {
+            retryError.value = null
+            try {
+                item.reportRetryId?.let { reportId ->
+                    problemReports.retrySubmittedReport(currentUserId, reportId)
+                }
+                // Distinguishes queued feedback from progress saved in the same millisecond.
+                retryRequestedAtEpochMillis.value = System.currentTimeMillis() + 1
+                scheduler.requestAfterMutation(currentUserId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                retryError.value = error.safeWorkerUserMessage("Не удалось повторить отправку")
+            }
+        }
     }
 }
 
@@ -121,10 +144,11 @@ class WorkerDownloadsViewModel @Inject constructor(
 internal fun workerDownloadItems(
     outbox: List<WorkerOutboxEntity>,
     evidence: List<TaskEvidenceEntity>,
+    reports: List<WorkerProblemReportDraftSnapshot> = emptyList(),
 ): List<WorkerDownloadItem> {
     val evidenceReservationIds = evidence.mapTo(mutableSetOf()) { it.reservationOperationId }
     val evidenceItems = evidence.asSequence()
-        .filterNot { it.state == "READY" }
+        .filterNot { it.state == "READY" || it.state == WorkerProblemReportStore.EVIDENCE_DRAFT }
         .filter {
             it.state in ACTIVE_EVIDENCE_STATES ||
                 it.state in ERROR_EVIDENCE_STATES ||
@@ -134,7 +158,7 @@ internal fun workerDownloadItems(
             val failed = item.state in ERROR_EVIDENCE_STATES || !item.lastError.isNullOrBlank()
             WorkerDownloadItem(
                 id = "evidence:${item.evidenceId}",
-                title = "Фото задания",
+                title = if (item.problemReportId == null) "Фото задания" else "Фото проблемы",
                 subtitle = "Задание ${item.entryId}",
                 status = evidenceStatus(item),
                 percent = item.uploadPercent.takeIf { item.state == "UPLOADING" },
@@ -145,6 +169,7 @@ internal fun workerDownloadItems(
             )
         }
     val outboxItems = outbox.asSequence()
+        .filterNot { it.kind == WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT }
         .filterNot {
             it.kind == WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION &&
                 it.operationId in evidenceReservationIds
@@ -164,7 +189,30 @@ internal fun workerDownloadItems(
                 canRetry = operation.state == WorkerLocalStore.OUTBOX_RETRY,
             )
         }
-    return (outboxItems + evidenceItems).sortedBy(WorkerDownloadItem::id).toList()
+    val reportItems = reports.asSequence()
+        .filterNot { it.state == WorkerProblemReportStore.OUTBOX_REPORTED || it.state == WorkerProblemReportStore.OUTBOX_DRAFT }
+        .map { report ->
+            val blocked = report.state in setOf(
+                WorkerProblemReportStore.OUTBOX_REVIEW_REQUIRED,
+                WorkerProblemReportStore.OUTBOX_CONFLICT,
+            )
+            WorkerDownloadItem(
+                id = "report:${report.reportId}",
+                title = "Сообщение о проблеме",
+                subtitle = "Задание ${report.entryId}",
+                status = when {
+                    blocked -> "Требуется внимание"
+                    report.state == WorkerProblemReportStore.OUTBOX_RETRY -> "Ошибка отправки"
+                    else -> "В очереди"
+                },
+                percent = null,
+                error = report.lastError,
+                canRetry = blocked || report.state == WorkerProblemReportStore.OUTBOX_RETRY,
+                reportRetryId = report.reportId.takeIf { blocked },
+                comment = report.comment,
+            )
+        }
+    return (reportItems + outboxItems + evidenceItems).sortedBy(WorkerDownloadItem::id).toList()
 }
 
 @Composable
@@ -214,7 +262,7 @@ fun WorkerDownloadsScreen(
                     WorkerDownloadCard(
                         item = item,
                         retryStarting = state.retryStarting,
-                        onRetry = viewModel::retry,
+                        onRetry = { viewModel.retry(item) },
                     )
                 }
             }
@@ -241,6 +289,7 @@ private fun WorkerDownloadCard(
                     fontWeight = FontWeight.Bold,
                 )
             }
+            item.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             item.percent?.let { percent ->
                 LinearProgressIndicator(
                     progress = { percent.coerceIn(0, 100) / 100f },

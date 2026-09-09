@@ -397,6 +397,30 @@ data class EvidenceReservationRequestDto(
     val sha256: String,
 )
 
+/** Atomic worker report command: the report and every already-prepared photo reservation. */
+@Serializable
+data class WorkerProblemReportRequestDto(
+    val operationId: String,
+    val comment: String,
+    val occurredAt: String,
+    val offlineLeaseId: String,
+    val attachments: List<EvidenceReservationRequestDto>,
+)
+
+/** Author-owned report response remains readable while its photos finish after task closure. */
+@Serializable
+data class WorkerProblemReportDto(
+    val reportId: String,
+    val entryId: String,
+    val taskId: String,
+    val routeIndex: Int,
+    val entryTitle: String,
+    val comment: String,
+    val occurredAt: String,
+    val recordedAt: String,
+    val attachments: List<TaskEvidenceDto>,
+)
+
 @Serializable
 /**
  * Public-worker-gateway response/read payload for WorkerInvalidationEventDto. It is a transport boundary model, not persisted domain state.

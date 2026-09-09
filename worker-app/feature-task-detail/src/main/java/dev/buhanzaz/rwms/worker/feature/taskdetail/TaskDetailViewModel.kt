@@ -160,7 +160,9 @@ class TaskDetailViewModel internal constructor(
                     queuePurpose = task?.categoryId?.let(evidenceWithRetry.categoryPurposes::get),
                     session = evidenceWithRetry.session,
                     assignments = evidenceWithRetry.assignments,
-                    evidence = evidenceWithRetry.evidence.filter { it.entryId == requested.entryId },
+                    evidence = evidenceWithRetry.evidence.filter {
+                        it.entryId == requested.entryId && it.problemReportId == null
+                    },
                     retryableEvidenceIds = evidenceWithRetry.retryableEvidenceIds,
                     kpiPalette = evidenceWithRetry.kpiPalette,
                     error = error,

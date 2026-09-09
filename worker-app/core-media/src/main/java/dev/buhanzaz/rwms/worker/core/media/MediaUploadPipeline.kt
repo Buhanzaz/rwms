@@ -331,7 +331,13 @@ class MediaUploadPipeline @Inject constructor(
         variants: List<EncryptedEvidenceVariantPart>,
     ): EvidenceUploadResult {
         repeat(8) {
-            val remote = gateway.detail(evidence.entryId).evidence
+            val reportId = evidence.problemReportId
+            val remoteEvidence = if (reportId == null) {
+                gateway.detail(evidence.entryId).evidence
+            } else {
+                gateway.problemReport(reportId).attachments
+            }
+            val remote = remoteEvidence
                 .firstOrNull { item -> item.evidenceId == evidence.evidenceId }
             if (remote != null) {
                 when (remote.state) {
