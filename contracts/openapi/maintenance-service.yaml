@@ -355,6 +355,10 @@ paths:
         current status as REPAIR. Each work finding has an empty candidates array because the
         latest completed inventory is authoritative and no active estimate/repair requires a
         caller-selected merge or replacement decision.
+        A missing local asset projection does not block this read-only planning step: reserved
+        inventory sources are materialized only after completion. Existing projections retain
+        warehouse/version and terminal-status checks; apply always requires the authoritative
+        asset fence.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightRequest' } } } }
       responses:
         '200': { description: Immutable work-finding identities with no collision candidates., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightResponse' } } } }

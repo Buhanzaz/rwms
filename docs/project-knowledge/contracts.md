@@ -892,6 +892,11 @@ required and bounded to 5000, but permits an empty list. Empty means the valid f
 maintenance candidates; maintenance returns the same inventory/plan identity with an empty result
 instead of rejecting the request.
 
+Missing local rental-item projections also do not block this read-only planning step: reserved
+inventory sources are materialized only after completion. Existing projections retain their
+warehouse/version and terminal-status checks. The mutating apply boundary still requires the
+authoritative asset fence; preflight neither creates a cabin nor initializes its projection.
+
 The same boundary fingerprints and stores the exact raw versioned snapshot. For schema version 1
 only, maintenance recognizes the historical producer shape where the identical non-empty aggregate
 media list was copied onto every plan line. It removes those copies only from the executable

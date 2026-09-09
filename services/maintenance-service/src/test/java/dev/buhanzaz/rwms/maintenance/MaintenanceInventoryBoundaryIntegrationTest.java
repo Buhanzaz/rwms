@@ -3444,6 +3444,46 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         """, Integer.class, repairId)).isOne();
   }
 
+  @Test
+  void preflightAcceptsFrozenEvidenceWithoutLocalRentalItemProjection() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(inventory.freeze(
+        autoRequest(inventoryId, findingId, List.of())).response().snapshot());
+    InventoryPublicationFindingInput finding = publicationFinding(
+        findingId, assetId, 7L, rawSnapshot, 2, 3, false, null);
+
+    assertThat(rentalItems.findById(assetId)).isEmpty();
+    InventoryPublicationPreflightResponse preflight = publications.preflight(
+        new InventoryPublicationPreflightRequest(
+            inventoryId, warehouseId, 1L, finalPlanSha(1L), List.of(finding)));
+
+    assertThat(preflight.findings()).singleElement().satisfies(value -> {
+      assertThat(value.targetKind()).isEqualTo(InventoryPublicationTargetKind.REPAIR);
+      assertThat(value.candidates()).isEmpty();
+    });
+    assertThat(rentalItems.findById(assetId)).isEmpty();
+    assertThatThrownBy(() -> publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 7L, 1L, InventoryPublicationStrategy.CREATE, null, null)))
+        .isInstanceOf(MaintenanceDependencyException.class)
+        .hasMessageContaining("Current rental-item fact is unavailable");
+
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(assetId, warehouseId, "REPAIR", 8L));
+    InventoryPublicationReconciliationService.PublicationResult published = publications.apply(
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 8L, 1L, InventoryPublicationStrategy.CREATE, null, null));
+    assertThat(published.response().repairId()).isNotNull();
+  }
+
   @ParameterizedTest(name = "authoritative inventory accepts non-terminal asset status {0}")
   @ValueSource(strings = {
       "BOOKED",

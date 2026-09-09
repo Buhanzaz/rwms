@@ -70,6 +70,10 @@ array for each work finding. The latest completed inventory is authoritative, so
 or repair is predecessor evidence rather than a collision that requires a caller-selected merge or
 replacement.
 
+Preflight permits a missing local rental-item projection because reserved inventory sources are
+materialized only after completion. It still validates the frozen plan and any existing asset
+projection; applying the result requires the authoritative asset version and warehouse/status fence.
+
 Every completed-inventory finding with work targets one full frozen `REPAIR`, including
 `AFTER_RENT`; the old inventory-only estimate materialization path no longer exists. Historical
 `CREATE`, `REPLACE`, and `MERGE` values remain valid immutable request evidence, but all execute as
