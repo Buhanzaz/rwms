@@ -6,9 +6,10 @@ info:
     Canonical contract for the CAD-project collaboration boundary. The browser is
     intended to call these routes only through the same-origin gateway prefix
     `/api/cad/v1`; a direct service address is not a browser configuration.
-    Every protected operation requires a valid OIDC USER JWT with the dedicated
-    `cad.project` scope. Project membership and the separate control fence are
-    decided by cad-service, never by browser history or local storage.
+    Protected operations require either a valid OIDC USER JWT with the dedicated
+    `cad.project` scope or a signed invitation capability already accepted as a
+    guest. Project membership and the separate control fence are decided by
+    cad-service, never by browser history or local storage.
 
     JSON-body operations require `Content-Type: application/json`; request
     compression is not supported (`Content-Encoding` must be absent or
@@ -22,6 +23,7 @@ servers:
   - url: /
 security:
   - bearerJwt: []
+  - guestInvitation: []
 paths:
   /health:
     get:
@@ -84,13 +86,15 @@ paths:
   /api/cad/v1/invitations/accept:
     post:
       operationId: acceptCadProjectInvitation
-      summary: Accept a signed one-use project invitation.
+      summary: Enter a project as a guest through a signed invitation.
+      security: []
       description: >-
-        Requires USER and `cad.project`. The authenticated subject, rather than
-        a request field, is bound to the invitation. The first successful
-        acceptance assigns only the `client` role. An exact retry by that same
-        subject returns the visible project state; another subject cannot reuse
-        the invitation. Invitations expire 24 hours after creation.
+        No account or OIDC session is required. The signed invitation capability
+        derives a project-scoped guest subject and assigns only the `client`
+        role. The same capability is then used as Bearer authentication for that
+        guest until the designer revokes the membership. An exact acceptance
+        retry returns the same guest identity and visible project state.
+        Invitations must first be accepted within 24 hours of creation.
       requestBody:
         required: true
         content:
@@ -98,13 +102,11 @@ paths:
             schema: { $ref: '#/components/schemas/AcceptInvitationRequest' }
       responses:
         '200':
-          description: Current project state after accepted or same-subject replayed invitation.
+          description: Guest identity and current project state after acceptance or replay.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ProjectState' }
+              schema: { $ref: '#/components/schemas/GuestInvitationAcceptance' }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '410': { $ref: '#/components/responses/Gone' }
@@ -522,6 +524,15 @@ components:
         OIDC access token issued for a USER principal with `cad.project` in its
         scope claim. The server verifies signature, `exp`, `iat`, `sub`, issuer
         and audience before resolving project membership.
+    guestInvitation:
+      type: http
+      scheme: bearer
+      bearerFormat: CAD invitation capability
+      description: >-
+        The complete `projectId.invitationId.token` capability from an accepted
+        invitation. The server verifies its HMAC, accepted guest identity,
+        current membership and revocation state on every request. It grants no
+        access to any other project and must never be logged.
   parameters:
     ProjectId:
       name: projectId
@@ -540,7 +551,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/CadProblem' }
     Unauthorized:
-      description: Missing, expired or invalid Bearer JWT.
+      description: Missing or invalid OIDC or guest Bearer credential.
       headers:
         WWW-Authenticate:
           schema: { type: string, const: Bearer }
@@ -548,7 +559,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/CadProblem' }
     Forbidden:
-      description: JWT does not represent an eligible USER, lacks cad.project, or lacks action authority.
+      description: The OIDC principal is ineligible, lacks cad.project, or the current member lacks action authority.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/CadProblem' }
@@ -563,7 +574,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/CadProblem' }
     Gone:
-      description: The invitation has expired or was already consumed by a different subject.
+      description: The invitation expired before its first guest acceptance.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/CadProblem' }
@@ -941,6 +952,17 @@ components:
         projectId: { type: string, format: uuid }
         invitationId: { type: string, format: uuid }
         token: { type: string, minLength: 1, maxLength: 128 }
+    GuestInvitationAcceptance:
+      type: object
+      additionalProperties: false
+      required: [subject, project]
+      properties:
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Server-derived project-scoped guest subject.
+        project: { $ref: '#/components/schemas/ProjectState' }
     RevokeMemberRequest:
       allOf:
         - $ref: '#/components/schemas/ProjectOperation'
