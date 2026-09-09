@@ -76,7 +76,7 @@ fun WorkerProblemReportDialog(
         ) {
             Text("Сообщить о проблеме", style = MaterialTheme.typography.headlineSmall)
             when {
-                state.loading -> Text("Открываем обращение…")
+                state.loading -> Unit
                 state.report == null -> state.error?.let { ProblemReportError(it) }
                 else -> ProblemReportContent(
                     state = state,
@@ -169,7 +169,7 @@ private fun ProblemReportContent(
             onClick = onSubmit,
             enabled = state.canSubmit,
             modifier = Modifier.fillMaxWidth().testTag("problem-report-submit"),
-        ) { Text(if (state.saving) "Сохраняем…" else "Отправить обращение") }
+        ) { Text("Отправить обращение") }
         WorkerProblemReportStore.OUTBOX_PENDING,
         WorkerProblemReportStore.OUTBOX_RETRY -> Text(
             "Обращение сохранено и ожидает отправки. Оно ещё не доставлено.",
@@ -221,9 +221,7 @@ private fun ProblemReportPhoto(
             is WorkerProblemReportPreview.Failed -> Box(contentAlignment = Alignment.Center, modifier = Modifier.matchParentSize()) {
                 Text(preview.message, style = MaterialTheme.typography.labelSmall)
             }
-            null, WorkerProblemReportPreview.Loading -> Box(contentAlignment = Alignment.Center, modifier = Modifier.matchParentSize()) {
-                Text("Фото…", style = MaterialTheme.typography.labelSmall)
-            }
+            null, WorkerProblemReportPreview.Loading -> Unit
         }
         if (editable) {
             IconButton(

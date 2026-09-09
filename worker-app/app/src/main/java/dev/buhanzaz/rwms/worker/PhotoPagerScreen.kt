@@ -97,12 +97,12 @@ fun PhotoPagerScreen(
             Box(Modifier.fillMaxSize()) {
                 if (bitmap == null) {
                     val error = state.errors[path]
-                    androidx.compose.foundation.layout.Column(
-                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(error ?: "Загружаем фото…")
-                        if (error != null) {
+                    if (error != null) {
+                        androidx.compose.foundation.layout.Column(
+                            modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(error)
                             TextButton(onClick = { viewModel.retry(path) }) {
                                 Text("Повторить")
                             }
@@ -118,17 +118,12 @@ fun PhotoPagerScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
-                    if (path in state.loadingOriginals && path !in state.originalPaths) {
-                        Text(
-                            "Загружаем оригинал…",
-                            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                        )
-                    } else if (state.errors[path] != null) {
+                    if (state.errors[path] != null) {
                         TextButton(
                             onClick = { viewModel.retry(path) },
                             modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp),
                         ) {
-                            Text("Повторить загрузку оригинала")
+                            Text("Повторить")
                         }
                     }
                 }

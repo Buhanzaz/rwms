@@ -10,7 +10,7 @@ import org.junit.Test
 
 class WorkerDownloadsTest {
     @Test
-    fun `download projection hides successful evidence and encrypted storage fields`() {
+    fun `download projection hides normal transfers and encrypted storage fields`() {
         val pending = evidence("pending", state = "UPLOADING", percent = 63, lastError = null)
         val ready = evidence("ready", state = "READY", percent = 100, lastError = null)
         val duplicateReservation = outbox(
@@ -19,13 +19,16 @@ class WorkerDownloadsTest {
             state = WorkerLocalStore.OUTBOX_PENDING,
             error = null,
         )
+        val pendingAction = outbox(
+            operationId = "pending-action",
+            kind = WorkerLocalStore.OUTBOX_ACTION,
+            state = WorkerLocalStore.OUTBOX_PENDING,
+            error = null,
+        )
 
-        val items = workerDownloadItems(listOf(duplicateReservation), listOf(pending, ready))
+        val items = workerDownloadItems(listOf(duplicateReservation, pendingAction), listOf(pending, ready))
 
-        assertThat(items).hasSize(1)
-        assertThat(items.single().percent).isEqualTo(63)
-        assertThat(items.single().toString()).doesNotContain("encrypted-payload")
-        assertThat(items.single().toString()).doesNotContain("encrypted-file")
+        assertThat(items).isEmpty()
         assertThat(WorkerDownloadItem::class.java.declaredFields.map { it.name })
             .containsNoneOf("encryptedPayload", "encryptedFilePath")
     }
@@ -48,6 +51,7 @@ class WorkerDownloadsTest {
 
         assertThat(items).hasSize(2)
         assertThat(items.map { it.canRetry }).containsExactly(true, true)
+        assertThat(items.map { it.percent }).containsExactly(null, null)
         assertThat(items.mapNotNull { it.error }).containsExactly("Нет связи с RWMS", "Тайм-аут")
     }
 
@@ -79,7 +83,7 @@ class WorkerDownloadsTest {
     }
 
     @Test
-    fun `pending report has one card and its draft photos are never uploads`() {
+    fun `pending report and its draft photos stay hidden`() {
         val report = problemReport(WorkerProblemReportStore.OUTBOX_PENDING)
         val items = workerDownloadItems(
             outbox = listOf(outbox(report.reportId, WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT, report.state, null)),
@@ -87,22 +91,17 @@ class WorkerDownloadsTest {
             reports = listOf(report),
         )
 
-        assertThat(items).hasSize(1)
-        assertThat(items.single().id).isEqualTo("report:${report.reportId}")
-        assertThat(items.single().status).isEqualTo("В очереди")
-        assertThat(items.single().canRetry).isFalse()
+        assertThat(items).isEmpty()
     }
 
     @Test
-    fun `accepted report hides its card while unfinished report photos retain upload progress`() {
+    fun `accepted report and unfinished report photos stay hidden`() {
         val report = problemReport(WorkerProblemReportStore.OUTBOX_REPORTED)
         val photo = evidence("problem-photo", "UPLOADING", 45, null).copy(problemReportId = report.reportId)
 
         val items = workerDownloadItems(emptyList(), listOf(photo), listOf(report))
 
-        assertThat(items).hasSize(1)
-        assertThat(items.single().title).isEqualTo("Фото проблемы")
-        assertThat(items.single().percent).isEqualTo(45)
+        assertThat(items).isEmpty()
     }
 
     private fun problemReport(state: String) = WorkerProblemReportDraftSnapshot(

@@ -55,7 +55,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -275,23 +274,16 @@ fun GalleryImportScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            when {
-                state.saving -> {
-                    CircularProgressIndicator()
-                    Text("Подготавливаем фотографии…", modifier = Modifier.padding(top = 16.dp))
-                }
-                state.error != null -> {
-                    Text(
-                        requireNotNull(state.error),
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center,
-                    )
-                    Button(
-                        onClick = ::openPicker,
-                        modifier = Modifier.padding(top = 16.dp),
-                    ) { Text("Выбрать другие фото") }
-                }
-                else -> Text("Открываем галерею…")
+            state.error?.let { error ->
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
+                Button(
+                    onClick = ::openPicker,
+                    modifier = Modifier.padding(top = 16.dp),
+                ) { Text("Выбрать другие фото") }
             }
         }
     }
@@ -537,10 +529,7 @@ private fun WorkerCameraExperience(
     }
 
     fun takePhoto() {
-        val capture = imageCapture ?: run {
-            message = "Камера ещё запускается"
-            return
-        }
+        val capture = imageCapture ?: return
         if (captureInProgress || saving || galleryStartIndex != null) return
         if (capturedFiles.size + persistedCaptureCount >= maxPhotos) {
             message = "Можно добавить фотографий: $maxPhotos"
@@ -886,9 +875,6 @@ private fun CameraBottomControls(
                             drawLine(WorkerCameraBlue, start, end, 1.5.dp.toPx(), StrokeCap.Round)
                         }
                     }
-                }
-                if (captureInProgress || saving) {
-                    CircularProgressIndicator(color = WorkerCameraBlue, modifier = Modifier.size(78.dp))
                 }
             }
             Row(

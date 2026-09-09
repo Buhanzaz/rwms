@@ -27,7 +27,7 @@ sealed interface WorkerAppUiState {
         val message: String? = null,
         val isSubmitting: Boolean = false,
     ) : WorkerAppUiState
-    data class Connecting(val message: String) : WorkerAppUiState
+    data class Connecting(val message: String? = null) : WorkerAppUiState
     data class Ready(val userId: String, val displayName: String) : WorkerAppUiState
 }
 
@@ -96,7 +96,7 @@ class WorkerAppViewModel @Inject constructor(
                 scheduler.request(cachedSession.userId)
                 mutableState.value = WorkerAppUiState.Ready(cachedSession.userId, cachedSession.displayName)
             } else if (activeUserId == null) {
-                mutableState.value = WorkerAppUiState.Connecting("Подключаемся к RWMS…")
+                mutableState.value = WorkerAppUiState.Connecting()
             }
             runCatching { gateway.context() }
                 .onSuccess { context ->

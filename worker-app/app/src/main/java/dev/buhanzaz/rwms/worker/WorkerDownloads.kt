@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -99,11 +98,7 @@ class WorkerDownloadsViewModel @Inject constructor(
                     (progress?.updatedAtEpochMillis ?: Long.MIN_VALUE) < retryRequestedAt
                 WorkerDownloadsUiState(
                     items = workerDownloadItems(outbox, evidence, reports),
-                    syncMessage = if (retryStarting) {
-                        "Повтор поставлен в очередь"
-                    } else {
-                        progress?.message
-                    },
+                    syncMessage = null,
                     retryStarting = retryStarting,
                 )
             }.combine(retryError) { state, error ->
@@ -150,8 +145,7 @@ internal fun workerDownloadItems(
     val evidenceItems = evidence.asSequence()
         .filterNot { it.state == "READY" || it.state == WorkerProblemReportStore.EVIDENCE_DRAFT }
         .filter {
-            it.state in ACTIVE_EVIDENCE_STATES ||
-                it.state in ERROR_EVIDENCE_STATES ||
+            it.state in ERROR_EVIDENCE_STATES ||
                 !it.lastError.isNullOrBlank()
         }
         .map { item ->
@@ -160,8 +154,8 @@ internal fun workerDownloadItems(
                 id = "evidence:${item.evidenceId}",
                 title = if (item.problemReportId == null) "Фото задания" else "Фото проблемы",
                 subtitle = "Задание ${item.entryId}",
-                status = evidenceStatus(item),
-                percent = item.uploadPercent.takeIf { item.state == "UPLOADING" },
+                status = if (!item.lastError.isNullOrBlank()) "Ошибка отправки" else evidenceStatus(item),
+                percent = null,
                 error = item.lastError?.takeIf(String::isNotBlank)
                     ?: item.reviewReason?.takeIf { failed && it.isNotBlank() },
                 canRetry = !item.lastError.isNullOrBlank() ||
@@ -174,16 +168,19 @@ internal fun workerDownloadItems(
             it.kind == WorkerLocalStore.OUTBOX_EVIDENCE_RESERVATION &&
                 it.operationId in evidenceReservationIds
         }
+        .filter {
+            it.state == WorkerLocalStore.OUTBOX_RETRY || !it.lastError.isNullOrBlank()
+        }
         .map { operation ->
             WorkerDownloadItem(
                 id = "outbox:${operation.operationId}",
                 title = if (operation.kind == WorkerLocalStore.OUTBOX_ACTION) {
                     "Действие по заданию"
                 } else {
-                    "Подготовка фото"
+                    "Фото задания"
                 },
                 subtitle = "Задание ${operation.entryId}",
-                status = if (operation.state == WorkerLocalStore.OUTBOX_RETRY) "Ошибка" else "В очереди",
+                status = "Ошибка",
                 percent = null,
                 error = operation.lastError?.takeIf(String::isNotBlank),
                 canRetry = operation.state == WorkerLocalStore.OUTBOX_RETRY,
@@ -191,6 +188,12 @@ internal fun workerDownloadItems(
         }
     val reportItems = reports.asSequence()
         .filterNot { it.state == WorkerProblemReportStore.OUTBOX_REPORTED || it.state == WorkerProblemReportStore.OUTBOX_DRAFT }
+        .filter {
+            it.state == WorkerProblemReportStore.OUTBOX_RETRY ||
+                it.state == WorkerProblemReportStore.OUTBOX_REVIEW_REQUIRED ||
+                it.state == WorkerProblemReportStore.OUTBOX_CONFLICT ||
+                !it.lastError.isNullOrBlank()
+        }
         .map { report ->
             val blocked = report.state in setOf(
                 WorkerProblemReportStore.OUTBOX_REVIEW_REQUIRED,
@@ -202,8 +205,7 @@ internal fun workerDownloadItems(
                 subtitle = "Задание ${report.entryId}",
                 status = when {
                     blocked -> "Требуется внимание"
-                    report.state == WorkerProblemReportStore.OUTBOX_RETRY -> "Ошибка отправки"
-                    else -> "В очереди"
+                    else -> "Ошибка отправки"
                 },
                 percent = null,
                 error = report.lastError,
@@ -290,13 +292,6 @@ private fun WorkerDownloadCard(
                 )
             }
             item.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            item.percent?.let { percent ->
-                LinearProgressIndicator(
-                    progress = { percent.coerceIn(0, 100) / 100f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text("Загружено: ${percent.coerceIn(0, 100)}%")
-            }
             item.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (item.canRetry) {
                 OutlinedButton(
@@ -304,7 +299,7 @@ private fun WorkerDownloadCard(
                     enabled = !retryStarting,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (retryStarting) "Запускаем повтор…" else "Повторить")
+                    Text("Повторить")
                 }
             }
         }
@@ -312,14 +307,9 @@ private fun WorkerDownloadCard(
 }
 
 private fun evidenceStatus(evidence: TaskEvidenceEntity): String = when (evidence.state) {
-    "CAPTURED" -> "Ожидает отправки"
-    "RESERVED" -> "Подготовка"
-    "UPLOADING" -> "Загружается"
-    "PROCESSING" -> "Обрабатывается"
     "REVIEW_REQUIRED" -> "Требуется внимание"
     "REJECTED" -> "Отклонено"
-    else -> "Синхронизация"
+    else -> "Ошибка отправки"
 }
 
-private val ACTIVE_EVIDENCE_STATES = setOf("CAPTURED", "RESERVED", "UPLOADING", "PROCESSING")
 private val ERROR_EVIDENCE_STATES = setOf("REVIEW_REQUIRED", "REJECTED")

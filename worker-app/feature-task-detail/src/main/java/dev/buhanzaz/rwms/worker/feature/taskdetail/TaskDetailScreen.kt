@@ -879,7 +879,7 @@ private fun RemoteMediaThumbnail(
                 "Фото недоступно",
                 style = MaterialTheme.typography.labelSmall,
             )
-            null, TaskMediaThumbnail.Loading -> Text("Загрузка…", style = MaterialTheme.typography.labelSmall)
+            null, TaskMediaThumbnail.Loading -> Unit
         }
     }
 }
@@ -902,7 +902,9 @@ private fun EvidenceRow(
                 encryptedPath = evidence.encryptedFilePath,
                 modifier = Modifier.fillMaxWidth().height(160.dp),
             )
-            Text(presentation.status, style = MaterialTheme.typography.titleSmall)
+            if (presentation.status.isNotBlank()) {
+                Text(presentation.status, style = MaterialTheme.typography.titleSmall)
+            }
             presentation.message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             evidence.lastError?.let {
                 Text(
@@ -942,10 +944,7 @@ private fun LocalEvidenceThumbnail(
                 "Фото сохранено",
                 style = MaterialTheme.typography.labelSmall,
             )
-            null, TaskMediaThumbnail.Loading -> Text(
-                "Открываем фото…",
-                style = MaterialTheme.typography.labelSmall,
-            )
+            null, TaskMediaThumbnail.Loading -> Unit
         }
     }
 }

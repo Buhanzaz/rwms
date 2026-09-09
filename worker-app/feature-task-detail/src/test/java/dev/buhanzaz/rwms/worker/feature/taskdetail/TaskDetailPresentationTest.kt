@@ -165,7 +165,8 @@ class TaskDetailPresentationTest {
         )
 
         assertThat(presentation.enabled).isFalse()
-        assertThat(presentation.message).contains("Загружаем карточку")
+        assertThat(presentation.message).contains("ещё не синхронизирована")
+        assertThat(presentation.message).doesNotContain("Загружаем")
     }
 
     @Test
@@ -303,7 +304,7 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `photo upload exposes its durable percentage`() {
+    fun `photo upload does not expose transient loading copy`() {
         val presentation = evidencePresentation(
             state = "UPLOADING",
             uploadPercent = 63,
@@ -311,7 +312,8 @@ class TaskDetailPresentationTest {
             hasValidReservationPayload = false,
         )
 
-        assertThat(presentation.status).isEqualTo("Загрузка · 63%")
+        assertThat(presentation.status).isEmpty()
+        assertThat(presentation.message).isNull()
     }
 
     @Test
@@ -867,7 +869,7 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `task header appears immediately after take but waits for authoritative timer`() {
+    fun `task header waits silently for an authoritative timer after take`() {
         val beforeTake = taskHeaderTimerPresentation(
             taskStatus = "WAITING",
             locallyPending = false,
@@ -882,13 +884,7 @@ class TaskDetailPresentationTest {
         )
 
         assertThat(beforeTake).isNull()
-        assertThat(pendingTake).isEqualTo(
-            TaskHeaderTimerPresentation(
-                label = "Таймер",
-                countdown = "запускается…",
-                running = false,
-            ),
-        )
+        assertThat(pendingTake).isNull()
     }
 
     @Test

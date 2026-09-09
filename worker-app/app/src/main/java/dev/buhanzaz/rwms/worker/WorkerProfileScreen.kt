@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -117,15 +116,7 @@ fun ProfileScreen(
                             border = androidx.compose.foundation.BorderStroke(2.dp, Color.White.copy(alpha = 0.88f)),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                if (state.isAvatarLoading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp,
-                                        color = Color.White,
-                                    )
-                                } else {
-                                    Icon(Icons.Filled.CameraAlt, contentDescription = "Изменить фото")
-                                }
+                                Icon(Icons.Filled.CameraAlt, contentDescription = "Изменить фото")
                             }
                         }
                     }

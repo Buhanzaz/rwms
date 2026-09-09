@@ -41,7 +41,7 @@ internal fun photoCapturePresentation(
     !hasLoadedDetail ->
         PhotoCapturePresentation(
             enabled = false,
-            message = "Загружаем карточку задания. Добавление фото станет доступно после синхронизации.",
+            message = "Карточка задания ещё не синхронизирована. Добавление фото станет доступно после синхронизации.",
         )
     locallyPending -> PhotoCapturePresentation(
         enabled = false,
@@ -76,27 +76,27 @@ internal fun evidencePresentation(
     hasValidReservationPayload: Boolean,
 ): EvidencePresentation = when (state) {
     "CAPTURED" -> EvidencePresentation(
-        status = "Ожидает отправки",
-        message = "Фото сохранено на устройстве и будет отправлено при синхронизации.",
+        status = "",
+        message = null,
         canRetryReservation = false,
     )
     "RESERVED" -> EvidencePresentation(
-        status = "Подготовка к отправке",
+        status = "",
         message = null,
         canRetryReservation = false,
     )
     "UPLOADING" -> EvidencePresentation(
-        status = "Загрузка · ${uploadPercent.coerceIn(0, 100)}%",
+        status = "",
         message = null,
         canRetryReservation = false,
     )
     "PROCESSING" -> EvidencePresentation(
-        status = "Обработка",
-        message = "Фото загружено и обрабатывается.",
+        status = "",
+        message = null,
         canRetryReservation = false,
     )
     "READY" -> EvidencePresentation(
-        status = "Готово",
+        status = "",
         message = null,
         canRetryReservation = false,
     )
@@ -278,23 +278,17 @@ internal fun taskHeaderTimerPresentation(
     remaining: String?,
 ): TaskHeaderTimerPresentation? {
     if (taskStatus != "IN_PROGRESS") return null
-    if (locallyPending) {
-        return TaskHeaderTimerPresentation(
-            label = "Таймер",
-            countdown = "запускается…",
-            running = false,
-        )
-    }
+    if (locallyPending) return null
     return when (timerState) {
         "WORKING" -> TaskHeaderTimerPresentation(
             label = "Осталось",
-            countdown = remaining ?: "синхронизация…",
+            countdown = remaining ?: "—",
             running = remaining != null,
         )
         "BREAK" -> TaskHeaderTimerPresentation("Перерыв", remaining, running = false)
         "OFF_SHIFT" -> TaskHeaderTimerPresentation("Вне смены", remaining, running = false)
         "PAUSED" -> TaskHeaderTimerPresentation("Таймер на паузе", remaining, running = false)
-        else -> TaskHeaderTimerPresentation("Таймер", "синхронизация…", running = false)
+        else -> TaskHeaderTimerPresentation("Таймер", "—", running = false)
     }
 }
 

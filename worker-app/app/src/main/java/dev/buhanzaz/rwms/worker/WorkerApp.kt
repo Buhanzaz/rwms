@@ -8,19 +8,16 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,7 +37,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -80,7 +76,7 @@ fun WorkerApp(
     RwmsWorkerTheme {
         WorkerStoreLaunchGate {
             when (val current = state) {
-                WorkerAppUiState.Loading -> LoadingScreen("Проверяем безопасную сессию…")
+                WorkerAppUiState.Loading -> Box(Modifier.fillMaxSize())
                 is WorkerAppUiState.SignedOut -> LoginScreen(
                     failure = current.message,
                     isSubmitting = current.isSubmitting,
@@ -615,25 +611,11 @@ private fun <T> dropUnlessResumedWithArgument(block: (T) -> Unit): (T) -> Unit {
 }
 
 @Composable
-private fun LoadingScreen(message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            Image(
-                painter = painterResource(dev.buhanzaz.rwms.worker.core.ui.R.drawable.rwms_blockbox_mark),
-                contentDescription = "BlockBox",
-                modifier = Modifier.size(96.dp),
-            )
-            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
-            Text(message, style = MaterialTheme.typography.bodyMedium)
-        }
+private fun ConnectingScreen(message: String?, onRetry: () -> Unit) {
+    if (message == null) {
+        Box(Modifier.fillMaxSize())
+        return
     }
-}
-
-@Composable
-private fun ConnectingScreen(message: String, onRetry: () -> Unit) {
     WorkerScreenScaffold(title = "RWMS Рабочий") { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),

@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -116,9 +115,7 @@ fun AvatarEditorScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.62f)),
             ) {
                 when (val source = sourceState) {
-                    AvatarSourceState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
+                    AvatarSourceState.Loading -> Unit
                     AvatarSourceState.Failed -> Box(
                         Modifier.fillMaxSize().padding(24.dp),
                         contentAlignment = Alignment.Center,
@@ -254,14 +251,7 @@ private fun AvatarSaveButton(
         enabled = enabled && !isSaving,
         modifier = modifier,
     ) {
-        if (isSaving) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onPrimary,
-            )
-        }
-        Text(if (isSaving) "Сохраняем" else "Готово")
+        Text("Готово")
     }
 }
 
