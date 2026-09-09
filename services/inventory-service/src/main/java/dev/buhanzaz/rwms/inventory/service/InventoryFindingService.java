@@ -1004,7 +1004,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                   result, lockedSession, actor(jwt), "inventory.finding.inspection-saved.v1");
               return result;
             });
-    return projectionService.findingView(saved, currentTruth);
+    ValidatedFinding savedTruth =
+        validationService.validatedFinding(session, saved, currentTruth.currentSnapshot());
+    return projectionService.findingView(saved, savedTruth);
   }
 
   /**

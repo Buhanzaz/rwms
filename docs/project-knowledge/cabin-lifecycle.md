@@ -403,7 +403,9 @@ while repair work exists:
    `ADDED_USED` or `UNEXPECTED_EXISTING` observation remains in the result when a later capture
    omits it because the physical warehouse finding is authoritative inventory evidence.
 2. An inspection moves from `NOT_INSPECTED` to `READY` or `WORK_STAGED` and
-   stores a proposal only. Saving a finding does not yet mutate another owner.
+   stores a proposal only. Each successful initial or repeated save rebases its inspection baseline
+   to freshly validated registry truth and evaluates the response against the saved revision; only a
+   later semantic registry change creates a conflict. Saving a finding does not yet mutate another owner.
 3. Before furniture review, a server-owned cabin-disposition review runs in
    `RETURNS` then `SHIPMENTS`. Every physically found cabin whose snapshot was
    `RENTED` requires its actual return date and client and becomes `LOCAL`.

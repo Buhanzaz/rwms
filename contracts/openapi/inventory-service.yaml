@@ -417,6 +417,9 @@ paths:
         Requires USER, rwms.write and warehouse EDIT. Reconciliation is
         server-owned. WORK_STAGED commits only a maintenance-issued immutable
         plan fingerprint; ABSENT and EXPLICIT_EMPTY observations remain distinct.
+        Each successful save rebases the inspection baseline to the freshly
+        validated registry truth, and the response is evaluated against that saved
+        revision. A later semantic registry change still produces a conflict.
       requestBody:
         required: true
         content:

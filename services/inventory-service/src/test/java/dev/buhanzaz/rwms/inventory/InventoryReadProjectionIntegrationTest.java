@@ -3850,6 +3850,106 @@ class InventoryReadProjectionIntegrationTest {
   }
 
   @Test
+  void latestInspectionRebasesRegistryConflictForSaveResponseAndNextReview() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            inventoryId,
+            FindingOrigin.UNEXPECTED_EXISTING,
+            assetId,
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            null,
+            "БЫТ-LATEST",
+            "БЫТLATEST",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    finding.saveInspection(
+        InspectionState.READY,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        null,
+        "Первый осмотр",
+        ACTOR);
+    finding = findings.saveAndFlush(finding);
+    events.initialize(
+        "FINDING",
+        finding.getId(),
+        "inventory.finding.added.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("origin", "UNEXPECTED_EXISTING"),
+        UUID.randomUUID(),
+        null,
+        null);
+
+    InventoryDependencyGateway.ValidationItem changedRegistry =
+        new InventoryDependencyGateway.ValidationItem(
+            assetId,
+            true,
+            2L,
+            warehouseId,
+            "REPAIR",
+            "БЫТ-LATEST",
+            "БЫТLATEST",
+            null,
+            mapper.createObjectNode(),
+            mapper.createArrayNode());
+    List<InventoryDependencyGateway.ValidationItem> currentItems = List.of(changedRegistry);
+    when(dependencies.validateAssets(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.Validation(
+                OffsetDateTime.now(ZoneOffset.UTC),
+                canonicalJson.sha256(currentItems),
+                currentItems));
+    when(dependencies.repairSnapshots(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.RepairSnapshots(
+                List.of(
+                    new InventoryDependencyGateway.RepairAssetSnapshot(assetId, List.of()))));
+
+    FindingView supplemented =
+        service.saveInspection(
+            jwt(),
+            inventoryId,
+            finding.getId(),
+            new SaveInspectionRequest(
+                0,
+                finding.getRevision(),
+                InspectionState.READY,
+                "Дополненный осмотр",
+                new Observation(ObservationPresence.ABSENT, null),
+                new Observation(ObservationPresence.ABSENT, null),
+                List.of(),
+                null,
+                null));
+
+    assertThat(supplemented.inspectionBaseline().status()).isEqualTo("REPAIR");
+    assertThat(supplemented.currentSnapshot().status()).isEqualTo("REPAIR");
+    assertThat(supplemented.conflicts()).isEmpty();
+    assertThat(supplemented.reconciliation()).isEqualTo(ReconciliationState.MATCHED);
+
+    RegistryReviewView nextReview =
+        service.registryReview(
+            jwt(),
+            inventoryId,
+            new RegistryReviewRequest(
+                0,
+                List.of(
+                    new RevisionExpectation(
+                        supplemented.id(), supplemented.findingRevision()))));
+
+    assertThat(nextReview.validatedFindings()).singleElement().satisfies(
+        validated -> assertThat(validated.conflicts()).isEmpty());
+  }
+
+  @Test
   void conflictsStartAfterInspectionAndIgnoreTechnicalAssetVersion() {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();

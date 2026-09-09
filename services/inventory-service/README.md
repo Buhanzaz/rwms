@@ -83,6 +83,11 @@ repairs earlier revision drift only when a non-null cover photo proves that the 
 have media, the current revision has none, and an earlier exact set contains that cover. It copies
 the newest such whole set without a union, deletion, media-object rewrite or finding-version change.
 
+Every successful initial or repeated inspection save uses the freshly validated registry truth as
+the new inspection baseline. Its response is evaluated against the saved revision, so the registry
+change incorporated by that save is not returned as a stale conflict; a later semantic registry
+change remains a conflict and must follow the normal resolution flow.
+
 Interactive panel and Android clients reach this namespace only through the public
 `api-gateway-service` `/api/inventory/**` route. They must not call this module host or any private
 dependency route directly.
