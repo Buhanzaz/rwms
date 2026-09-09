@@ -2218,6 +2218,27 @@ Evidence:
 and
 [`regression`](../../logistics/backend/tests/test_workload_generator.py).
 
+### Worker problem reports to the panel
+
+Task-board owns immutable worker problem reports and personal manager read
+receipts. `POST /worker/v1/entries/{entryId}/problem-reports` atomically stores a
+comment and all declared photo reservations under the active assignment and
+entry lock. Its operation UUID is the report ID; an exact author-owned replay
+and own-report read survive task closure. Uploads use the existing media-service
+pipeline. A non-null `worker_task_evidence.problem_report_id` excludes these
+photos from result counts, selection, worker result detail and result-history
+facts while retaining media inbox processing and owner-proof recovery.
+
+The warehouse `task-problem-reports` read returns a bounded cursor page and a
+per-user unread count. `PUT .../{reportId}/read` records only that user's read
+receipt under USER/read/warehouse-VIEW authorization. Later attachment readiness
+does not reset that receipt. Both client surfaces use `/api/task-board/**` through
+the existing public gateway; no command orchestration moves into the panel.
+
+Evidence: [task-board contract](../../contracts/openapi/task-board-service.yaml),
+[owning service](../../services/task-board-service/README.md), and
+[PostgreSQL/API checks](../../services/task-board-service/src/test/java/dev/buhanzaz/rwms/taskboard/WorkerProblemReportIntegrationTest.java).
+
 ### Maintenance repair package to worker completion
 
 The ordinary panel board is one aggregate warehouse projection with a single persisted ordering

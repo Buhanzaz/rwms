@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
+import dev.buhanzaz.rwms.taskboard.service.TaskProblemReportService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerInvalidationHub;
 import dev.buhanzaz.rwms.taskboard.service.WorkerProfileMediaService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
@@ -47,16 +48,19 @@ public class WorkerTaskBoardController {
   private final WorkerProfileMediaService profileMedia;
   private final WorkerInvalidationHub invalidations;
   private final WarehouseAccessAuthorizer access;
+  private final TaskProblemReportService problemReports;
 
   public WorkerTaskBoardController(
       WorkerTaskBoardService service,
       WorkerProfileMediaService profileMedia,
       WorkerInvalidationHub invalidations,
-      WarehouseAccessAuthorizer access) {
+      WarehouseAccessAuthorizer access,
+      TaskProblemReportService problemReports) {
     this.service = service;
     this.profileMedia = profileMedia;
     this.invalidations = invalidations;
     this.access = access;
+    this.problemReports = problemReports;
   }
 
   /** Returns identity, qualifications, queue categories, clock data and a short-lived offline lease. */
@@ -159,6 +163,33 @@ public class WorkerTaskBoardController {
                 entryId,
                 idempotencyKey,
                 request));
+  }
+
+  /** Atomically records an immutable problem report and every prepared photo reservation. */
+  @PostMapping("/entries/{entryId}/problem-reports")
+  public ResponseEntity<WorkerProblemReport> reportProblem(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID entryId,
+      @RequestHeader("Idempotency-Key") String idempotencyKey,
+      @Valid @RequestBody WorkerProblemReportRequest request) {
+    WorkerPrincipal principal = principal(jwt, true);
+    TaskProblemReportService.CreatedWorkerProblemReport result =
+        problemReports.create(
+            principal.workerId(),
+            principal.warehouseId(),
+            entryId,
+            idempotencyKey,
+            request);
+    return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
+        .body(result.report());
+  }
+
+  /** Refreshes an author-owned report's asynchronously finalized photo states after task closure. */
+  @GetMapping("/problem-reports/{reportId}")
+  public WorkerProblemReport problemReport(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID reportId) {
+    WorkerPrincipal principal = principal(jwt, false);
+    return problemReports.own(principal.workerId(), principal.warehouseId(), reportId);
   }
 
   /** Registers or replaces this worker's push-notification device installation. */

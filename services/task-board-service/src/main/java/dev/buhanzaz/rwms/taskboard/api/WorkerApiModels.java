@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.DriverTaskAudienceDto;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskTimerSnapshot;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -402,6 +403,32 @@ public final class WorkerApiModels {
       @NotBlank String contentType,
       @Min(1) @Max(15_728_640) long sizeBytes,
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String sha256) {}
+
+  /**
+   * One immutable problem report and every evidence reservation that was already prepared for it.
+   *
+   * <p>{@code operationId} is the report identity and must equal the Idempotency-Key header. Each
+   * attachment carries its own stable upload operation and evidence identities.
+   */
+  public record WorkerProblemReportRequest(
+      @NotNull UUID operationId,
+      @NotBlank @Size(max = 2000) String comment,
+      @NotNull OffsetDateTime occurredAt,
+      @NotNull UUID offlineLeaseId,
+      @NotNull @Size(max = 10) List<@NotNull @Valid EvidenceReservationRequest>
+          attachments) {}
+
+  /** Report response returned to its author, including current reservation or media states. */
+  public record WorkerProblemReport(
+      UUID reportId,
+      UUID entryId,
+      UUID taskId,
+      int routeIndex,
+      String entryTitle,
+      String comment,
+      OffsetDateTime occurredAt,
+      OffsetDateTime recordedAt,
+      List<TaskEvidence> attachments) {}
 
   /**
    * SSE invalidation signal; clients must refresh authorized state rather than trust it as data.

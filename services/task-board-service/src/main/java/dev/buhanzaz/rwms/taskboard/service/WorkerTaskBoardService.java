@@ -533,6 +533,7 @@ public class WorkerTaskBoardService {
             location.warehouseId(),
             entryId,
             declaration,
+            null,
             false,
             () -> {
               if (!"IN_PROGRESS".equals(current.status())) {
@@ -568,6 +569,94 @@ public class WorkerTaskBoardService {
                   warehouseId, surface, workerId, entryId, changedRevision));
     }
     return result.evidence();
+  }
+
+  /**
+   * Locks and captures the server-owned facts for a first worker problem report.
+   *
+   * <p>A problem report is not a task transition, but it is meaningful only while its author is an
+   * active participant of the current in-progress entry. The returned target is retained by the
+   * report service inside the same transaction while it inserts the immutable report and its media
+   * reservations.
+   */
+  @Transactional
+  ProblemReportTarget prepareProblemReportTarget(
+      UUID workerId,
+      UUID homeWarehouseId,
+      UUID entryId,
+      OffsetDateTime occurredAt,
+      UUID offlineLeaseId) {
+    jdbc.queryForObject("select id from queue_entry where id=? for update", UUID.class, entryId);
+    TaskLocation location = taskLocation(entryId);
+    WorkerTaskDetail current =
+        detail(MobileTaskSurface.WORKER, workerId, homeWarehouseId, entryId);
+    leases.requireDeferredCompletionValid(
+        offlineLeaseId, workerId, homeWarehouseId, occurredAt, now());
+    if (!"IN_PROGRESS".equals(current.status())) {
+      throw new ConflictException("Сообщить о проблеме можно только по заданию в работе");
+    }
+    BoardEntryDto entry =
+        taskBoard.workerEntry(MobileTaskSurface.WORKER, location.warehouseId(), entryId, workerId);
+    surfacePolicy.requireActiveParticipant(
+        MobileTaskSurface.WORKER, entry.queuePurpose(), workerId, current.assignments());
+    WorkerAssignmentSnapshot assignment =
+        current.assignments().stream()
+            .filter(value -> workerId.equals(value.workerId()))
+            .filter(
+                value ->
+                    "ACTIVE".equals(value.status()) || "PAUSED".equals(value.status()))
+            .findFirst()
+            .orElseThrow(
+                () -> new ConflictException("Рабочий не назначен активным исполнителем задания"));
+    String sourceType = entry.source() == null ? null : entry.source().type().name();
+    UUID sourceId = entry.source() == null ? null : entry.source().sourceId();
+    return new ProblemReportTarget(
+        entryId,
+        entry.taskId(),
+        location.warehouseId(),
+        entry.routeIndex(),
+        assignment.workerGroupId(),
+        assignment.workerName(),
+        current.title(),
+        new EvidenceReservationTarget(
+            entry.taskId(), entry.routeIndex(), assignment.workerGroupId(), sourceType, sourceId));
+  }
+
+  /**
+   * Reserves a photo already atomically bound to a newly created worker problem report.
+   *
+   * <p>The caller owns and has locked the report. This method intentionally has no report-service
+   * dependency, keeping the native task surface as the only owner of evidence/media semantics.
+   */
+  @Transactional
+  TaskEvidence reserveProblemReportEvidence(
+      UUID workerId,
+      UUID homeWarehouseId,
+      UUID problemReportId,
+      ProblemReportTarget target,
+      EvidenceReservationRequest request) {
+    if (request.routeIndex() != target.routeIndex()) {
+      throw new ConflictException("Фотография относится к другому шагу задания");
+    }
+    leases.requireDeferredCompletionValid(
+        request.offlineLeaseId(), workerId, homeWarehouseId, request.capturedAt(), now());
+    EvidenceDeclaration declaration = evidenceDeclaration(request);
+    requireSupportedEvidenceDeclaration(declaration);
+    return reserveEvidenceRecord(
+            workerId,
+            target.warehouseId(),
+            target.entryId(),
+            declaration,
+            problemReportId,
+            false,
+            target::evidenceTarget)
+        .evidence();
+  }
+
+  /** Revalidates that a durable report read/replay still belongs to this worker's JWT home scope. */
+  @Transactional(readOnly = true)
+  void requireProblemReportAuthorHome(UUID workerId, UUID homeWarehouseId) {
+    access(MobileTaskSurface.WORKER, workerId, homeWarehouseId);
   }
 
   /**
@@ -608,6 +697,7 @@ public class WorkerTaskBoardService {
             warehouseId,
             entryId,
             declaration,
+            null,
             true,
             () -> {
               Boolean exactActiveAssignment =
@@ -1330,11 +1420,25 @@ public class WorkerTaskBoardService {
         """
         select *
           from worker_task_evidence
-         where entry_id=?
+         where entry_id=? and problem_report_id is null
          order by recorded_at,evidence_id
         """,
         (result, row) -> evidenceRow(result, row).dto(),
         entryId);
+  }
+
+  /** Returns only evidence explicitly bound to one immutable problem report. */
+  @Transactional(readOnly = true)
+  List<TaskEvidence> problemReportEvidence(UUID reportId) {
+    return jdbc.query(
+        """
+        select *
+          from worker_task_evidence
+         where problem_report_id=?
+         order by recorded_at,evidence_id
+        """,
+        (result, row) -> evidenceRow(result, row).dto(),
+        reportId);
   }
 
   /**
@@ -1349,6 +1453,7 @@ public class WorkerTaskBoardService {
       UUID warehouseId,
       UUID entryId,
       EvidenceDeclaration request,
+      UUID problemReportId,
       boolean requireTargetBeforeReplay,
       Supplier<EvidenceReservationTarget> targetSupplier) {
     jdbc.queryForObject(
@@ -1370,7 +1475,8 @@ public class WorkerTaskBoardService {
       if (existing.size() != 1) {
         throw new ConflictException("Идентификаторы фотографии уже использованы");
       }
-      requireSameReservation(existing.getFirst(), workerId, warehouseId, entryId, request);
+      requireSameReservation(
+          existing.getFirst(), workerId, warehouseId, entryId, request, problemReportId);
       ownerProofs.publish(warehouseId, entryId, true);
       return new EvidenceReservationResult(existing.getFirst().dto(), false);
     }
@@ -1384,8 +1490,8 @@ public class WorkerTaskBoardService {
               evidence_id,version,operation_id,entry_id,task_id,route_index,
               warehouse_id,worker_id,worker_group_id,captured_at,recorded_at,state,
               media_id,media_generation,review_reason,content_type,size_bytes,sha256,
-              source_type,source_id,updated_at)
-          values (?,0,?,?,?,?,?,?,?,?,?,'RESERVED',null,null,null,?,?,?,?,?,?)
+              source_type,source_id,problem_report_id,updated_at)
+          values (?,0,?,?,?,?,?,?,?,?,?,'RESERVED',null,null,null,?,?,?,?,?,?,?)
           """,
           request.evidenceId(),
           request.operationId(),
@@ -1402,12 +1508,13 @@ public class WorkerTaskBoardService {
           request.sha256(),
           target.sourceType(),
           target.sourceId(),
+          problemReportId,
           recordedAt);
     } catch (DuplicateKeyException exception) {
       EvidenceRow replay =
           findEvidence(request.evidenceId(), request.operationId())
               .orElseThrow(() -> exception);
-      requireSameReservation(replay, workerId, warehouseId, entryId, request);
+      requireSameReservation(replay, workerId, warehouseId, entryId, request, problemReportId);
       ownerProofs.publish(warehouseId, entryId, true);
       return new EvidenceReservationResult(replay.dto(), false);
     }
@@ -1473,6 +1580,7 @@ public class WorkerTaskBoardService {
         dto,
         result.getObject("operation_id", UUID.class),
         warehouseId,
+        result.getObject("problem_report_id", UUID.class),
         contentType,
         result.getLong("size_bytes"),
         result.getString("sha256"));
@@ -1483,7 +1591,8 @@ public class WorkerTaskBoardService {
       UUID workerId,
       UUID warehouseId,
       UUID entryId,
-      EvidenceDeclaration request) {
+      EvidenceDeclaration request,
+      UUID problemReportId) {
     TaskEvidence evidence = existing.dto();
     boolean same =
         evidence.evidenceId().equals(request.evidenceId())
@@ -1491,6 +1600,7 @@ public class WorkerTaskBoardService {
             && evidence.entryId().equals(entryId)
             && evidence.workerId().equals(workerId)
             && existing.warehouseId().equals(warehouseId)
+            && java.util.Objects.equals(existing.problemReportId(), problemReportId)
             && evidence.routeIndex() == request.routeIndex()
             && java.time.Duration
                     .between(evidence.capturedAt().toInstant(), request.capturedAt().toInstant())
@@ -1681,6 +1791,7 @@ public class WorkerTaskBoardService {
       TaskEvidence dto,
       UUID operationId,
       UUID warehouseId,
+      UUID problemReportId,
       String contentType,
       long sizeBytes,
       String sha256) {}
@@ -1692,6 +1803,17 @@ public class WorkerTaskBoardService {
       UUID workerGroupId,
       String sourceType,
       UUID sourceId) {}
+
+  /** Immutable entry and assignment facts captured under the report-command entry lock. */
+  record ProblemReportTarget(
+      UUID entryId,
+      UUID taskId,
+      UUID warehouseId,
+      int routeIndex,
+      UUID workerGroupId,
+      String workerName,
+      String entryTitle,
+      EvidenceReservationTarget evidenceTarget) {}
 
   /** Surface-neutral evidence declaration after any native lease proof has been completed. */
   private record EvidenceDeclaration(

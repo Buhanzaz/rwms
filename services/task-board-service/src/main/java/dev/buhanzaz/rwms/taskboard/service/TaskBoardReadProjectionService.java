@@ -433,6 +433,7 @@ class TaskBoardReadProjectionService {
               join queue_entry entry on entry.id = evidence.entry_id
              where entry.task_id = ?
                and evidence.selected_for_completion
+               and evidence.problem_report_id is null
                and evidence.state = 'READY'
                and evidence.media_id is not null
                and evidence.media_generation is not null

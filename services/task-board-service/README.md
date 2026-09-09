@@ -372,6 +372,27 @@ warehouse audience-revision change, emits only changed proofs, and does not poll
 the warehouse is idle. Failed passes do not advance the revision watermark. Inactive proofs never
 authorize a new upload or finalization.
 
+## Worker problem reports
+
+An assigned WorkerApp participant can report a problem on an `IN_PROGRESS` entry
+with a 1–2000-character comment and up to ten optional photos. One idempotent
+command locks the entry and stores the immutable report plus every evidence
+reservation in one transaction, before any media upload. The operation UUID is
+the report ID. An exact author-owned replay remains valid after task closure;
+changing the command under that identity is a conflict. The original worker can
+read the report and its changing attachment states after leaving the task.
+
+Problem photos reuse the existing media owner proof, encrypted client upload and
+media-event inbox. Their nullable `problem_report_id` distinguishes them from task
+results: they never count toward completion, enter completion selection, appear
+as result evidence in task feeds/details, or emit a task-result evidence fact.
+Owner proofs still include them so a reserved upload can finish after closure.
+
+Warehouse-authorized `USER` readers with `rwms.read` and `VIEW` receive bounded
+cursor pages with a personal unread count. Marking a report read stores an
+idempotent per-user receipt; it does not mutate the report or task and later photo
+readiness does not reopen it. The panel uses the public gateway for both routes.
+
 ## HTTP boundaries
 
 The canonical contract is
@@ -387,10 +408,11 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/logistics-drivers/contractors` and `.../{workerId}` | Warehouse-authorized manager | Complete on-demand contractor catalog, creation, version-fenced profile replacement and deletion of unused profiles; list includes inactive profiles |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
+| `/api/warehouses/{warehouseId}/task-problem-reports` and `.../{reportId}/read` | User with `rwms.read` and warehouse `VIEW` | Problem notification pages and personal read receipts |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Actual task-assignment intervals overlapping the current warehouse-local day |
 | `/api/kpi-palette` | Authenticated user; global management for `PUT` | One version-fenced KPI palette shared by every installation warehouse |
 | `/api/kpi-settings/**` | Authenticated user; global management for mutations | One version-fenced work schedule shared by every installation warehouse; no warehouse selector |
-| `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
+| `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, problem reports, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/shift/today` and `/api/driver/v1/shifts/{shiftId}/**` | Exact driver identity and `driver.tasks` | Startup aggregate and version-fenced daily-shift transitions |
 | `/api/internal/task-board/v1/inventory/warehouses/{warehouseId}/work-calendar` | Exact `inventory-service` SERVICE identity and sole `task-board.inventory-calendar.read` scope | Bounded effective object-calendar snapshot: timezone, schedule revision, `daysOff` result and fingerprint for inventory planning; no browser access and no Driver Up shift semantics |

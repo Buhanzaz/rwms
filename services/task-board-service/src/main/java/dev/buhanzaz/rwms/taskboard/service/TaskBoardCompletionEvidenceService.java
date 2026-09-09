@@ -31,7 +31,8 @@ class TaskBoardCompletionEvidenceService {
             """
             select count(*)::integer
               from worker_task_evidence
-             where entry_id=? and state='READY' and media_id is not null
+             where entry_id=? and problem_report_id is null
+               and state='READY' and media_id is not null
             """,
             Integer.class,
             entryId);
@@ -45,7 +46,8 @@ class TaskBoardCompletionEvidenceService {
             """
             select count(*)::integer
               from worker_task_evidence
-             where entry_id=? and worker_id=? and state='READY' and media_id is not null
+             where entry_id=? and worker_id=? and problem_report_id is null
+               and state='READY' and media_id is not null
             """,
             Integer.class,
             entryId,
@@ -65,7 +67,7 @@ class TaskBoardCompletionEvidenceService {
         select evidence_id,version,captured_at,recorded_at,state,media_id,
                media_generation,review_reason,content_type
           from worker_task_evidence
-         where entry_id=? and worker_id=?
+         where entry_id=? and worker_id=? and problem_report_id is null
          order by recorded_at desc,evidence_id desc
          limit ?
         """,
@@ -108,7 +110,8 @@ class TaskBoardCompletionEvidenceService {
             """
             select count(*)::integer
               from worker_task_evidence
-             where entry_id=? and evidence_id=? and state='READY' and media_id is not null
+             where entry_id=? and evidence_id=? and problem_report_id is null
+               and state='READY' and media_id is not null
             """,
             Integer.class,
             entryId,
@@ -117,13 +120,13 @@ class TaskBoardCompletionEvidenceService {
       throw new ConflictException("Выбранная фотография результата ещё не готова");
     }
     jdbc.update(
-        "update worker_task_evidence set selected_for_completion=false where entry_id=?",
+        "update worker_task_evidence set selected_for_completion=false where entry_id=? and problem_report_id is null",
         entryId);
     jdbc.update(
         """
         update worker_task_evidence
            set selected_for_completion=true, updated_at=clock_timestamp()
-         where entry_id=? and evidence_id=?
+         where entry_id=? and evidence_id=? and problem_report_id is null
         """,
         entryId,
         evidenceId);
@@ -149,7 +152,7 @@ class TaskBoardCompletionEvidenceService {
             """
             select count(*)::integer
               from worker_task_evidence
-             where entry_id=? and worker_id=? and evidence_id=?
+             where entry_id=? and worker_id=? and evidence_id=? and problem_report_id is null
                and state='READY' and media_id is not null
             """,
             Integer.class,
@@ -160,12 +163,12 @@ class TaskBoardCompletionEvidenceService {
       throw new ConflictException("Выбранная фотография результата ещё не готова");
     }
     jdbc.update(
-        "update worker_task_evidence set selected_for_completion=false where entry_id=?", entryId);
+        "update worker_task_evidence set selected_for_completion=false where entry_id=? and problem_report_id is null", entryId);
     jdbc.update(
         """
         update worker_task_evidence
            set selected_for_completion=true, updated_at=clock_timestamp()
-         where entry_id=? and worker_id=? and evidence_id=?
+         where entry_id=? and worker_id=? and evidence_id=? and problem_report_id is null
         """,
         entryId,
         workerId,

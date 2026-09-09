@@ -380,6 +380,28 @@ warehouse audience revision, публикует только изменивши�
 простаивающем складе. Неуспешный проход не продвигает revision watermark. Inactive proof не
 разрешает новый upload или finalization.
 
+## Сообщения рабочего о проблемах
+
+Назначенный участник WorkerApp может сообщить о проблеме в задании `IN_PROGRESS`:
+комментарий длиной 1–2000 символов и до десяти необязательных фото. Одна
+идемпотентная команда блокирует entry и сохраняет неизменяемое сообщение вместе
+со всеми evidence reservations в одной транзакции, до загрузки медиа. UUID операции
+является ID сообщения. Точный повтор от автора разрешён и после закрытия задания;
+изменение команды с тем же ID возвращает конфликт. Автор может читать сообщение
+и актуальные состояния вложений после выхода из задания.
+
+Фото проблемы используют существующие media owner proof, зашифрованную загрузку
+клиента и media-event inbox. Nullable `problem_report_id` отделяет их от результата:
+они не учитываются при завершении, не выбираются итоговым фото, не появляются в
+result evidence задания/feed и не порождают факт фотографии результата работы.
+Owner proofs продолжают учитывать их для завершения зарезервированной загрузки
+после закрытия задания.
+
+Читатель `USER` с `rwms.read` и складским `VIEW` получает ограниченные cursor pages
+с личным числом непрочитанных сообщений. Отметка прочтения сохраняет идемпотентную
+квитанцию на пользователя: сообщение и задание не меняются, поздняя готовность фото
+не делает уведомление снова непрочитанным. Панель использует public gateway.
+
 ## HTTP-границы
 
 Канонический контракт:
@@ -395,10 +417,11 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/logistics-drivers/contractors` и `.../{workerId}` | Warehouse-authorized manager | Полный каталог вызываемых по необходимости подрядчиков, создание, version-fenced замена профиля и удаление неиспользованных профилей; список содержит неактивные профили |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
+| `/api/warehouses/{warehouseId}/task-problem-reports` и `.../{reportId}/read` | USER с `rwms.read` и складским `VIEW` | Страницы уведомлений о проблемах и личные отметки прочтения |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Фактические интервалы assignments, пересекающие текущий warehouse-local день |
 | `/api/kpi-palette` | Authenticated user; global management для `PUT` | Одна version-fenced KPI palette для всех складов установки |
 | `/api/kpi-settings/**` | Authenticated user; global management для mutations | Один version-fenced рабочий график для всех складов установки; выбор склада отсутствует |
-| `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
+| `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, сообщения о проблемах, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
 | `/api/driver/v1/shift/today` и `/api/driver/v1/shifts/{shiftId}/**` | Точная identity водителя и `driver.tasks` | Startup aggregate и version-fenced переходы ежедневной смены |
 | `/api/internal/task-board/v1/inventory/warehouses/{warehouseId}/work-calendar` | Точная SERVICE identity `inventory-service` и единственный scope `task-board.inventory-calendar.read` | Bounded snapshot effective object calendar: timezone, revision schedule, результат `daysOff` и fingerprint для inventory planning; browser access и семантика Driver Up shifts отсутствуют |

@@ -91,6 +91,7 @@ class WorkerFeedCountProjection {
                      (count(*) filter (where evidence.state='READY'))::integer ready_evidence_count
                 from worker_task_evidence evidence
                 join selected on selected.entry_id=evidence.entry_id
+               where evidence.problem_report_id is null
                group by evidence.entry_id
             )
             select selected.entry_id,

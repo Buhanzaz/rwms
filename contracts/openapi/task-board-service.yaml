@@ -1589,6 +1589,106 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /worker/v1/entries/{entryId}/problem-reports:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: createWorkerTaskProblemReport
+      description: >-
+        Atomically records one immutable worker problem report and every already-prepared photo
+        reservation. Idempotency-Key must equal operationId. The report operation ID is its durable
+        report identity; an identical retry returns the original report after task closure without
+        revalidating its now-stale lease, while changed comment or photo declarations conflict.
+        First execution requires the current WorkerApp entry, active assignment, IN_PROGRESS state
+        and a worker-owned non-future offline lease. Problem-report photos are not completion
+        evidence and are never exported as task-evidence facts.
+      parameters:
+        - $ref: '#/components/parameters/WorkerIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerProblemReportRequest' }
+      responses:
+        '200':
+          description: Exact durable replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerProblemReport' }
+        '201':
+          description: Report and all photo reservations created atomically.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerProblemReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /worker/v1/problem-reports/{reportId}:
+    parameters:
+      - name: reportId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getOwnWorkerTaskProblemReport
+      description: >-
+        Returns only the authenticated report author's durable report and current photo states. It
+        remains available after its task is DONE or CANCELLED so queued uploads can refresh.
+      responses:
+        '200':
+          description: The authenticated worker's durable problem report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerProblemReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-problem-reports:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listTaskProblemReports
+      description: >-
+        Returns the authenticated USER's bounded newest-first problem-report page plus personal
+        unreadCount. Requires rwms.read and warehouse VIEW. Worker tokens cannot access this feed.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 512 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      responses:
+        '200':
+          description: Newest-first manager-visible problem reports and unread count.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskProblemReportPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/task-problem-reports/{reportId}/read:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - name: reportId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      operationId: markTaskProblemReportRead
+      description: >-
+        Creates the authenticated USER's personal read marker. It is naturally idempotent and never
+        mutates the immutable report, task state or another manager's marker. Requires rwms.read
+        and warehouse VIEW.
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /worker/v1/devices/{installationId}:
     parameters:
       - name: installationId
@@ -4770,6 +4870,91 @@ components:
           oneOf:
             - { type: string, format: uri-reference, pattern: '^/api/media/' }
             - { type: 'null' }
+      additionalProperties: false
+    WorkerProblemReportRequest:
+      type: object
+      required: [operationId, comment, occurredAt, offlineLeaseId, attachments]
+      properties:
+        operationId:
+          description: Stable report identity. Idempotency-Key must equal this UUID.
+          type: string
+          format: uuid
+        comment: { type: string, minLength: 1, maxLength: 2000 }
+        occurredAt: { type: string, format: date-time }
+        offlineLeaseId: { type: string, format: uuid }
+        attachments:
+          description: Every reservation is persisted in the same transaction as the report.
+          type: array
+          maxItems: 10
+          items: { $ref: '#/components/schemas/EvidenceReservationRequest' }
+      additionalProperties: false
+    WorkerProblemReport:
+      type: object
+      required: [reportId, entryId, taskId, routeIndex, entryTitle, comment, occurredAt, recordedAt, attachments]
+      properties:
+        reportId: { type: string, format: uuid }
+        entryId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        entryTitle: { type: string, minLength: 1, maxLength: 512 }
+        comment: { type: string, minLength: 1, maxLength: 2000 }
+        occurredAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        attachments:
+          type: array
+          maxItems: 10
+          items: { $ref: '#/components/schemas/TaskEvidence' }
+      additionalProperties: false
+    TaskProblemReportAttachment:
+      type: object
+      required: [evidenceId, state, capturedAt, recordedAt, mediaId, mediaGeneration, reviewReason, contentType, readPath, thumbnailPath]
+      properties:
+        evidenceId: { type: string, format: uuid }
+        state: { type: string, enum: [RESERVED, UPLOADING, READY, REVIEW_REQUIRED, REJECTED] }
+        capturedAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        mediaId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        mediaGeneration: { oneOf: [{ type: integer, format: int64, minimum: 1 }, { type: 'null' }] }
+        reviewReason: { oneOf: [{ type: string }, { type: 'null' }] }
+        contentType: { oneOf: [{ type: string }, { type: 'null' }] }
+        readPath:
+          oneOf:
+            - { type: string, format: uri-reference, pattern: '^/api/media/' }
+            - { type: 'null' }
+        thumbnailPath:
+          oneOf:
+            - { type: string, format: uri-reference, pattern: '^/api/media/' }
+            - { type: 'null' }
+      additionalProperties: false
+    TaskProblemReport:
+      type: object
+      required: [reportId, entryId, taskId, routeIndex, entryTitle, workerName, comment, occurredAt, recordedAt, readAt, attachments]
+      properties:
+        reportId: { type: string, format: uuid }
+        entryId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        entryTitle: { type: string, minLength: 1, maxLength: 512 }
+        workerName: { type: string, minLength: 1, maxLength: 256 }
+        comment: { type: string, minLength: 1, maxLength: 2000 }
+        occurredAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        readAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        attachments:
+          type: array
+          maxItems: 10
+          items: { $ref: '#/components/schemas/TaskProblemReportAttachment' }
+      additionalProperties: false
+    TaskProblemReportPage:
+      type: object
+      required: [reports, nextCursor, unreadCount]
+      properties:
+        reports:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/TaskProblemReport' }
+        nextCursor: { oneOf: [{ type: string, minLength: 1, maxLength: 512 }, { type: 'null' }] }
+        unreadCount: { type: integer, minimum: 0 }
       additionalProperties: false
     WorkerTaskDetail:
       type: object

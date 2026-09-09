@@ -370,7 +370,8 @@ public class WorkerMediaEventProcessor {
                     result.getObject("worker_group_id", UUID.class),
                     result.getObject("captured_at", OffsetDateTime.class),
                     result.getString("source_type"),
-                    result.getObject("source_id", UUID.class)),
+                    result.getObject("source_id", UUID.class),
+                    result.getObject("problem_report_id", UUID.class)),
             event.evidenceId());
     if (evidenceRows.isEmpty()) {
       return;
@@ -433,24 +434,26 @@ public class WorkerMediaEventProcessor {
     if (projectionVersion == null) {
       throw new IllegalStateException("Не удалось обновить фотографию результата");
     }
-    eventSourcing.evidenceRecorded(
-        new TaskEvidenceFact(
-            evidence.evidenceId(),
-            evidence.entryId(),
-            evidence.taskId(),
-            evidence.routeIndex(),
-            evidence.warehouseId(),
-            evidence.workerId(),
-            evidence.workerGroupId(),
-            event.mediaId(),
-            event.mediaGeneration(),
-            evidence.capturedAt(),
-            event.recordedAt(),
-            evidenceState,
-            evidence.sourceType(),
-            evidence.sourceId()),
-        event.correlationId(),
-        event.eventId());
+    if (evidence.problemReportId() == null) {
+      eventSourcing.evidenceRecorded(
+          new TaskEvidenceFact(
+              evidence.evidenceId(),
+              evidence.entryId(),
+              evidence.taskId(),
+              evidence.routeIndex(),
+              evidence.warehouseId(),
+              evidence.workerId(),
+              evidence.workerGroupId(),
+              event.mediaId(),
+              event.mediaGeneration(),
+              evidence.capturedAt(),
+              event.recordedAt(),
+              evidenceState,
+              evidence.sourceType(),
+              evidence.sourceId()),
+          event.correlationId(),
+          event.eventId());
+    }
     finishInbox(event.eventId(), "APPLIED", null);
     closeOwnerProofIfTerminal(evidence);
   }
@@ -545,7 +548,8 @@ public class WorkerMediaEventProcessor {
       UUID workerGroupId,
       OffsetDateTime capturedAt,
       String sourceType,
-      UUID sourceId) {}
+      UUID sourceId,
+      UUID problemReportId) {}
 
   /** Safe fields retained from one driver-shift media event awaiting correlation. */
   private record DriverShiftInboxRow(
