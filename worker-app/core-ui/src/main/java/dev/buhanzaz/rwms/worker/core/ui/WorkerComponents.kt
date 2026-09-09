@@ -1,39 +1,46 @@
 package dev.buhanzaz.rwms.worker.core.ui
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
 
-@OptIn(ExperimentalMaterial3Api::class)
 /** Provides the common worker screen shell with app bar, content and transient messages. */
 @Composable
 fun WorkerScreenScaffold(
@@ -51,42 +58,98 @@ fun WorkerScreenScaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(title) },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                        }
-                    } else if (onMenu != null) {
-                        IconButton(onClick = onMenu) {
-                            Icon(Icons.Filled.Menu, contentDescription = "Открыть меню")
-                        }
+            WorkerTopBar(
+                title = title,
+                onBack = onBack,
+                onMenu = onMenu,
+                profileMonogram = profileMonogram,
+                profileAvatar = profileAvatar,
+                onProfile = onProfile,
+                actions = actions,
+            )
+        },
+        bottomBar = bottomBar,
+        content = content,
+    )
+}
+
+/** Mirrors the client header's fixed, opaque reading surface without its filter content. */
+@Composable
+private fun WorkerTopBar(
+    title: String,
+    onBack: (() -> Unit)?,
+    onMenu: (() -> Unit)?,
+    profileMonogram: String?,
+    profileAvatar: Bitmap?,
+    onProfile: (() -> Unit)?,
+    actions: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().testTag("worker-header"),
+            shape = shape,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Box(Modifier.fillMaxWidth().height(60.dp)) {
+                if (onBack != null || onMenu != null) {
+                    IconButton(
+                        onClick = onBack ?: checkNotNull(onMenu),
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 4.dp)
+                            .testTag(if (onBack == null) "menu-button" else "header-back"),
+                    ) {
+                        Icon(
+                            imageVector = if (onBack == null) {
+                                Icons.Filled.Menu
+                            } else {
+                                Icons.AutoMirrored.Filled.ArrowBack
+                            },
+                            contentDescription = if (onBack == null) "Открыть меню" else "Назад",
+                        )
                     }
-                },
-                actions = {
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .padding(horizontal = 54.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = title,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     actions()
                     if (onProfile != null && (!profileMonogram.isNullOrBlank() || profileAvatar != null)) {
                         WorkerProfileAvatar(
                             monogram = profileMonogram.orEmpty(),
                             avatar = profileAvatar,
                             onClick = onProfile,
-                            modifier = Modifier.padding(end = 8.dp),
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = WorkerGlassSurface,
-                    scrolledContainerColor = WorkerGlassSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    actionIconContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-            )
-        },
-        bottomBar = bottomBar,
-        content = content,
-    )
+                }
+            }
+        }
+    }
 }
 
 /** Opens the worker profile from the compact monogram used by the Figma app bar. */
@@ -97,12 +160,16 @@ private fun WorkerProfileAvatar(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    IconButton(onClick = onClick, modifier = modifier.size(48.dp)) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier.size(48.dp).semantics { contentDescription = "Профиль" },
+    ) {
         Surface(
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(38.dp),
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             if (avatar != null) {
                 Image(

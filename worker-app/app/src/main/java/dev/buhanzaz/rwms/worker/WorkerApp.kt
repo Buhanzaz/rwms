@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.Download
@@ -276,8 +276,6 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 if (task == null) {
                     NoCurrentTaskScreen(
                         online = tasksState.online,
-                        syncing = tasksState.progress?.stage != null &&
-                            tasksState.progress?.stage != "IDLE",
                         onMenu = ::openDrawer,
                         profileMonogram = profileMonogram,
                         profileAvatar = profileState.avatar,
@@ -520,7 +518,6 @@ private fun WorkerTaskContent(
 @Composable
 private fun NoCurrentTaskScreen(
     online: Boolean,
-    syncing: Boolean,
     onMenu: () -> Unit,
     profileMonogram: String,
     profileAvatar: Bitmap?,
@@ -537,7 +534,7 @@ private fun NoCurrentTaskScreen(
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp),
             verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = Alignment.Start,
         ) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -547,11 +544,10 @@ private fun NoCurrentTaskScreen(
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    horizontalAlignment = Alignment.Start,
                 ) {
-                    if (syncing) CircularProgressIndicator(modifier = Modifier.size(28.dp))
                     Text(
-                        if (syncing) "Получаем задание…" else "Сейчас активного задания нет",
+                        "Сейчас активного задания нет",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
@@ -562,7 +558,7 @@ private fun NoCurrentTaskScreen(
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    WorkerButton(onClick = onRefresh, enabled = !syncing) {
+                    WorkerButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
                         Text("Обновить")
                     }
                 }
@@ -579,8 +575,8 @@ private fun WorkerDrawerContent(
     onDownloads: () -> Unit,
 ) {
     ModalDrawerSheet(
-        modifier = Modifier.widthIn(max = 320.dp),
-        drawerContainerColor = WorkerGlassSurface,
+        modifier = Modifier.width(280.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
         drawerContentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         WorkerStoreLogo(
