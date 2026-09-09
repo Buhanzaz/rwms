@@ -9,7 +9,9 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import androidx.annotation.RawRes
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -79,9 +81,8 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlinx.coroutines.delay
 
-const val WorkerStoreGreetingDurationMillis = 3_000L
+const val WorkerStoreGreetingDurationMillis = 1_500L
 
 val WorkerStoreNavy = Color(0xFF204B79)
 val WorkerStoreBlue = Color(0xFF549AC5)
@@ -112,14 +113,18 @@ private val WorkerSecondaryButtonStyle = WorkerActionButtonStyle(
 /** Lets deterministic Compose tests replace Media3 with the water fallback color. */
 internal val LocalWorkerStoreVideoBackgroundEnabled = staticCompositionLocalOf { true }
 
-/** Keeps the caustic background mounted and shows the logo-only greeting for three seconds. */
+/** Keeps the caustic background mounted while the centered logo performs the customer greeting. */
 @Composable
 fun WorkerStoreLaunchGate(content: @Composable () -> Unit) {
     var greetingFinished by rememberSaveable { mutableStateOf(false) }
+    val greeting = remember { Animatable(if (greetingFinished) 1f else 0f) }
 
     LaunchedEffect(greetingFinished) {
         if (!greetingFinished) {
-            delay(WorkerStoreGreetingDurationMillis)
+            greeting.animateTo(
+                1f,
+                tween(WorkerStoreGreetingDurationMillis.toInt(), easing = LinearEasing),
+            )
             greetingFinished = true
         }
     }
@@ -135,7 +140,11 @@ fun WorkerStoreLaunchGate(content: @Composable () -> Unit) {
                 modifier = Modifier.fillMaxSize().testTag("worker-hello-screen"),
                 contentAlignment = Alignment.Center,
             ) {
-                WorkerStoreLogo(modifier = Modifier.testTag("worker-hello-logo"))
+                WorkerStoreLogo(
+                    modifier = Modifier
+                        .workerGreetingWave { greeting.value }
+                        .testTag("worker-hello-logo"),
+                )
             }
         }
     }

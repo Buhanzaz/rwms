@@ -21,7 +21,7 @@ class WorkerWaterDesignTest {
     val compose = createComposeRule()
 
     @Test
-    fun `logo greeting remains for three seconds before worker content`() {
+    fun `customer-style logo greeting completes before worker content`() {
         compose.mainClock.autoAdvance = false
         compose.setContent {
             CompositionLocalProvider(LocalWorkerStoreVideoBackgroundEnabled provides false) {

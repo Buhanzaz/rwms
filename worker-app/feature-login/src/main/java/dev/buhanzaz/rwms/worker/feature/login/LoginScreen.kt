@@ -1,30 +1,26 @@
 package dev.buhanzaz.rwms.worker.feature.login
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,12 +36,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -57,10 +53,9 @@ import dev.buhanzaz.rwms.worker.core.ui.WorkerButton
 import dev.buhanzaz.rwms.worker.core.ui.WorkerStoreInputField
 import dev.buhanzaz.rwms.worker.core.ui.WorkerStoreLogo
 import dev.buhanzaz.rwms.worker.core.ui.WorkerStoreNavy
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 
-private const val WorkerLoginAnimationDurationMillis = 600
+private val WorkerLoginContentGap = 16.dp
+private const val WorkerLoginActionRevealDurationMillis = 300
 
 /** Renders worker credentials in the same animated water design as CustomerApp. */
 @Composable
@@ -76,214 +71,172 @@ fun LoginScreen(
     val passwordFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val actionReveal = remember { Animatable(0f) }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .imePadding()
             .testTag("worker-login-screen"),
     ) {
-        // The logo and form share one scroll owner. This keeps their fixed relationship when
-        // the IME reduces the viewport instead of allowing the logo to fall behind the fields.
-        val contentWidth = (minOf(maxWidth, 520.dp) - 76.dp).coerceAtLeast(0.dp)
-        val density = LocalDensity.current
-        val horizontalTravelPx = with(density) { (contentWidth + 80.dp).toPx() }
-        val verticalTravelPx = with(density) { 220.dp.toPx() }
-        val usernameOffset = remember(horizontalTravelPx) { Animatable(-horizontalTravelPx) }
-        val passwordOffset = remember(horizontalTravelPx) { Animatable(horizontalTravelPx) }
-        val buttonOffset = remember(verticalTravelPx) { Animatable(verticalTravelPx) }
-        val appearance = remember { Animatable(0f) }
-        var formReady by remember { mutableStateOf(false) }
+        BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+            val density = LocalDensity.current
+            val contentWidth = (minOf(maxWidth, 520.dp) - 76.dp).coerceAtLeast(0.dp)
+            val logoHeight = contentWidth * (96f / 234f)
+            var formHeightPx by remember { mutableIntStateOf(0) }
+            val formHeight = with(density) { formHeightPx.toDp() }
+            val formTop = maxHeight - formHeight
+            val centeredLogoTop = (maxHeight - logoHeight) / 2
+            val targetLogoTop = minOf(
+                centeredLogoTop,
+                formTop - WorkerLoginContentGap - logoHeight,
+            ).coerceAtLeast(0.dp)
+            val logoTop by animateDpAsState(
+                targetValue = targetLogoTop,
+                animationSpec = tween(WorkerLoginActionRevealDurationMillis),
+                label = "worker-login-logo-position",
+            )
 
-        LaunchedEffect(horizontalTravelPx, verticalTravelPx) {
-            coroutineScope {
-                launch {
-                    usernameOffset.animateTo(
-                        0f,
-                        tween(
-                            WorkerLoginAnimationDurationMillis,
-                            easing = LinearOutSlowInEasing,
-                        ),
-                    )
-                }
-                launch {
-                    passwordOffset.animateTo(
-                        0f,
-                        tween(
-                            WorkerLoginAnimationDurationMillis,
-                            easing = LinearOutSlowInEasing,
-                        ),
-                    )
-                }
-                launch {
-                    buttonOffset.animateTo(
-                        0f,
-                        tween(
-                            WorkerLoginAnimationDurationMillis,
-                            easing = LinearOutSlowInEasing,
-                        ),
-                    )
-                }
-                launch {
-                    appearance.animateTo(
-                        1f,
-                        tween(
-                            WorkerLoginAnimationDurationMillis,
-                            easing = LinearOutSlowInEasing,
-                        ),
-                    )
-                }
+            LaunchedEffect(Unit) {
+                actionReveal.animateTo(
+                    1f,
+                    tween(WorkerLoginActionRevealDurationMillis),
+                )
             }
-            formReady = true
-        }
 
-        fun submit() {
-            if (!formReady || isSubmitting || username.isBlank() || password.isBlank()) return
-            focusManager.clearFocus()
-            keyboardController?.hide()
-            onLogin(username.trim(), password)
-        }
+            fun submit() {
+                if (isSubmitting || username.isBlank() || password.isBlank()) return
+                focusManager.clearFocus()
+                keyboardController?.hide()
+                onLogin(username.trim(), password)
+            }
 
-        Column(
-            modifier = Modifier
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
-                .height(maxHeight)
-                .verticalScroll(rememberScrollState())
-                .padding(start = 38.dp, end = 38.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
             Box(
                 modifier = Modifier
-                    .requiredSize(
-                        width = contentWidth,
-                        height = contentWidth * (96f / 234f),
-                    )
-                    .testTag("worker-login-logo"),
+                    .widthIn(max = 520.dp)
+                    .fillMaxSize()
+                    .align(Alignment.TopCenter),
             ) {
-                WorkerStoreLogo(
-                    modifier = Modifier.matchParentSize(),
-                    horizontalPadding = 0.dp,
-                )
-            }
-            Spacer(Modifier.height(24.dp))
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        alpha = appearance.value
-                        scaleX = 0.92f + appearance.value * 0.08f
-                        scaleY = 0.92f + appearance.value * 0.08f
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                WorkerLoginFieldLabel(
-                    text = "Логин",
-                    modifier = Modifier.fillMaxWidth().graphicsLayer {
-                        translationX = usernameOffset.value
-                    },
-                )
-                Spacer(Modifier.height(6.dp))
-                WorkerStoreInputField(
-                    value = username,
-                    onValueChange = { username = it },
-                    placeholder = "Введите логин",
-                    enabled = formReady && !isSubmitting,
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Next,
-                    keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
-                    focusRequester = usernameFocus,
+                Box(
                     modifier = Modifier
-                        .testTag("worker-login")
-                        .graphicsLayer { translationX = usernameOffset.value },
-                )
-                Spacer(Modifier.height(10.dp))
-                WorkerLoginFieldLabel(
-                    text = "Пароль",
-                    modifier = Modifier.fillMaxWidth().graphicsLayer {
-                        translationX = passwordOffset.value
-                    },
-                )
-                Spacer(Modifier.height(6.dp))
-                WorkerStoreInputField(
-                    value = password,
-                    onValueChange = { password = it },
-                    placeholder = "Введите пароль",
-                    enabled = formReady && !isSubmitting,
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                    keyboardActions = KeyboardActions(onDone = { submit() }),
-                    visualTransformation = if (passwordVisible) {
-                        VisualTransformation.None
-                    } else {
-                        PasswordVisualTransformation()
-                    },
-                    focusRequester = passwordFocus,
-                    trailingContent = {
-                        IconButton(
-                            onClick = { passwordVisible = !passwordVisible },
-                            enabled = formReady && !isSubmitting,
-                        ) {
-                            Icon(
-                                imageVector = if (passwordVisible) {
-                                    Icons.Filled.VisibilityOff
-                                } else {
-                                    Icons.Filled.Visibility
-                                },
-                                contentDescription = if (passwordVisible) {
-                                    "Скрыть пароль"
-                                } else {
-                                    "Показать пароль"
-                                },
-                                tint = WorkerStoreNavy,
-                            )
-                        }
-                    },
-                    modifier = Modifier
-                        .testTag("worker-password")
-                        .graphicsLayer { translationX = passwordOffset.value },
-                )
-                failure?.let {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = it,
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        textAlign = TextAlign.Center,
+                        .align(Alignment.TopCenter)
+                        .offset(y = logoTop)
+                        .requiredSize(
+                            width = contentWidth,
+                            height = logoHeight,
+                        )
+                        .testTag("worker-login-logo"),
+                ) {
+                    WorkerStoreLogo(
+                        modifier = Modifier.matchParentSize(),
+                        horizontalPadding = 0.dp,
                     )
                 }
-                Spacer(Modifier.height(20.dp))
-                WorkerButton(
-                    onClick = ::submit,
+
+                Box(
                     modifier = Modifier
+                        .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(56.dp)
-                        .graphicsLayer { translationY = buttonOffset.value }
-                        .testTag("worker-login-submit"),
-                    enabled = formReady && !isSubmitting && username.isNotBlank() && password.isNotBlank(),
+                        .onSizeChanged { formHeightPx = it.height },
                 ) {
-                    if (isSubmitting) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .height(20.dp)
-                                    .semantics { contentDescription = "Выполняется вход" },
-                                strokeWidth = 2.dp,
-                            )
-                            Text("Входим…", modifier = Modifier.padding(start = 10.dp))
-                        }
-                    } else {
-                        Text(
-                            text = "Войти",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = 38.dp,
+                                end = 38.dp,
+                                bottom = WorkerLoginContentGap,
+                            ),
+                    ) {
+                        WorkerLoginFieldLabel(
+                            text = "Логин",
+                            modifier = Modifier.fillMaxWidth().testTag("worker-login-label"),
                         )
+                        Spacer(Modifier.height(6.dp))
+                        WorkerStoreInputField(
+                            value = username,
+                            onValueChange = { username = it },
+                            placeholder = "Введите логин",
+                            enabled = !isSubmitting,
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Next,
+                            keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
+                            focusRequester = usernameFocus,
+                            modifier = Modifier.testTag("worker-login"),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        WorkerLoginFieldLabel(
+                            text = "Пароль",
+                            modifier = Modifier.fillMaxWidth().testTag("worker-password-label"),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        WorkerStoreInputField(
+                            value = password,
+                            onValueChange = { password = it },
+                            placeholder = "Введите пароль",
+                            enabled = !isSubmitting,
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                            keyboardActions = KeyboardActions(onDone = { submit() }),
+                            visualTransformation = if (passwordVisible) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            focusRequester = passwordFocus,
+                            trailingContent = {
+                                IconButton(
+                                    onClick = { passwordVisible = !passwordVisible },
+                                    enabled = !isSubmitting,
+                                ) {
+                                    Icon(
+                                        imageVector = if (passwordVisible) {
+                                            Icons.Filled.VisibilityOff
+                                        } else {
+                                            Icons.Filled.Visibility
+                                        },
+                                        contentDescription = if (passwordVisible) {
+                                            "Скрыть пароль"
+                                        } else {
+                                            "Показать пароль"
+                                        },
+                                        tint = WorkerStoreNavy,
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("worker-password"),
+                        )
+                        failure?.let {
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = it,
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        Spacer(Modifier.height(WorkerLoginContentGap))
+                        WorkerButton(
+                            onClick = ::submit,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .graphicsLayer {
+                                    alpha = actionReveal.value
+                                    translationY = 12.dp.toPx() * (1f - actionReveal.value)
+                                }
+                                .testTag("worker-login-submit"),
+                            enabled = !isSubmitting && username.isNotBlank() && password.isNotBlank(),
+                        ) {
+                            Text(
+                                text = "Войти",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
                     }
                 }
             }

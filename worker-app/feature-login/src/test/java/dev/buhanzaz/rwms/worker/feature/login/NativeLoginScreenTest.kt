@@ -58,7 +58,7 @@ class NativeLoginScreenTest {
     }
 
     @Test
-    fun `shows progress and a worker-specific error`() {
+    fun `submission blocks controls without a visible loading indicator`() {
         compose.setContent {
             RwmsWorkerTheme {
                 LoginScreen(
@@ -71,7 +71,8 @@ class NativeLoginScreenTest {
 
         compose.onNodeWithText("Неверный логин или пароль либо вход для рабочего отключён")
             .assertIsDisplayed()
-        compose.onNodeWithContentDescription("Выполняется вход").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Выполняется вход").assertDoesNotExist()
+        compose.onNodeWithText("Войти").assertIsDisplayed()
         compose.onNodeWithTag("worker-login").assertIsNotEnabled()
         compose.onNodeWithTag("worker-password").assertIsNotEnabled()
     }
@@ -105,7 +106,7 @@ class NativeLoginScreenTest {
     }
 
     @Test
-    fun `logo stays aligned with the form when the IME resizes the login viewport`() {
+    fun `logo keeps its dimensions and moves with the lower form when the IME resizes the viewport`() {
         var viewportHeight by mutableIntStateOf(720)
         compose.setContent {
             RwmsWorkerTheme {
@@ -125,29 +126,28 @@ class NativeLoginScreenTest {
 
         val logoBeforeIme = compose.onNodeWithTag("worker-login-logo")
             .fetchSemanticsNode().boundsInRoot
-        val loginBeforeIme = compose.onNodeWithTag("worker-login")
-            .fetchSemanticsNode().boundsInRoot
-        val submitBeforeIme = compose.onNodeWithTag("worker-login-submit")
-            .fetchSemanticsNode().boundsInRoot
-        assertThat(logoBeforeIme.width).isWithin(1f).of(loginBeforeIme.width)
-        assertThat(logoBeforeIme.width).isWithin(1f).of(submitBeforeIme.width)
-        assertThat(logoBeforeIme.bottom).isAtMost(loginBeforeIme.top)
-        val logoToFieldGap = loginBeforeIme.top - logoBeforeIme.bottom
-
-        compose.runOnIdle { viewportHeight = 120 }
-        val logoWithSmallIme = compose.onNodeWithTag("worker-login-logo")
-            .fetchSemanticsNode().boundsInRoot
-        assertThat(logoWithSmallIme.size).isEqualTo(logoBeforeIme.size)
 
         compose.runOnIdle { viewportHeight = 420 }
         val logoWithIme = compose.onNodeWithTag("worker-login-logo")
             .fetchSemanticsNode().boundsInRoot
+        val loginLabelWithIme = compose.onNodeWithTag("worker-login-label")
+            .fetchSemanticsNode().boundsInRoot
         val loginWithIme = compose.onNodeWithTag("worker-login").fetchSemanticsNode().boundsInRoot
+        val passwordWithIme = compose.onNodeWithTag("worker-password")
+            .fetchSemanticsNode().boundsInRoot
         val submitWithIme = compose.onNodeWithTag("worker-login-submit")
+            .fetchSemanticsNode().boundsInRoot
+        val screenWithIme = compose.onNodeWithTag("worker-login-screen")
             .fetchSemanticsNode().boundsInRoot
         assertThat(logoWithIme.width).isWithin(1f).of(loginWithIme.width)
         assertThat(logoWithIme.width).isWithin(1f).of(submitWithIme.width)
-        assertThat(logoWithIme.bottom).isAtMost(loginWithIme.top)
-        assertThat(loginWithIme.top - logoWithIme.bottom).isWithin(1f).of(logoToFieldGap)
+        assertThat(logoWithIme.size).isEqualTo(logoBeforeIme.size)
+        assertThat(logoWithIme.bottom).isAtMost(loginLabelWithIme.top)
+
+        val logoToLoginGap = loginLabelWithIme.top - logoWithIme.bottom
+        val passwordToButtonGap = submitWithIme.top - passwordWithIme.bottom
+        val buttonToImeGap = screenWithIme.bottom - submitWithIme.bottom
+        assertThat(logoToLoginGap).isWithin(1f).of(passwordToButtonGap)
+        assertThat(logoToLoginGap).isWithin(1f).of(buttonToImeGap)
     }
 }
