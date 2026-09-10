@@ -105,8 +105,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.worker"
         minSdk = 23
         targetSdk = 36
-        versionCode = 41
-        versionName = "0.1.40"
+        versionCode = 42
+        versionName = "0.1.41"
         testInstrumentationRunner = "dev.buhanzaz.rwms.worker.HiltWorkerTestRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-worker-auth"
     }
