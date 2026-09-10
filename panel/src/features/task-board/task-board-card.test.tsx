@@ -193,7 +193,7 @@ describe("TaskBoardCard source details", () => {
       onSuspend,
     })
 
-    const suspend = screen.getByRole("button", { name: "Отменить задание" })
+    const suspend = screen.getByRole("button", { name: "Отменить" })
     expect(suspend.getAttribute("title")).toBe(
       "Временно отключить всю задачу и освободить исполнителей"
     )

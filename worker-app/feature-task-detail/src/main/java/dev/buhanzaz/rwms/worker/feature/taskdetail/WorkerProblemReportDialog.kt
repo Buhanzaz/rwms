@@ -15,7 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAPhoto
-import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
@@ -30,9 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -44,7 +40,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
 import dev.buhanzaz.rwms.worker.core.ui.WorkerButton
-import dev.buhanzaz.rwms.worker.core.ui.WorkerOutlinedButton
 
 /**
  * Durable problem-report editor. Closing it only hides the sheet: the local draft and encrypted
@@ -63,12 +58,15 @@ fun WorkerProblemReportDialog(
     LaunchedEffect(userId, entryId, routeIndex) { viewModel.bind(userId, entryId, routeIndex) }
     DisposableEffect(viewModel) { onDispose(viewModel::release) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var attachmentActionsVisible by remember(entryId) { mutableStateOf(false) }
     LaunchedEffect(state.dismissAfterSubmit) {
         if (state.dismissAfterSubmit) onDismiss()
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
@@ -86,8 +84,6 @@ fun WorkerProblemReportDialog(
                             onCapture(report.reportId, report.routeIndex, state.remainingPhotos, fromGallery)
                         }
                     },
-                    attachmentActionsVisible = attachmentActionsVisible,
-                    onAttachmentActionsVisibleChange = { attachmentActionsVisible = it },
                     onRemovePhoto = { viewModel.removePhoto(userId, it) },
                     onLoadPreview = viewModel::loadPreview,
                     onSubmit = { viewModel.submit(userId) },
@@ -103,8 +99,6 @@ private fun ProblemReportContent(
     state: WorkerProblemReportUiState,
     onCommentChanged: (String) -> Unit,
     onCapture: (Boolean) -> Unit,
-    attachmentActionsVisible: Boolean,
-    onAttachmentActionsVisibleChange: (Boolean) -> Unit,
     onRemovePhoto: (String) -> Unit,
     onLoadPreview: (TaskEvidenceEntity) -> Unit,
     onSubmit: () -> Unit,
@@ -137,29 +131,20 @@ private fun ProblemReportContent(
         }
     }
     if (editable && state.remainingPhotos > 0) {
-        WorkerOutlinedButton(
-            onClick = { onAttachmentActionsVisibleChange(!attachmentActionsVisible) },
-            modifier = Modifier.fillMaxWidth().testTag("problem-report-attach"),
-        ) {
-            Icon(Icons.Filled.AttachFile, contentDescription = null)
-            Text("Добавить фото (${state.remainingPhotos})", modifier = Modifier.padding(start = 8.dp))
-        }
-        if (attachmentActionsVisible) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                WorkerOutlinedButton(
-                    onClick = { onCapture(false) },
-                    modifier = Modifier.weight(1f).testTag("problem-report-camera"),
-                ) {
-                    Icon(Icons.Filled.AddAPhoto, contentDescription = null)
-                    Text("Камера", modifier = Modifier.padding(start = 6.dp))
-                }
-                WorkerOutlinedButton(
-                    onClick = { onCapture(true) },
-                    modifier = Modifier.weight(1f).testTag("problem-report-gallery"),
-                ) {
-                    Icon(Icons.Filled.Image, contentDescription = null)
-                    Text("Галерея", modifier = Modifier.padding(start = 6.dp))
-                }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            WorkerButton(
+                onClick = { onCapture(false) },
+                modifier = Modifier.weight(1f).testTag("problem-report-camera"),
+            ) {
+                Icon(Icons.Filled.AddAPhoto, contentDescription = null)
+                Text("Камера", modifier = Modifier.padding(start = 6.dp))
+            }
+            WorkerButton(
+                onClick = { onCapture(true) },
+                modifier = Modifier.weight(1f).testTag("problem-report-gallery"),
+            ) {
+                Icon(Icons.Filled.Image, contentDescription = null)
+                Text("Галерея", modifier = Modifier.padding(start = 6.dp))
             }
         }
     }
@@ -181,7 +166,7 @@ private fun ProblemReportContent(
                 report.lastError ?: "Сервер не принял обращение. Проверьте подключение и повторите.",
                 color = MaterialTheme.colorScheme.error,
             )
-            WorkerOutlinedButton(
+            WorkerButton(
                 onClick = onRetry,
                 enabled = !state.saving,
                 modifier = Modifier.fillMaxWidth().testTag("problem-report-retry"),

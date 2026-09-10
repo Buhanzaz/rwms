@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
@@ -575,6 +576,14 @@ private fun WorkerDrawerContent(
         drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
         drawerContentColor = MaterialTheme.colorScheme.onSurface,
     ) {
+        val itemColors = NavigationDrawerItemDefaults.colors(
+            selectedContainerColor = MaterialTheme.colorScheme.primary,
+            unselectedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 1f),
+            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+            selectedTextColor = MaterialTheme.colorScheme.onPrimary,
+            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         WorkerStoreLogo(
             modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 24.dp),
             horizontalPadding = 54.dp,
@@ -584,6 +593,7 @@ private fun WorkerDrawerContent(
             label = { Text("Моё задание") },
             selected = current is BoardRoute,
             onClick = onTasks,
+            colors = itemColors,
             modifier = Modifier.padding(horizontal = 12.dp),
         )
         NavigationDrawerItem(
@@ -591,6 +601,7 @@ private fun WorkerDrawerContent(
             label = { Text("Загрузки") },
             selected = current is DownloadsRoute,
             onClick = onDownloads,
+            colors = itemColors,
             modifier = Modifier.padding(horizontal = 12.dp),
         )
     }

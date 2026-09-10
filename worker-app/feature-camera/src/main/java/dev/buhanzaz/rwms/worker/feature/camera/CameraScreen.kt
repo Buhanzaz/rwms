@@ -13,7 +13,6 @@ import android.provider.Settings
 import android.view.OrientationEventListener
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -55,6 +54,10 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.FlashlightOn
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -112,6 +115,7 @@ import kotlinx.coroutines.delay
 
 private val WorkerCameraBlue = Color(0xFF3B82F6)
 private val WorkerCameraPanel = Color(0xE6191919)
+private val WorkerCameraLightMuted = Color(0xFFB8B8B8)
 private const val CAMERA_THUMBNAIL_MAX_PIXELS = 256_000L
 private const val CAMERA_GALLERY_MAX_PIXELS = 2_000_000L
 
@@ -209,7 +213,7 @@ fun CameraScreen(
 }
 
 /**
- * Opens Android's photo picker and imports up to ten selected images as encrypted task evidence.
+ * Opens Android's full-screen document picker and imports up to ten selected images as encrypted task evidence.
  * Completion callers defer sync until the matching task action has entered the outbox.
  */
 @Composable
@@ -227,6 +231,7 @@ fun GalleryImportScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var pickerOpened by rememberSaveable { mutableStateOf(false) }
+    var selectionError by rememberSaveable { mutableStateOf<String?>(null) }
     val selectionLimit = maxPhotos.coerceIn(1, 10)
     val importPhotos: (List<Uri>) -> Unit = { uris ->
         if (uris.isEmpty()) {
@@ -243,16 +248,17 @@ fun GalleryImportScreen(
             )
         }
     }
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(selectionLimit.coerceAtLeast(2)),
-        onResult = importPhotos,
-    )
-    val singlePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        importPhotos(listOfNotNull(uri))
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.size > selectionLimit) {
+            selectionError = "Можно выбрать не более $selectionLimit фото за раз."
+        } else {
+            selectionError = null
+            importPhotos(uris)
+        }
     }
     fun openPicker() {
-        val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-        if (selectionLimit == 1) singlePicker.launch(request) else picker.launch(request)
+        selectionError = null
+        picker.launch(arrayOf("image/*"))
     }
 
     LaunchedEffect(Unit) {
@@ -274,7 +280,7 @@ fun GalleryImportScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            state.error?.let { error ->
+            (selectionError ?: state.error)?.let { error ->
                 Text(
                     error,
                     color = MaterialTheme.colorScheme.error,
@@ -342,8 +348,12 @@ private fun WorkerCameraExperience(
             capturesForDisposal.forEach(File::delete)
         }
     }
-    BackHandler(enabled = saving) {
-        message = "Дождитесь сохранения фотографий"
+    BackHandler {
+        if (saving) {
+            message = "Дождитесь сохранения фотографий"
+        } else {
+            onBack()
+        }
     }
     DisposableEffect(context, previewView) {
         val listener = object : OrientationEventListener(context.applicationContext) {
@@ -751,12 +761,25 @@ private fun CameraTopBar(
         Modifier.fillMaxWidth().statusBarsPadding().height(76.dp).padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onLight, enabled = flashAvailable) {
-            Text(lightMode.symbol, color = if (flashAvailable) Color.White else Color.Gray, fontSize = 20.sp)
+        TextButton(
+            onClick = onLight,
+            enabled = flashAvailable,
+            modifier = Modifier.semantics {
+                contentDescription = lightMode.contentDescription
+            },
+        ) {
+            CameraLightIcon(
+                mode = lightMode,
+                tint = if (flashAvailable && lightMode != WorkerCameraLightMode.Off) {
+                    WorkerCameraBlue
+                } else {
+                    WorkerCameraLightMuted
+                },
+            )
         }
         Text(
             title,
-            color = Color.White,
+            color = WorkerCameraLightMuted,
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.weight(1f),
@@ -765,6 +788,21 @@ private fun CameraTopBar(
             Text(if (settingsOpen) "⌃" else "⌄", color = Color.White, fontSize = 24.sp)
         }
     }
+}
+
+/** Uses neutral Material icons; blue only communicates an active light mode. */
+@Composable
+private fun CameraLightIcon(mode: WorkerCameraLightMode, tint: Color) {
+    Icon(
+        imageVector = if (mode == WorkerCameraLightMode.Torch) {
+            Icons.Filled.FlashlightOn
+        } else {
+            Icons.Filled.FlashOn
+        },
+        contentDescription = null,
+        tint = tint,
+        modifier = Modifier.size(24.dp),
+    )
 }
 
 @Composable
@@ -1138,10 +1176,10 @@ private fun CameraGate(
     }
 }
 
-private enum class WorkerCameraLightMode(val symbol: String) {
-    Off("⚡̸"),
-    Flash("⚡"),
-    Torch("▰");
+private enum class WorkerCameraLightMode(val contentDescription: String) {
+    Off("Вспышка выключена"),
+    Flash("Вспышка включена"),
+    Torch("Фонарик включён");
 
     val captureMode: Int
         get() = if (this == Flash) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF

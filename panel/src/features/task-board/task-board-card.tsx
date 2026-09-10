@@ -825,7 +825,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
               onClick={() => onSuspend(entry)}
             >
               <HugeiconsIcon icon={Cancel01Icon} data-icon="inline-start" />
-              Отменить задание
+              Отменить
             </Button>
           ) : null}
           {showRestore ? (

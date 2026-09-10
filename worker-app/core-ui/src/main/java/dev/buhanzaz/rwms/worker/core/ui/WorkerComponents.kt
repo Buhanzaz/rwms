@@ -107,14 +107,23 @@ private fun WorkerTopBar(
                             .padding(start = 4.dp)
                             .testTag(if (onBack == null) "menu-button" else "header-back"),
                     ) {
-                        Icon(
-                            imageVector = if (onBack == null) {
-                                Icons.Filled.Menu
-                            } else {
-                                Icons.AutoMirrored.Filled.ArrowBack
-                            },
-                            contentDescription = if (onBack == null) "Открыть меню" else "Назад",
-                        )
+                        if (onBack == null) {
+                            Surface(
+                                modifier = Modifier.size(36.dp),
+                                shape = CircleShape,
+                                color = Color.Transparent,
+                                border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Filled.Menu, contentDescription = "Открыть меню")
+                                }
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Назад",
+                            )
+                        }
                     }
                 }
                 Box(
@@ -169,7 +178,7 @@ private fun WorkerProfileAvatar(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline),
         ) {
             if (avatar != null) {
                 Image(
