@@ -28,6 +28,9 @@ export type TaskProblemReport = Readonly<{
   recordedAt: string
   readAt: string | null
   attachments: readonly TaskProblemReportAttachment[]
+  missingItems: readonly { itemId: string; kind: "WORK" | "MATERIAL"; name: string }[]
+  unitNumber: string | null
+  appliedToAll: boolean
 }>
 
 export type TaskProblemReportPage = Readonly<{
@@ -102,6 +105,14 @@ function report(value: unknown): TaskProblemReport {
     recordedAt: text(source.recordedAt),
     readAt: nullableText(source.readAt),
     attachments: source.attachments.map(attachment),
+    missingItems: Array.isArray(source.missingItems) ? source.missingItems.map((item) => {
+      const value = object(item)
+      const kind = text(value.kind)
+      if (kind !== "WORK" && kind !== "MATERIAL") invalid()
+      return { itemId: text(value.itemId), kind, name: text(value.name) }
+    }) : [],
+    unitNumber: nullableText(source.unitNumber),
+    appliedToAll: typeof source.appliedToAll === "boolean" ? source.appliedToAll : false,
   }
 }
 
@@ -149,4 +160,8 @@ export function markTaskProblemReportRead(
     `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-problem-reports/${encodeURIComponent(reportId)}/read`,
     { method: "PUT" }
   )
+}
+
+export function applyTaskProblemReportToAll(accessToken: string, warehouseId: string, reportId: string, operationId: string) {
+  return bearerRequest<{ affectedTaskIds: string[] }>(accessToken, `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-problem-reports/${encodeURIComponent(reportId)}/apply-to-all`, { method: "POST", headers: { "Idempotency-Key": operationId }, body: JSON.stringify({ operationId }) })
 }

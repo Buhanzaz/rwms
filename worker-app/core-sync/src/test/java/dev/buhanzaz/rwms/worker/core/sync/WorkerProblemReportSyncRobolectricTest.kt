@@ -101,6 +101,28 @@ class WorkerProblemReportSyncRobolectricTest {
     }
 
     @Test
+    fun `missing requirement report replays its fenced item identity unchanged`() = runTest {
+        val now = System.currentTimeMillis()
+        database.taskDao().upsertAll(listOf(task(now, resultPhotoMinCount = 0)))
+        database.outboxDao().insert(
+            reportOutbox(
+                now = now,
+                state = WorkerProblemReportStore.OUTBOX_PENDING,
+                attachmentIds = emptyList(),
+                expectedVersion = 17,
+                missingItemIds = listOf("77777777-7777-7777-7777-777777777777"),
+            ),
+        )
+        val api = ReportApi()
+
+        assertThat(coordinator(api, RecordingUploader(api.events)).sync(USER)).isEqualTo(WorkerSyncOutcome.Complete)
+
+        assertThat(api.reportRequests.single().expectedVersion).isEqualTo(17)
+        assertThat(api.reportRequests.single().missingItemIds)
+            .containsExactly("77777777-7777-7777-7777-777777777777")
+    }
+
+    @Test
     fun `failed report post retains its declaration and blocks linked completion`() = runTest {
         val now = System.currentTimeMillis()
         database.taskDao().upsertAll(listOf(task(now, resultPhotoMinCount = 0)))
@@ -201,7 +223,13 @@ class WorkerProblemReportSyncRobolectricTest {
         updatedAtEpochMillis = now,
     )
 
-    private fun reportOutbox(now: Long, state: String, attachmentIds: List<String>): WorkerOutboxEntity {
+    private fun reportOutbox(
+        now: Long,
+        state: String,
+        attachmentIds: List<String>,
+        expectedVersion: Long? = null,
+        missingItemIds: List<String> = emptyList(),
+    ): WorkerOutboxEntity {
         val payload = PendingWorkerProblemReport(
             operationId = REPORT_ID,
             routeIndex = 0,
@@ -209,6 +237,8 @@ class WorkerProblemReportSyncRobolectricTest {
             occurredAt = OCCURRED_AT,
             offlineLeaseId = LEASE,
             attachments = attachmentIds.map { evidenceId -> pendingEvidence(evidenceId) },
+            expectedVersion = expectedVersion,
+            missingItemIds = missingItemIds,
         )
         return WorkerOutboxEntity(
             operationId = REPORT_ID,
@@ -216,7 +246,7 @@ class WorkerProblemReportSyncRobolectricTest {
             entryId = ENTRY,
             kind = WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT,
             encryptedPayload = cipher.encrypt(json.encodeToString(payload)),
-            expectedVersion = null,
+            expectedVersion = expectedVersion,
             state = state,
             retryCount = 0,
             createdAtEpochMillis = now,

@@ -43,13 +43,16 @@ public class TaskProblemReportService {
   private final TaskProblemReportMapper mapper;
   private final WorkerTaskBoardService workerBoard;
   private final JdbcTemplate jdbc;
+  private final TaskRequirementService requirements;
 
   public TaskProblemReportService(
       TaskProblemReportRepository reports,
       TaskProblemReportReadReceiptRepository readReceipts,
       TaskProblemReportMapper mapper,
       WorkerTaskBoardService workerBoard,
-      JdbcTemplate jdbc) {
+      JdbcTemplate jdbc,
+      TaskRequirementService requirements) {
+    this.requirements = requirements;
     this.reports = reports;
     this.readReceipts = readReceipts;
     this.mapper = mapper;
@@ -78,6 +81,7 @@ public class TaskProblemReportService {
       return new CreatedWorkerProblemReport(workerResponse(report), false);
     }
 
+    requirements.lockEntryMutation(entryId);
     WorkerTaskBoardService.ProblemReportTarget target =
         workerBoard.prepareProblemReportTarget(
             workerId,
@@ -98,6 +102,11 @@ public class TaskProblemReportService {
             comment,
             request.occurredAt().truncatedTo(ChronoUnit.MICROS),
             databaseNow());
+    var missingItems = requirements.report(target.warehouseId(), target.taskId(), target.entryId(),
+        request.expectedVersion(), request.missingItemIds());
+    report.recordMissingItems(requirements.write(request.missingItemIds().stream().sorted().toList()),
+        requirements.write(missingItems),
+        requirements.requireTask(target.warehouseId(), target.taskId()).getUnitNumber(), request.expectedVersion());
     reports.saveAndFlush(report);
     for (EvidenceReservationRequest attachment : request.attachments()) {
       if (!request.offlineLeaseId().equals(attachment.offlineLeaseId())) {
@@ -179,6 +188,38 @@ public class TaskProblemReportService {
     }
   }
 
+  /** Replays the same warehouse-scoped bulk command without repeating external effects. */
+  @Transactional
+  public dev.buhanzaz.rwms.taskboard.api.TaskRequirementApiModels.AppliedToAll applyToAll(
+      UUID warehouseId, UUID managerId, UUID reportId, String idempotencyKey, UUID operationId) {
+    requireIdempotencyKey(idempotencyKey, operationId);
+    lockProblemReportOperation(operationId);
+    var replay = jdbc.query("select report_id,warehouse_id,manager_id,affected_task_ids::text from task_problem_bulk_receipt where operation_id=?",
+        (row, index) -> {
+          if (!reportId.equals(row.getObject("report_id", UUID.class))
+              || !warehouseId.equals(row.getObject("warehouse_id", UUID.class))
+              || !managerId.equals(row.getObject("manager_id", UUID.class))) {
+            throw new ConflictException("operationId уже использован другой командой");
+          }
+          return new dev.buhanzaz.rwms.taskboard.api.TaskRequirementApiModels.AppliedToAll(
+              requirements.read(row.getString("affected_task_ids"), new tools.jackson.core.type.TypeReference<>() {}));
+        }, operationId);
+    if (!replay.isEmpty()) return replay.getFirst();
+    TaskProblemReport report = reports.findForUpdate(reportId)
+        .filter(value -> warehouseId.equals(value.getWarehouseId()))
+        .orElseThrow(() -> new NotFoundException("Сообщение о проблеме не найдено"));
+    List<dev.buhanzaz.rwms.taskboard.api.TaskRequirementApiModels.MissingItem> missing = requirements.read(
+        report.getMissingItems(), new tools.jackson.core.type.TypeReference<>() {});
+    if (missing.isEmpty()) throw new ConflictException("Сообщение не содержит отсутствующих позиций");
+    List<UUID> affected = requirements.applyToAll(warehouseId, report.getTaskId(),
+        missing.stream().map(dev.buhanzaz.rwms.taskboard.api.TaskRequirementApiModels.MissingItem::itemId).toList());
+    report.appliedToAll();
+    reports.saveAndFlush(report);
+    jdbc.update("insert into task_problem_bulk_receipt(operation_id,report_id,warehouse_id,manager_id,affected_task_ids) values (?,?,?,?,?::jsonb)",
+        operationId, reportId, warehouseId, managerId, requirements.write(affected));
+    return new dev.buhanzaz.rwms.taskboard.api.TaskRequirementApiModels.AppliedToAll(affected);
+  }
+
   private WorkerProblemReport workerResponse(TaskProblemReport report) {
     TaskProblemReportSummary summary = mapper.summary(report);
     return new WorkerProblemReport(
@@ -190,7 +231,9 @@ public class TaskProblemReportService {
         summary.comment(),
         summary.occurredAt(),
         summary.recordedAt(),
-        workerBoard.problemReportEvidence(summary.reportId()));
+        workerBoard.problemReportEvidence(summary.reportId()),
+        requirements.read(report.getMissingItems(), new tools.jackson.core.type.TypeReference<>() {}),
+        report.getUnitNumber());
   }
 
   private dev.buhanzaz.rwms.taskboard.api.ProblemReportApiModels.TaskProblemReport managerResponse(
@@ -223,7 +266,9 @@ public class TaskProblemReportService {
         summary.occurredAt(),
         summary.recordedAt(),
         readAt,
-        attachments);
+        attachments,
+        requirements.read(report.getMissingItems(), new tools.jackson.core.type.TypeReference<>() {}),
+        report.getUnitNumber(), report.isAppliedToAll());
   }
 
   private List<PageRow> pageRows(
@@ -281,6 +326,10 @@ public class TaskProblemReportService {
         workerId.equals(report.getWorkerId())
             && entryId.equals(report.getEntryId())
             && comment.equals(report.getComment())
+            && java.util.Objects.equals(report.getExpectedEntryVersion(), request.expectedVersion())
+            && requirements.read(report.getRequestedMissingItemIds(),
+                new tools.jackson.core.type.TypeReference<List<UUID>>() {})
+                .equals(request.missingItemIds().stream().sorted().toList())
             && Duration.between(report.getOccurredAt().toInstant(), request.occurredAt().toInstant())
                     .abs()
                     .compareTo(Duration.ofNanos(1_000))

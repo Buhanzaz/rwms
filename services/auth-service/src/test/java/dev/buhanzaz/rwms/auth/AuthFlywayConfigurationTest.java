@@ -99,10 +99,10 @@ class AuthFlywayConfigurationTest {
 
     @Test
     void taskBoardClientHasOnlyWorkerAndWarehouseIdentityScopes() throws IOException {
-        assertTaskBoardClient(load("application.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
-        assertTaskBoardClient(load("application-dev.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
-        assertTaskBoardClient(load("application-test.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
-        assertTaskBoardClient(load("application-warehouse-client.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
+        assertTaskBoardClient(load("application.yaml"), "${TASK_BOARD_CLIENT_REVISION:7}");
+        assertTaskBoardClient(load("application-dev.yaml"), "${TASK_BOARD_CLIENT_REVISION:7}");
+        assertTaskBoardClient(load("application-test.yaml"), "${TASK_BOARD_CLIENT_REVISION:7}");
+        assertTaskBoardClient(load("application-warehouse-client.yaml"), "${TASK_BOARD_CLIENT_REVISION:7}");
     }
 
     @Test
@@ -269,7 +269,9 @@ class AuthFlywayConfigurationTest {
                 .isEqualTo("warehouse.lifecycle.read");
         assertThat(source.getProperty(prefix + ".scopes[5]"))
                 .isEqualTo("warehouse.lifecycle.confirm");
-        assertThat(source.getProperty(prefix + ".scopes[6]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[6]"))
+                .isEqualTo("maintenance.task-requirements");
+        assertThat(source.getProperty(prefix + ".scopes[7]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
     }
 

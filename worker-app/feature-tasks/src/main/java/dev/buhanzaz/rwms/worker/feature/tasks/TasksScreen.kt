@@ -151,11 +151,16 @@ internal fun SingleTaskCard(
         overdueColor = kpiPalette?.overdueColor,
     )
     val isTransfer = isInterwarehouseTransferTask(task.title, task.taskText)
+    val problemColor = workerTaskProblemColor(kpiPalette?.problemColor)
 
     Card(
         modifier = modifier.testTag("single-task-card-${task.entryId}"),
-        colors = translucentCardColors(),
-        border = translucentCardBorder(),
+        colors = if (task.hasProblem) {
+            CardDefaults.cardColors(containerColor = problemColor)
+        } else {
+            translucentCardColors()
+        },
+        border = if (task.hasProblem) BorderStroke(2.dp, problemColor) else translucentCardBorder(),
         elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
     ) {
         Column(
@@ -180,6 +185,18 @@ internal fun SingleTaskCard(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (task.hasProblem) {
+                Text(
+                    text = if (task.incomplete) {
+                        "Незавершено: ${task.completedWorkPercent}% работ выполнено"
+                    } else {
+                        "В задании отмечена проблема"
+                    },
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("task-problem-${task.entryId}"),
+                )
+            }
             if (isTransfer) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -268,6 +285,10 @@ private fun translucentCardBorder() = BorderStroke(
     width = 1.dp,
     color = Color.White.copy(alpha = 0.58f),
 )
+
+internal fun workerTaskProblemColor(value: String?): Color = runCatching {
+    Color(android.graphics.Color.parseColor(value ?: "#FF3B30"))
+}.getOrDefault(Color(0xFFFF3B30))
 
 /** Reports whether a durable progress row proves that synchronization is still running. */
 internal fun shouldAnimateTaskRefresh(

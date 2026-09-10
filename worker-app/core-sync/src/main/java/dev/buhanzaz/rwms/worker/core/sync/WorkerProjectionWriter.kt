@@ -407,6 +407,9 @@ class WorkerProjectionWriter @Inject constructor(
         routeStepCount = routeStepCount,
         entryType = entryType,
         pinned = pinned,
+        hasProblem = hasProblem,
+        incomplete = incomplete,
+        completedWorkPercent = completedWorkPercent,
     )
 
     private fun WorkerAssignmentDto.toEntity(userId: String, entryId: String) =
@@ -453,6 +456,9 @@ class WorkerProjectionWriter @Inject constructor(
         timerNextTransitionAt = detail.timerSnapshot?.nextTransitionAt,
         timerServerTime = detail.timerSnapshot?.serverTime,
         routeIndex = detail.routeIndex,
+        hasProblem = detail.hasProblem,
+        incomplete = detail.incomplete,
+        completedWorkPercent = detail.completedWorkPercent,
         routeStepIndex = detail.routeStepIndex,
         routeStepCount = detail.routeStepCount,
     )

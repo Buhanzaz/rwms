@@ -265,6 +265,24 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/maintenance/v1/repairs/{repairId}/task-requirements:
+    get:
+      tags: [Internal]
+      operationId: getRepairTaskRequirements
+      description: >-
+        Exact task-board-service boundary requiring principal_type=SERVICE,
+        sub=client_id=task-board-service, audience rwms-services and exactly
+        maintenance.task-requirements. Resolves only frozen repair-stage line snapshots;
+        linked item IDs are the transitive undirected DEPENDENCY/FOLLOW_UP closure within
+        each frozen catalog version and never infer category siblings.
+      parameters:
+        - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Source-owned frozen task requirements., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairTaskRequirements' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/maintenance/v1/inventory/cabin-write-offs:
     post:
       tags: [Internal]
@@ -3927,6 +3945,27 @@ components:
         page: { type: integer, minimum: 0 }
         size: { type: integer, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
+    RepairTaskRequirements:
+      type: object
+      additionalProperties: false
+      required: [repairId, warehouseId, items]
+      properties:
+        repairId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        items: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/RepairTaskRequirementItem' } }
+    RepairTaskRequirementItem:
+      type: object
+      additionalProperties: false
+      required: [itemId, kind, name, catalogVersionId, catalogNodeId, plannedWorkSeconds, linkedItemIds, entryIds]
+      properties:
+        itemId: { type: string, format: uuid }
+        kind: { type: string, enum: [WORK, MATERIAL] }
+        name: { type: string, minLength: 1, maxLength: 1000 }
+        catalogVersionId: { oneOf: [ { type: string, format: uuid }, { type: 'null' } ] }
+        catalogNodeId: { oneOf: [ { type: string, format: uuid }, { type: 'null' } ] }
+        plannedWorkSeconds: { type: integer, format: int64, minimum: 0 }
+        linkedItemIds: { type: array, maxItems: 2000, items: { type: string, format: uuid } }
+        entryIds: { type: array, maxItems: 2000, items: { type: string, format: uuid } }
     WarehouseOperationMarkRecoveryRequest:
       type: object
       additionalProperties: false

@@ -19,6 +19,14 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
@@ -68,6 +76,11 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import { cn } from "@/lib/utils"
+import {
+  getTaskRequirements,
+  taskRequirementsQueryKey,
+  type TaskRequirement,
+} from "@/features/task-board/api/task-requirements-api"
 
 type BoardAction =
   | {
@@ -82,7 +95,12 @@ type BoardAction =
 
 type SuspensionAction =
   | { kind: "suspend"; entry: TaskBoardEntryDto }
-  | { kind: "restore"; entry: TaskBoardEntryDto }
+  | {
+      kind: "restore"
+      entry: TaskBoardEntryDto
+      expectedTaskVersion: number
+      availableItemIds: readonly string[]
+    }
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
@@ -90,6 +108,25 @@ function errorMessage(error: unknown, fallback: string) {
 
 const ACTIVE_REPAIR_PAGE_SIZE = 200
 const EMPTY_ENTRY_IDS: ReadonlySet<string> = new Set()
+
+/** Selects precisely the missing connected component; available/completed entries are never sent. */
+function missingRequirementGroup(
+  items: readonly TaskRequirement[],
+  itemId: string
+) {
+  const byId = new Map(items.map((item) => [item.itemId, item]))
+  const result = new Set<string>()
+  const pending = [itemId]
+  while (pending.length) {
+    const currentId = pending.pop()!
+    const current = byId.get(currentId)
+    if (!current || current.state !== "MISSING" || result.has(currentId))
+      continue
+    result.add(currentId)
+    current.linkedItemIds.forEach((linkedId) => pending.push(linkedId))
+  }
+  return result
+}
 
 function withWorkerPlan(
   board: TaskBoardSnapshotDto,
@@ -234,6 +271,14 @@ function TaskBoardWarehousePage() {
   const [completeEntry, setCompleteEntry] = useState<TaskBoardEntryDto | null>(
     null
   )
+  const [restoreEntry, setRestoreEntry] = useState<TaskBoardEntryDto | null>(
+    null
+  )
+  const [requirementsEntry, setRequirementsEntry] =
+    useState<TaskBoardEntryDto | null>(null)
+  const [availableItemIds, setAvailableItemIds] = useState<Set<string>>(
+    () => new Set()
+  )
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -322,6 +367,16 @@ function TaskBoardWarehousePage() {
     queryKey: taskBoardQueryKey(warehouseId ?? "none"),
     queryFn: () => getTaskBoard(accessToken!, warehouseId!),
     enabled: Boolean(accessToken && warehouseId),
+  })
+  const requirementEntry = restoreEntry ?? requirementsEntry
+  const requirementsQuery = useQuery({
+    queryKey: taskRequirementsQueryKey(
+      warehouseId ?? "none",
+      requirementEntry?.taskId ?? "none"
+    ),
+    queryFn: () =>
+      getTaskRequirements(accessToken!, warehouseId!, requirementEntry!.taskId),
+    enabled: Boolean(accessToken && warehouseId && requirementEntry),
   })
   const highlightedTaskId = useMemo(() => {
     if (
@@ -694,7 +749,11 @@ function TaskBoardWarehousePage() {
       }
       return action.kind === "suspend"
         ? suspendTaskBoardTask(accessToken, action.entry)
-        : restoreTaskBoardTask(accessToken, action.entry)
+        : restoreTaskBoardTask(
+            accessToken,
+            { ...action.entry, taskVersion: action.expectedTaskVersion },
+            action.availableItemIds
+          )
     },
     onMutate: async (action) => {
       setNotice(null)
@@ -715,6 +774,16 @@ function TaskBoardWarehousePage() {
         taskBoardQueryKey(action.entry.warehouseId),
         snapshot
       )
+      if (action.kind === "restore") {
+        setRestoreEntry(null)
+        void queryClient.invalidateQueries({
+          queryKey: taskRequirementsQueryKey(
+            action.entry.warehouseId,
+            action.entry.taskId
+          ),
+          exact: true,
+        })
+      }
     },
     onError: async (unknownError, action) => {
       setNotice(null)
@@ -730,6 +799,15 @@ function TaskBoardWarehousePage() {
         queryKey: taskBoardQueryKey(action.entry.warehouseId),
         exact: true,
       })
+      if (action.kind === "restore") {
+        await queryClient.invalidateQueries({
+          queryKey: taskRequirementsQueryKey(
+            action.entry.warehouseId,
+            action.entry.taskId
+          ),
+          exact: true,
+        })
+      }
     },
   })
   const workerPlanMutation = useMutation({
@@ -1119,6 +1197,9 @@ function TaskBoardWarehousePage() {
                     workspaceEntryNavigationOptions
                   )
                 }}
+                onRequirements={(entry) => {
+                  setRequirementsEntry(entry)
+                }}
                 onEdit={(entry) => {
                   if (
                     !canEdit ||
@@ -1190,7 +1271,8 @@ function TaskBoardWarehousePage() {
                     entry.entryType === "REAL" &&
                     entry.suspended
                   ) {
-                    suspensionMutation.mutate({ kind: "restore", entry })
+                    setAvailableItemIds(new Set())
+                    setRestoreEntry(entry)
                   }
                 }}
                 onScrollTopChange={(queueKey, scrollTop) => {
@@ -1246,6 +1328,183 @@ function TaskBoardWarehousePage() {
           actionMutation.mutate({ kind: "complete", entry: completeEntry })
         }}
       />
+      <Dialog
+        open={restoreEntry !== null}
+        onOpenChange={(open) => {
+          if (!open && !suspensionMutation.isPending) {
+            setRestoreEntry(null)
+            setAvailableItemIds(new Set())
+            setError(null)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Восстановить задание</DialogTitle>
+            <DialogDescription>
+              Отметьте появившиеся позиции. Связанные позиции выбираются вместе
+              — сервер принимает только полный набор.
+            </DialogDescription>
+          </DialogHeader>
+          {requirementsQuery.isLoading ? (
+            <Skeleton className="h-20 w-full" />
+          ) : requirementsQuery.data ? (
+            <div className="flex flex-col gap-2">
+              {requirementsQuery.data.items.map((item) => {
+                const selected = availableItemIds.has(item.itemId)
+                const linked = missingRequirementGroup(
+                  requirementsQuery.data.items,
+                  item.itemId
+                )
+                return (
+                  <label
+                    key={item.itemId}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md border p-2",
+                      item.state === "MISSING" &&
+                        "border-destructive bg-destructive/10",
+                      item.state === "RESTORED" &&
+                        "border-green-600 bg-green-500/10"
+                    )}
+                  >
+                    <Checkbox
+                      checked={selected}
+                      disabled={item.state !== "MISSING"}
+                      onCheckedChange={(checked) =>
+                        setAvailableItemIds((current) => {
+                          const next = new Set(current)
+                          linked.forEach((id) =>
+                            checked ? next.add(id) : next.delete(id)
+                          )
+                          return next
+                        })
+                      }
+                    />
+                    <span className="min-w-0">
+                      {item.kind === "WORK" ? "Работа" : "Материал"}:{" "}
+                      {item.name}
+                      {item.linkedItemIds.length ? " · связанная группа" : ""}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p role="alert" className="text-destructive">
+                {errorMessage(
+                  requirementsQuery.error,
+                  "Не удалось загрузить требования задания."
+                )}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => requirementsQuery.refetch()}
+              >
+                Повторить
+              </Button>
+            </div>
+          )}
+          {restoreEntry && error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={suspensionMutation.isPending}
+              onClick={() => {
+                setRestoreEntry(null)
+                setAvailableItemIds(new Set())
+                setError(null)
+              }}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                !restoreEntry ||
+                !requirementsQuery.data ||
+                suspensionMutation.isPending
+              }
+              onClick={() => {
+                if (restoreEntry && requirementsQuery.data)
+                  suspensionMutation.mutate({
+                    kind: "restore",
+                    entry: restoreEntry,
+                    expectedTaskVersion: requirementsQuery.data.taskVersion,
+                    availableItemIds: [...availableItemIds],
+                  })
+              }}
+            >
+              Восстановить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={requirementsEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setRequirementsEntry(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Требования задания</DialogTitle>
+            <DialogDescription>
+              Состояния работ и материалов задаёт сервер.
+            </DialogDescription>
+          </DialogHeader>
+          {requirementsQuery.isLoading ? (
+            <Skeleton className="h-20 w-full" />
+          ) : requirementsQuery.data ? (
+            <div className="flex flex-col gap-2">
+              {requirementsQuery.data.items.map((item) => (
+                <div
+                  key={item.itemId}
+                  className={cn(
+                    "rounded-md border p-2 text-sm",
+                    item.state === "MISSING" &&
+                      "border-destructive bg-destructive/10 text-destructive",
+                    item.state === "RESTORED" &&
+                      "border-green-600 bg-green-500/10 text-green-700 dark:text-green-400"
+                  )}
+                >
+                  <span className="font-medium">
+                    {item.kind === "WORK" ? "Работа" : "Материал"}:
+                  </span>{" "}
+                  {item.name}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p role="alert" className="text-destructive">
+                {errorMessage(
+                  requirementsQuery.error,
+                  "Не удалось загрузить требования задания."
+                )}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => requirementsQuery.refetch()}
+              >
+                Повторить
+              </Button>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" onClick={() => setRequirementsEntry(null)}>
+              Закрыть
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

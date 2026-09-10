@@ -76,6 +76,7 @@ public class WorkerTaskBoardService {
   private final WorkerActionReceiptStore actionReceipts;
   private final TaskBoardCompletionEvidenceService completionEvidence;
   private final LinkedQueueContinuationPolicy linkedQueues;
+  private final TaskRequirementService requirements;
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
@@ -94,7 +95,9 @@ public class WorkerTaskBoardService {
       WorkerFeedRevisionStore feedRevisions,
       WorkerActionReceiptStore actionReceipts,
       TaskBoardCompletionEvidenceService completionEvidence,
-      LinkedQueueContinuationPolicy linkedQueues) {
+      LinkedQueueContinuationPolicy linkedQueues,
+      TaskRequirementService requirements) {
+    this.requirements = requirements;
     this.taskBoard = taskBoard;
     this.feedCounts = feedCounts;
     this.workforce = workforce;
@@ -356,7 +359,7 @@ public class WorkerTaskBoardService {
                           work.unit(),
                           work.durationMinutes(),
                           work.comment(),
-                          work.sourceMediaIds())));
+                          work.sourceMediaIds(), requirements.state(entry.taskId(), work.id()))));
           content.materials().forEach(
               material ->
                   materialById.putIfAbsent(
@@ -365,7 +368,7 @@ public class WorkerTaskBoardService {
                           material.id(),
                           material.name(),
                           material.quantity(),
-                          material.unit())));
+                          material.unit(), requirements.state(entry.taskId(), material.id()))));
           content.comments().forEach(
               comment ->
                   commentById.putIfAbsent(
@@ -474,7 +477,8 @@ public class WorkerTaskBoardService {
         entry.status().name().equals("IN_PROGRESS")
             && readyEvidenceCount >= photoMinimum
             && surfacePolicy.isActiveParticipant(
-                surface, queue.purpose(), workerId, assignmentSnapshots));
+                surface, queue.purpose(), workerId, assignmentSnapshots),
+        entry.hasProblem(), entry.incomplete(), entry.completedWorkPercent());
   }
 
   /**
@@ -1268,7 +1272,7 @@ public class WorkerTaskBoardService {
                     new WorkerKpiPaletteRange(
                         range.fromPercent(), range.toPercent(), range.color()))
             .toList(),
-        palette.overdueColor());
+        palette.overdueColor(), palette.problemColor());
   }
 
   private WorkerFeedEntry feedEntry(
@@ -1300,7 +1304,7 @@ public class WorkerTaskBoardService {
         entry.timerSnapshot(),
         assignments(entry),
         counts.readyEvidenceCount(),
-        category.resultPhotoMinCount());
+        category.resultPhotoMinCount(), entry.hasProblem(), entry.incomplete(), entry.completedWorkPercent());
   }
 
   private List<WorkerAssignmentSnapshot> assignments(BoardEntryDto entry) {

@@ -61,6 +61,18 @@ public class TaskProblemReportController {
     access.requireWarehouse(jwt, warehouseId, AccessLevel.VIEW, false);
   }
 
+  @org.springframework.web.bind.annotation.PostMapping("/{reportId}/apply-to-all")
+  public TaskRequirementApiModels.AppliedToAll applyToAll(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId,
+      @PathVariable UUID reportId,
+      @org.springframework.web.bind.annotation.RequestHeader("Idempotency-Key") String idempotencyKey,
+      @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody
+          TaskRequirementApiModels.ApplyToAllRequest request) {
+    access.requireUserScope(jwt, "rwms.write");
+    access.requireWarehouse(jwt, warehouseId, AccessLevel.EDIT, false);
+    return reports.applyToAll(warehouseId, managerId(jwt), reportId, idempotencyKey, request.operationId());
+  }
+
   private UUID managerId(Jwt jwt) {
     try {
       return UUID.fromString(jwt.getSubject());

@@ -243,6 +243,18 @@ interface WorkerOutboxDao {
     )
     suspend fun latestUnresolvedProblemReport(userId: String, entryId: String): WorkerOutboxEntity?
 
+    @Query(
+        """
+        SELECT * FROM worker_outbox
+        WHERE userId = :userId
+          AND entryId = :entryId
+          AND kind = 'PROBLEM_REPORT'
+          AND state != 'REPORTED'
+        ORDER BY createdAtEpochMillis DESC
+        """,
+    )
+    suspend fun unresolvedProblemReports(userId: String, entryId: String): List<WorkerOutboxEntity>
+
     @Query("SELECT * FROM worker_outbox WHERE userId = :userId AND entryId = :entryId AND kind = 'PROBLEM_REPORT' ORDER BY createdAtEpochMillis DESC")
     fun observeEntryProblemReports(userId: String, entryId: String): Flow<List<WorkerOutboxEntity>>
 
@@ -291,6 +303,18 @@ interface WorkerOutboxDao {
         """,
     )
     suspend fun pendingActionCount(userId: String, entryId: String): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM worker_outbox
+        WHERE userId = :userId
+          AND entryId = :entryId
+          AND kind = 'PROBLEM_REPORT'
+          AND expectedVersion IS NOT NULL
+          AND state IN ('PENDING', 'RETRY')
+        """,
+    )
+    suspend fun pendingProblemReportCount(userId: String, entryId: String): Int
 
     @Query("UPDATE worker_outbox SET state = :state, retryCount = :retryCount, lastError = :lastError, updatedAtEpochMillis = :now WHERE operationId = :operationId")
     suspend fun updateState(operationId: String, state: String, retryCount: Int, lastError: String?, now: Long)

@@ -43,6 +43,10 @@ Private routes are narrow by design:
   publication-reconciliation work.
 - `/api/internal/maintenance/v1/logistics/**` supports logistics return-estimate and
   repair-place orchestration.
+- `/api/internal/maintenance/v1/repairs/{repairId}/task-requirements` exposes only frozen
+  repair-stage work/material requirements to task-board-service with its sole
+  `maintenance.task-requirements` scope. It never reads the mutable active catalog: links are the
+  transitive undirected DEPENDENCY/FOLLOW_UP closure within each frozen catalog version.
 
 Inventory-service may read
 `GET /api/internal/maintenance/v1/inventory/return-estimates/{estimateId}` only with its exact

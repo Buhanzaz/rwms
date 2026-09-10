@@ -286,7 +286,33 @@ describe("public task-board HTTP client", () => {
       `/api/task-board/warehouses/${warehouseId}/task-board/tasks/${taskId}/${effect}`
     )
     expect(init.method).toBe("POST")
-    expect(JSON.parse(String(init.body))).toEqual({ expectedTaskVersion: 42 })
+    expect(JSON.parse(String(init.body))).toEqual(
+      effect === "restore"
+        ? { expectedTaskVersion: 42, availableItemIds: [] }
+        : { expectedTaskVersion: 42 }
+    )
+  })
+
+  it("restores with the exact selected missing requirement IDs", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(boardResponse))
+      .mockResolvedValueOnce(json(boardResponse))
+    vi.stubGlobal("fetch", fetchMock)
+    const entry = (await getHttpTaskBoard("task-board-token", warehouseId))
+      .queues[0]!.entries[0]!
+
+    await restoreHttpTaskBoardTask("task-board-token", entry, [
+      "work-1",
+      "material-1",
+    ])
+
+    expect(
+      JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body))
+    ).toEqual({
+      expectedTaskVersion: 42,
+      availableItemIds: ["work-1", "material-1"],
+    })
   })
 
   it("updates the WorkerApp plan with queue-version CAS", async () => {

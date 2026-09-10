@@ -34,6 +34,7 @@ const settings: KpiPaletteResponse = {
       { fromPercent: 70, toPercent: 100, color: "#16A34A" },
     ],
     overdueColor: "#7F1D1D",
+    problemColor: "#FF3B30",
   },
 }
 
@@ -92,6 +93,25 @@ afterAll(() => {
 })
 
 describe("PaletteSettingsCard boundary editing", () => {
+  it("preserves and saves the configured problem color", () => {
+    const onSave = vi.fn()
+    render(
+      <PaletteSettingsCard
+        settings={settings}
+        saving={false}
+        blocked={false}
+        actionError={null}
+        onSave={onSave}
+      />
+    )
+
+    expect(screen.getByRole("button", { name: "Цвет проблемы" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить палитру" }))
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedVersion: 3, problemColor: "#FF3B30" })
+    )
+  })
+
   it("selects a separator on a plain click without creating another range", () => {
     renderCard()
     setTrackBounds()

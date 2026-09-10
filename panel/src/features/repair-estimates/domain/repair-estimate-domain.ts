@@ -365,8 +365,8 @@ export function catalogEstimateLineDescription(
   node: RepairEstimateCatalogNodeDto,
   locationTitle?: string | null
 ) {
-  return node.nodeType === "WORK" && locationTitle
-    ? `${node.name} ${locationTitle}`
+  return locationTitle?.trim()
+    ? `${node.name} ${locationTitle.trim()}`
     : node.name
 }
 
@@ -443,7 +443,8 @@ export function applyCatalogNodesToEstimateLines(params: {
           : nextLines.findIndex(
               (line) =>
                 line.lineType === "MATERIAL" &&
-                line.catalogSnapshot?.nodeId === node.id
+                line.catalogSnapshot?.nodeId === node.id &&
+                line.description.trim() === description.trim()
             )
 
     if (node.nodeType === "WORK" && targetWorkLineId && existingIndex < 0) {

@@ -159,6 +159,20 @@ internal fun CatalogNodeDto.isOperationalEstimateNode(): Boolean =
         includeInEstimate &&
         nodeType in setOf("WORK", "MATERIAL", "OPTION")
 
+/** Retains a selected location as line context, never as a billable estimate item. */
+internal fun CatalogNodeDto.isMaintenanceSelectionNode(): Boolean =
+    isOperationalEstimateNode() || (active && nodeType == "LOCATION")
+
+/** The public line description preserves the selected location across all document consumers. */
+internal fun maintenanceCatalogLineDescription(
+    node: CatalogNodeDto,
+    selection: List<CatalogNodeDto>,
+): String = (listOf(node.name) + selection
+    .filter { it.nodeType == "LOCATION" }
+    .map { it.name.trim() }
+    .filter(String::isNotEmpty)
+    .distinct()).joinToString(" ")
+
 /**
  * The user selects a route for a manual inventory line, while an inventory stage still needs
  * one catalog node as its technical reference. The routing can be inherited from a category,
@@ -431,7 +445,11 @@ internal fun MaintenanceEditorState.hasSelectedCatalogWork(
     return lines.any { line ->
         line.id == lineId &&
             line.lineType == "WORK" &&
-            line.catalogNodeId in selectedWorkNodeIds
+            line.catalogNodeId in selectedWorkNodeIds &&
+            (nodes.none { it.nodeType == "LOCATION" } ||
+                nodes.firstOrNull { it.id == line.catalogNodeId }?.let { node ->
+                    line.description == maintenanceCatalogLineDescription(node, nodes)
+                } == true)
     }
 }
 
@@ -446,6 +464,7 @@ internal fun applyMaintenanceCatalogNodes(
 ): MaintenanceEditorState {
     val nextLines = editor.lines.toMutableList()
     val selectedNodes = nodes.distinctBy(CatalogNodeDto::id)
+        .filter(CatalogNodeDto::isOperationalEstimateNode)
     val selectedWorkNodes = selectedNodes
         .asSequence()
         .filter { node -> node.nodeType == "WORK" }
@@ -468,9 +487,17 @@ internal fun applyMaintenanceCatalogNodes(
         require(existing.lineType == "WORK" && existing.catalogNodeId in selectedWorkNodeIds) {
             "Выбранная работа не соответствует позиции каталога"
         }
+        require(
+            nodes.none { it.nodeType == "LOCATION" } ||
+                existing.description == maintenanceCatalogLineDescription(
+                    selectedWorkNodes.first { it.id == existing.catalogNodeId },
+                    nodes,
+                ),
+        ) { "Выбранная работа относится к другому расположению" }
     }
 
     selectedNodes.forEach { node ->
+        val description = maintenanceCatalogLineDescription(node, nodes)
         if (node.nodeType == "WORK") {
             val matchingExistingWorkIndex = existingWorkIndex.takeIf { index ->
                 index >= 0 && nextLines[index].catalogNodeId == node.id
@@ -494,6 +521,7 @@ internal fun applyMaintenanceCatalogNodes(
                 ).normalizedMaintenanceAnnotations()
             } else {
                 nextLines += node.toNewMaintenanceLine().copy(
+                    description = description,
                     quantity = quantity,
                     comment = comment,
                     photoUris = photoUris.takeIf { node.id == photoWorkNodeId }.orEmpty(),
@@ -505,7 +533,8 @@ internal fun applyMaintenanceCatalogNodes(
             }
         } else {
             val existingMaterialIndex = nextLines.indexOfFirst { line ->
-                line.catalogNodeId == node.id && line.lineType == "MATERIAL"
+                line.catalogNodeId == node.id && line.lineType == "MATERIAL" &&
+                    line.description == description
             }
             if (existingMaterialIndex >= 0) {
                 val existing = nextLines[existingMaterialIndex]
@@ -517,6 +546,7 @@ internal fun applyMaintenanceCatalogNodes(
                 ).normalizedMaintenanceAnnotations()
             } else {
                 nextLines += node.toNewMaintenanceLine().copy(
+                    description = description,
                     quantity = quantity,
                     comment = "",
                     mediaReferences = emptyList(),

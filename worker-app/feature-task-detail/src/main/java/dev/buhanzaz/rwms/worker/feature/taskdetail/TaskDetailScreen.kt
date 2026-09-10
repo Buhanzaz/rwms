@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ReportProblem
+import androidx.compose.material.icons.filled.Recycling
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -181,6 +183,15 @@ fun TaskDetailScreen(
         hasCurrentGroup = session?.currentGroupId != null,
         operationalAvailability = session?.operationalAvailability ?: "DISABLED",
     )
+    val hasProblem = detail?.hasProblem ?: task?.hasProblem ?: false
+    val incomplete = detail?.incomplete ?: task?.incomplete ?: false
+    val completedWorkPercent = detail?.completedWorkPercent ?: task?.completedWorkPercent ?: 0.0
+    val problemColor = workerProblemColor(state.kpiPalette?.problemColor)
+    val canReportProblem = WorkerTaskAction.COMPLETE in actionPresentation.actions &&
+        actionPresentation.actionsEnabled &&
+        photoCapture.enabled
+    val canReportMissing = canReportProblem &&
+        !state.hasPendingMissingItemReport
     var automaticJoinRequested by remember(entryId, takeSlingerOnOpen) { mutableStateOf(false) }
     var automaticTakeRequested by remember(entryId, autoTakeOnOpen) { mutableStateOf(false) }
     val footerActions = actionPresentation.actions.filter {
@@ -220,8 +231,8 @@ fun TaskDetailScreen(
     }
     LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
     val mediaTitle = cabinNumber ?: "Задание"
-    LaunchedEffect(displayedStatus, task?.locallyPending) {
-        if (displayedStatus == "DONE" && task?.locallyPending == true) {
+    LaunchedEffect(detail?.status, task?.locallyPending) {
+        if (shouldCloseAfterAuthoritativeCompletion(detail?.status, task?.locallyPending == true)) {
             onCompletionQueued()
         }
     }
@@ -243,11 +254,28 @@ fun TaskDetailScreen(
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding)
+                .background(if (hasProblem) problemColor.copy(alpha = 0.28f) else Color.Transparent),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
         ) {
             item {
+                if (hasProblem) {
+                    Surface(
+                        color = problemColor,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    ) {
+                        Text(
+                            if (incomplete) {
+                                "Задание незавершено: ${completedWorkPercent}% работ выполнено"
+                            } else {
+                                "В задании отмечена проблема"
+                            },
+                            color = Color.White,
+                            modifier = Modifier.padding(14.dp),
+                        )
+                    }
+                }
                 TaskMediaPager(
                     thumbnailPaths = generalSourceMedia.map { it.thumbnailPath ?: it.readPath },
                     contentDescription = "Фото задания",
@@ -332,6 +360,8 @@ fun TaskDetailScreen(
                                 index,
                             )
                         },
+                        canReportMissing = canReportMissing,
+                        onReportMissing = { viewModel.reportMissingItem(work.id, "WORK", work.name) },
                     )
                 }
             }
@@ -343,23 +373,13 @@ fun TaskDetailScreen(
                 item { EmptyTaskSection("Материалы не указаны") }
             } else if (transfer == null) {
                 items(requireNotNull(detail).materials, key = { it.id }) { material ->
-                    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                material.name,
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                "${material.quantity} ${material.unit.orEmpty()}".trim(),
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
+                    RequirementCard(
+                        name = material.name,
+                        quantity = "${material.quantity} ${material.unit.orEmpty()}".trim(),
+                        availabilityState = material.availabilityState,
+                        canReportMissing = canReportMissing,
+                        onReportMissing = { viewModel.reportMissingItem(material.id, "MATERIAL", material.name) },
+                    )
                 }
             }
 
@@ -383,7 +403,7 @@ fun TaskDetailScreen(
                     ) {
                         OutlinedButton(
                             onClick = { showProblemReport = true },
-                            enabled = actionPresentation.actionsEnabled && photoCapture.enabled,
+                            enabled = canReportProblem,
                             border = null,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -826,9 +846,14 @@ private fun WorkRow(
     work: WorkerWorkDto,
     sourceMedia: List<WorkerMediaReferenceDto>,
     onMedia: (index: Int) -> Unit,
+    canReportMissing: Boolean,
+    onReportMissing: () -> Unit,
 ) {
     val presentation = workPresentation(work)
-    Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+    Card(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
+        colors = requirementCardColors(work.availabilityState),
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -844,6 +869,7 @@ private fun WorkRow(
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(presentation.quantity, fontWeight = FontWeight.Bold)
+                MissingRequirementButton(work.availabilityState, canReportMissing, onReportMissing)
             }
             if (sourceMedia.isNotEmpty()) {
                 Text(
@@ -862,6 +888,73 @@ private fun WorkRow(
         }
     }
 }
+
+@Composable
+private fun RequirementCard(
+    name: String,
+    quantity: String,
+    availabilityState: String,
+    canReportMissing: Boolean,
+    onReportMissing: () -> Unit,
+) {
+    Card(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
+        colors = requirementCardColors(availabilityState),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Text(quantity, fontWeight = FontWeight.Bold)
+            MissingRequirementButton(availabilityState, canReportMissing, onReportMissing)
+        }
+    }
+}
+
+@Composable
+private fun MissingRequirementButton(
+    availabilityState: String,
+    canReportMissing: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = canReportMissingRequirement(availabilityState, canReportMissing),
+    ) { Icon(Icons.Filled.Recycling, contentDescription = "Сообщить об отсутствии") }
+}
+
+internal enum class RequirementAvailabilityTone { DEFAULT, MISSING, RESTORED }
+
+internal val restoredRequirementColor = Color(0xFF238636)
+
+internal fun requirementAvailabilityTone(availabilityState: String): RequirementAvailabilityTone = when (availabilityState) {
+    "MISSING" -> RequirementAvailabilityTone.MISSING
+    "RESTORED" -> RequirementAvailabilityTone.RESTORED
+    else -> RequirementAvailabilityTone.DEFAULT
+}
+
+internal fun canReportMissingRequirement(availabilityState: String, canReportMissing: Boolean): Boolean =
+    canReportMissing && availabilityState != "MISSING" && availabilityState != "COMPLETED"
+
+@Composable
+private fun requirementCardColors(availabilityState: String) = CardDefaults.cardColors(
+    containerColor = when (requirementAvailabilityTone(availabilityState)) {
+        RequirementAvailabilityTone.MISSING -> MaterialTheme.colorScheme.errorContainer
+        RequirementAvailabilityTone.RESTORED -> restoredRequirementColor
+        RequirementAvailabilityTone.DEFAULT -> MaterialTheme.colorScheme.surface
+    },
+    contentColor = if (requirementAvailabilityTone(availabilityState) == RequirementAvailabilityTone.RESTORED) {
+        Color.White
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    },
+)
+
+private fun workerProblemColor(value: String?): Color = runCatching {
+    Color(android.graphics.Color.parseColor(value ?: "#FF3B30"))
+}.getOrDefault(Color(0xFFFF3B30))
 
 @Composable
 private fun RemoteMediaThumbnail(

@@ -73,6 +73,25 @@ class WorkerProblemReportStoreRobolectricTest {
     }
 
     @Test
+    fun `reported manual submission clears the draft observer and permits a new declaration`() = runTest {
+        seedSession()
+        val submitted = store.openOrCreateDraft(USER, ENTRY, routeIndex = 1)
+        store.updateDraftComment(USER, submitted.reportId, "Broken door")
+        store.submitDraft(USER, submitted.reportId)
+        database.outboxDao().updateState(
+            operationId = submitted.reportId,
+            state = WorkerProblemReportStore.OUTBOX_REPORTED,
+            retryCount = 0,
+            lastError = null,
+            now = System.currentTimeMillis(),
+        )
+
+        assertThat(store.observeDraft(USER, ENTRY).first()).isNull()
+        assertThat(store.openOrCreateDraft(USER, ENTRY, routeIndex = 2).reportId)
+            .isNotEqualTo(submitted.reportId)
+    }
+
+    @Test
     fun `draft photo removal returns metadata only after local declaration is updated`() = runTest {
         seedSession()
         val draft = store.openOrCreateDraft(USER, ENTRY, routeIndex = 0)

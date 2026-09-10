@@ -87,7 +87,7 @@ public final class WorkerApiModels {
   public record WorkerKpiPaletteRange(int fromPercent, int toPercent, String color) {}
 
   public record WorkerKpiPalette(
-      List<WorkerKpiPaletteRange> ranges, String overdueColor) {}
+      List<WorkerKpiPaletteRange> ranges, String overdueColor, String problemColor) {}
 
   public record WorkerOfflineLease(
       UUID id, OffsetDateTime issuedAt, OffsetDateTime expiresAt, long syncRevision) {}
@@ -166,7 +166,8 @@ public final class WorkerApiModels {
       TaskTimerSnapshot timerSnapshot,
       List<WorkerAssignmentSnapshot> assignments,
       int readyEvidenceCount,
-      int resultPhotoMinCount) {}
+      int resultPhotoMinCount,
+      boolean hasProblem, boolean incomplete, double completedWorkPercent) {}
 
   public record WorkerFeedCategory(WorkerCategory category, List<WorkerFeedEntry> entries) {}
 
@@ -186,7 +187,12 @@ public final class WorkerApiModels {
 
   public record WorkerTaskObject(String kind, String id, String label) {}
 
-  public record WorkerMaterial(UUID id, String name, double quantity, String unit) {}
+  public record WorkerMaterial(UUID id, String name, double quantity, String unit,
+      String availabilityState) {
+    public WorkerMaterial(UUID id, String name, double quantity, String unit) {
+      this(id, name, quantity, unit, "AVAILABLE");
+    }
+  }
 
   public record WorkerWork(
       UUID id,
@@ -195,7 +201,12 @@ public final class WorkerApiModels {
       String unit,
       Integer durationMinutes,
       String comment,
-      List<UUID> sourceMediaIds) {}
+      List<UUID> sourceMediaIds, String availabilityState) {
+    public WorkerWork(UUID id, String name, double quantity, String unit,
+        Integer durationMinutes, String comment, List<UUID> sourceMediaIds) {
+      this(id, name, quantity, unit, durationMinutes, comment, sourceMediaIds, "AVAILABLE");
+    }
+  }
 
   public record WorkerVisibleComment(
       UUID id, String text, String authorDisplayName, OffsetDateTime createdAt) {}
@@ -327,7 +338,8 @@ public final class WorkerApiModels {
       List<TaskEvidence> evidence,
       List<WorkerRelatedStep> relatedSteps,
       int resultPhotoMinCount,
-      boolean completionAllowed) {}
+      boolean completionAllowed,
+      boolean hasProblem, boolean incomplete, double completedWorkPercent) {}
 
   /**
    * Replay-safe offline-capable worker action.
@@ -416,7 +428,17 @@ public final class WorkerApiModels {
       @NotNull OffsetDateTime occurredAt,
       @NotNull UUID offlineLeaseId,
       @NotNull @Size(max = 10) List<@NotNull @Valid EvidenceReservationRequest>
-          attachments) {}
+          attachments,
+      @Min(0) Long expectedVersion,
+      @Size(max = 100) List<@NotNull UUID> missingItemIds) {
+    public WorkerProblemReportRequest {
+      missingItemIds = missingItemIds == null ? List.of() : List.copyOf(missingItemIds);
+    }
+    public WorkerProblemReportRequest(UUID operationId, String comment,
+        OffsetDateTime occurredAt, UUID offlineLeaseId, List<EvidenceReservationRequest> attachments) {
+      this(operationId, comment, occurredAt, offlineLeaseId, attachments, null, List.of());
+    }
+  }
 
   /** Report response returned to its author, including current reservation or media states. */
   public record WorkerProblemReport(
@@ -428,7 +450,8 @@ public final class WorkerApiModels {
       String comment,
       OffsetDateTime occurredAt,
       OffsetDateTime recordedAt,
-      List<TaskEvidence> attachments) {}
+      List<TaskEvidence> attachments,
+      List<TaskRequirementApiModels.MissingItem> missingItems, String unitNumber) {}
 
   /**
    * SSE invalidation signal; clients must refresh authorized state rather than trust it as data.

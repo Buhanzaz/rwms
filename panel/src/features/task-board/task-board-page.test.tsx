@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   restoreTaskBoardTask: vi.fn(),
   setFutureTaskBoardEntryAvailability: vi.fn(),
   suspendTaskBoardTask: vi.fn(),
+  getTaskRequirements: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: mocks.useAuth }))
@@ -66,6 +67,15 @@ vi.mock(
   "@/features/repair-estimates/api/http-maintenance-lifecycle-client",
   () => ({ listMaintenanceRepairs: mocks.listMaintenanceRepairs })
 )
+vi.mock("@/features/task-board/api/task-requirements-api", () => ({
+  getTaskRequirements: mocks.getTaskRequirements,
+  taskRequirementsQueryKey: (warehouseId: string, taskId: string) => [
+    "task-board",
+    warehouseId,
+    "requirements",
+    taskId,
+  ],
+}))
 vi.mock("@/features/task-board/task-board-column", () => ({
   TaskBoardColumn: ({
     actionPending,
@@ -298,6 +308,9 @@ function taskEntry(externalTaskId: string, title: string): TaskBoardEntryDto {
     timerSnapshot: null,
     assignments: [],
     detailsHref: null,
+    hasProblem: false,
+    incomplete: false,
+    completedWorkPercent: 100,
   }
 }
 
@@ -313,6 +326,7 @@ function renderPage(
     initialEntry = "/",
     maintenanceRepairs = [],
     maintenancePage,
+    requirements,
   }: {
     currentBoard?: TaskBoardSnapshotDto
     initialEntry?: string
@@ -328,6 +342,7 @@ function renderPage(
       size: number
       totalElements: number
     }>
+    requirements?: unknown
   } = {}
 ) {
   mocks.useAuth.mockReturnValue({
@@ -356,6 +371,16 @@ function renderPage(
   mocks.reorderTaskBoardEntry.mockResolvedValue(currentBoard)
   mocks.suspendTaskBoardTask.mockResolvedValue(currentBoard)
   mocks.restoreTaskBoardTask.mockResolvedValue(currentBoard)
+  mocks.getTaskRequirements.mockResolvedValue(
+    requirements ?? {
+      taskId: "task-default",
+      taskVersion: 1,
+      hasProblem: true,
+      incomplete: true,
+      completedWorkPercent: 80,
+      items: [],
+    }
+  )
   mocks.setFutureTaskBoardEntryAvailability.mockResolvedValue(currentBoard)
   mocks.getKpiSettings.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
@@ -418,6 +443,76 @@ afterEach(() => {
 })
 
 describe("task board warehouse access", () => {
+  it("restores exactly the transitive missing group with the fresh requirements version", async () => {
+    const entry = {
+      ...taskEntry("restore", "Восстановление"),
+      suspended: true,
+      taskVersion: 2,
+    }
+    const currentBoard = {
+      ...board,
+      queues: [{ ...board.queues[0]!, entries: [entry] }],
+      totalEntries: 1,
+      realEntries: 1,
+    }
+    const requirements = {
+      taskId: entry.taskId,
+      taskVersion: 9,
+      hasProblem: true,
+      incomplete: true,
+      completedWorkPercent: 80,
+      items: [
+        {
+          itemId: "work-1",
+          kind: "WORK",
+          name: "Покраска",
+          state: "MISSING",
+          linkedItemIds: ["material-1"],
+        },
+        {
+          itemId: "material-1",
+          kind: "MATERIAL",
+          name: "Краска",
+          state: "MISSING",
+          linkedItemIds: ["work-1", "available-1"],
+        },
+        {
+          itemId: "available-1",
+          kind: "MATERIAL",
+          name: "Грунтовка",
+          state: "AVAILABLE",
+          linkedItemIds: ["material-1"],
+        },
+      ],
+    }
+    const userEventApi = userEvent.setup()
+    renderPage("EDIT", { currentBoard, requirements })
+
+    await userEventApi.click(
+      await screen.findByRole("button", {
+        name: "Восстановить тестовое задание",
+      })
+    )
+    await userEventApi.click(
+      await screen.findByRole("checkbox", { name: /Работа: Покраска/ })
+    )
+    await userEventApi.click(
+      screen.getByRole("button", { name: "Восстановить" })
+    )
+
+    await waitFor(() =>
+      expect(mocks.restoreTaskBoardTask).toHaveBeenCalledTimes(1)
+    )
+    expect(mocks.restoreTaskBoardTask).toHaveBeenCalledWith(
+      "task-board-token",
+      expect.objectContaining({ taskVersion: 9 }),
+      expect.arrayContaining(["work-1", "material-1"])
+    )
+    expect(mocks.restoreTaskBoardTask.mock.calls[0]![2]).not.toContain(
+      "available-1"
+    )
+  })
+
   it("keeps VIEW users read-only", async () => {
     renderPage("VIEW")
 
@@ -1070,10 +1165,14 @@ describe("task board warehouse access", () => {
         name: "Восстановить тестовое задание",
       })
     )
+    await user.click(
+      await screen.findByRole("button", { name: "Восстановить" })
+    )
     await waitFor(() =>
       expect(mocks.restoreTaskBoardTask).toHaveBeenCalledWith(
         "task-board-token",
-        suspended
+        { ...suspended, taskVersion: 1 },
+        []
       )
     )
     await waitFor(() =>

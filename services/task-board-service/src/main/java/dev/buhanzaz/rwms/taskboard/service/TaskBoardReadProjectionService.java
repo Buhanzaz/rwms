@@ -361,7 +361,10 @@ class TaskBoardReadProjectionService {
     if (surface == MobileTaskSurface.WORKER
         && entry.getQueue().getPurpose() == QueuePurpose.GENERAL
         && UNFINISHED.contains(entry.getStatus())
-        && !workerQueuePlans.isVisible(entry)) {
+        && !workerQueuePlans.isVisible(entry)
+        && !(entry.getTask().isIncomplete() && assignments.findAllByQueueEntryId(entryId).stream()
+            .anyMatch(assignment -> assignment.getWorker() != null
+                && workerId.equals(assignment.getWorker().getId())))) {
       throw new NotFoundException("Задание не найдено");
     }
     if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
@@ -639,7 +642,7 @@ class TaskBoardReadProjectionService {
         timerSnapshot(e, serverTime),
         source,
         driverAudiences.dto(t),
-        t.isSuspended());
+        t.isSuspended(), t.isHasProblem(), t.isIncomplete(), t.getCompletedWorkPercent());
   }
 
   /** Materializes all visible-card assignments in one fetch and groups them by route entry. */
@@ -673,7 +676,7 @@ class TaskBoardReadProjectionService {
 
   private TaskTimerSnapshot timerSnapshot(QueueEntry entry, OffsetDateTime serverTime) {
     Long budget = entry.getCurrentBudgetSeconds();
-    if (budget == null) return null;
+    if (budget == null || budget == 0) return null;
 
     long counted = entry.getActiveWorkSeconds();
     TimerState timerState;

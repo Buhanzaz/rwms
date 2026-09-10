@@ -124,7 +124,8 @@ public class TaskBoardEventFactFactory {
         value.getId(), value.getWarehouseId(), value.getExternalTaskId(), value.getStatus(),
         value.getScheduledDate(), value.getLane(), value.getPriority(), value.isPinned(),
         value.getPlannedDurationMinutes(), value.getDeadlineAt(), value.getDoneAt(),
-        value.getDriverAudienceMode(), value.getPlannedDriverWorkerId(), deleted, value.isSuspended());
+        value.getDriverAudienceMode(), value.getPlannedDriverWorkerId(), deleted, value.isSuspended(),
+        value.isHasProblem(), value.isIncomplete(), value.getCompletedWorkPercent(), value.getRequirementsRevision());
   }
 
   @Transactional(readOnly = true)

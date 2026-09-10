@@ -47,7 +47,9 @@ public final class ProblemReportApiModels {
       OffsetDateTime occurredAt,
       OffsetDateTime recordedAt,
       OffsetDateTime readAt,
-      List<TaskProblemReportAttachment> attachments) {}
+      List<TaskProblemReportAttachment> attachments,
+      List<TaskRequirementApiModels.MissingItem> missingItems, String unitNumber,
+      boolean appliedToAll) {}
 
   /** Bounded newest-first page with the requester's full unread count. */
   public record TaskProblemReportPage(

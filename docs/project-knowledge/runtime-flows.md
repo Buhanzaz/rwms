@@ -2229,6 +2229,25 @@ pipeline. A non-null `worker_task_evidence.problem_report_id` excludes these
 photos from result counts, selection, worker result detail and result-history
 facts while retaining media inbox processing and owner-proof recovery.
 
+A report also marks the owning board task as problematic independently of read
+receipts. Resource reports carry exact work/material line IDs and the current
+entry version. Task-board resolves their undirected, transitive dependency and
+follow-up groups against the repair's frozen catalog versions through the private
+maintenance `task-requirements` read. Only saved repair lines become requirements;
+intermediate catalog locations/options connect groups but are not invented work.
+The machine client requests the separate `maintenance.task-requirements` scope.
+The task-board palette has a separate configurable problem color (default
+`#FF3B30`); both clients show `MISSING` rows red and `RESTORED` rows green.
+
+COMPLETE with missing requirements credits only the newly completed normative
+work share to the existing KPI formula, records those lines as `COMPLETED`, and
+suspends the task as incomplete. It does not emit a source-stage completion fact.
+The version-fenced manager restore command confirms exact complete linked groups;
+unselected groups remain missing. Previously credited lines stay completed, and
+the next execution receives only its remaining budget. A warehouse EDIT manager
+may apply a resource report to all active tasks in that warehouse through one
+idempotent server command matched by stable catalog node IDs.
+
 WorkerApp keeps the editable comment and encrypted photo bundles in a Room
 draft. Submission freezes one immutable outbox declaration and atomically
 activates its photos. Per-entry replay posts this declaration before uploads
@@ -2237,6 +2256,8 @@ detail for these attachments. A closed task does not remove submitted-report
 recovery from Downloads. Report failures require explicit immutable retry;
 ordinary transport failures remain bounded background retries. Room 11→12
 adds a nullable local report ID, leaving prior result evidence unchanged.
+Room 12→13 preserves task problem/progress flags and the configured problem color;
+resource declarations reuse the encrypted report outbox with stable operation IDs.
 
 The warehouse `task-problem-reports` read returns a bounded cursor page and a
 per-user unread count. `PUT .../{reportId}/read` records only that user's read
@@ -2251,6 +2272,9 @@ and task snapshots remain separate from pending/ready photo presentation.
 Protected previews and full-photo viewing use the existing authenticated media
 facilities. Missing authentication, warehouse selection and read failures have
 explicit UI states rather than an invented empty inbox.
+Resource notifications include the cabin number and missing work/material list.
+The board recovery checklist reads the authoritative task requirements and submits
+the visible linked-group selection with its task version.
 
 Evidence: [task-board contract](../../contracts/openapi/task-board-service.yaml),
 [owning service](../../services/task-board-service/README.md), and
@@ -2400,7 +2424,9 @@ and is covered by adopted-V4, Flyway-upgrade and eventing-runtime integration te
    assignment and responsibility timer against each package's combined remaining budget. A
    `SHADOW` member cannot be taken separately, and unfinished SES still excludes every later stage.
 4. One photo-gated, version-fenced COMPLETE transaction closes that representative and every later
-   unfinished shadow member in its same-queue segment. Task-board records assignment/time audit for
+   unfinished shadow member in its same-queue segment when its requirements are available.
+   With missing requirements it follows the partial-completion flow above instead.
+   Task-board records assignment/time audit for
    each, emits the existing `QUEUE_ENTRY_COMPLETED` fact once per route entry and ensures the
    earliest remaining route step is `REAL` without demoting any already manager-opened stage. The
    board task becomes done only when no unfinished package remains, independent of parallel

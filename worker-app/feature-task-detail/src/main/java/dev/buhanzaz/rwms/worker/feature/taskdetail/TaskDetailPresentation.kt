@@ -12,6 +12,10 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Locale
 
+/** A local queued COMPLETE never closes the screen before the server returns DONE. */
+internal fun shouldCloseAfterAuthoritativeCompletion(status: String?, locallyPending: Boolean): Boolean =
+    status == "DONE" && !locallyPending
+
 /**
  * Defines worker UI/presentation state; it does not decide a server task transition.
  */

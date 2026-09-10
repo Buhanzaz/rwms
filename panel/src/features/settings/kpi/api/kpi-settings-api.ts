@@ -14,6 +14,7 @@ export type KpiPalette = {
   version: number
   ranges: KpiPaletteRange[]
   overdueColor: string
+  problemColor?: string
 }
 
 export type KpiPaletteResponse = {
@@ -48,6 +49,7 @@ export type SaveKpiPaletteInput = {
   expectedVersion: number
   ranges: KpiPaletteRange[]
   overdueColor: string
+  problemColor?: string
 }
 
 export type SaveWorkScheduleInput = {
@@ -139,7 +141,10 @@ function parsePalette(value: unknown): KpiPalette | null {
       color: range.color,
     }
   })
-  return { version: value.version, ranges, overdueColor: value.overdueColor }
+  if (!isString(value.problemColor)) {
+    throw new Error("Сервис доски задач вернул некорректную палитру KPI.")
+  }
+  return { version: value.version, ranges, overdueColor: value.overdueColor, problemColor: value.problemColor }
 }
 
 function parseSettings(value: unknown): KpiSettingsResponse {

@@ -38,27 +38,31 @@ describe("KPI settings API", () => {
     await expect(getKpiSettings("access-token")).resolves.toEqual(settings)
 
     const [input, init] = fetchMock.mock.calls[0]!
-    expect(new URL(String(input)).pathname).toBe(
-      "/api/task-board/kpi-settings"
-    )
+    expect(new URL(String(input)).pathname).toBe("/api/task-board/kpi-settings")
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       "Bearer access-token"
     )
   })
 
   it("loads and saves the one palette shared by every object", async () => {
+    const palette = {
+      version: 1,
+      ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
+      overdueColor: "#7F1D1D",
+      problemColor: "#FF3B30",
+    }
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         jsonResponse({
           version: 3,
-          palette: settings.palette,
+          palette,
         })
       )
       .mockResolvedValueOnce(
         jsonResponse({
           version: 4,
-          palette: settings.palette,
+          palette,
         })
       )
     const input = {
@@ -68,11 +72,12 @@ describe("KPI settings API", () => {
         { fromPercent: 35, toPercent: 100, color: "#16A34A" },
       ],
       overdueColor: "#7F1D1D",
+      problemColor: "#FF3B30",
     }
 
     await expect(getKpiPalette("access-token")).resolves.toEqual({
       version: 3,
-      palette: null,
+      palette,
     })
     await saveKpiPalette("access-token", input)
 

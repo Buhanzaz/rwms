@@ -205,6 +205,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onUpdateWorkerPlan,
   onReorder,
   onDetails,
+  onRequirements,
   onEdit,
   onTake,
   onPause,
@@ -244,6 +245,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   ) => void
   onReorder: (entry: TaskBoardEntryDto, targetIndex: number) => void
   onDetails: (entry: TaskBoardEntryDto) => void
+  onRequirements?: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
@@ -492,6 +494,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
                 futureAvailabilityEligible={futureEntryIds.has(entry.id)}
                 reorderEnabled={!reorderDisabled}
                 onDetails={onDetails}
+                onRequirements={onRequirements}
                 onEdit={onEdit}
                 onTake={onTake}
                 onPause={onPause}

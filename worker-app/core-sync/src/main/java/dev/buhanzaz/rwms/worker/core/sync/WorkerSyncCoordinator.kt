@@ -480,6 +480,8 @@ class WorkerSyncCoordinator @Inject constructor(
                     occurredAt = pending.occurredAt,
                     offlineLeaseId = pending.offlineLeaseId,
                     attachments = pending.attachments.map { it.toRequest() },
+                    expectedVersion = pending.expectedVersion,
+                    missingItemIds = pending.missingItemIds.sorted(),
                 ),
             )
             applyProblemReport(userId, operation, remote, WorkerProblemReportStore.OUTBOX_REPORTED, null)

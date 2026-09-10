@@ -1700,6 +1700,55 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-board/tasks/{taskId}/requirements:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getTaskRequirements
+      description: Warehouse VIEW-authorized requirement state and exact linked recovery checklist.
+      responses:
+        '200':
+          description: Current task requirement states
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRequirements' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-problem-reports/{reportId}/apply-to-all:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - name: reportId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: applyTaskProblemToAll
+      description: Requires USER rwms.write and warehouse EDIT; marks matching catalog resources on ACTIVE tasks in this warehouse. Exact operation replay returns the original affected IDs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplyTaskProblemToAllRequest' }
+      responses:
+        '200':
+          description: Applied task identities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppliedTaskProblemToAll' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-problem-reports:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -3302,8 +3351,9 @@ components:
       additionalProperties: false
     KpiPalette:
       type: object
-      required: [version, ranges, overdueColor]
+      required: [version, ranges, overdueColor, problemColor]
       properties:
+        problemColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
         version: { type: integer, format: int64, minimum: 0 }
         ranges:
           type: array
@@ -3422,6 +3472,7 @@ components:
       type: object
       required: [expectedVersion, ranges, overdueColor]
       properties:
+        problemColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         ranges:
           type: array
@@ -3902,8 +3953,11 @@ components:
       additionalProperties: false
     BoardEntry:
       type: object
-      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, driverAudience, suspended, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, assignments, timerSnapshot]
+      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, driverAudience, suspended, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, assignments, timerSnapshot, hasProblem, incomplete, completedWorkPercent]
       properties:
+        hasProblem: { type: boolean }
+        incomplete: { type: boolean }
+        completedWorkPercent: { type: number, minimum: 0, maximum: 100 }
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
         taskId: { type: string, format: uuid }
@@ -4545,6 +4599,12 @@ components:
       type: object
       required: [expectedTaskVersion]
       properties:
+        availableItemIds:
+          description: Exact confirmed missing item IDs; every missing member of a selected linked group must be included.
+          type: array
+          maxItems: 2000
+          uniqueItems: true
+          items: { type: string, format: uuid }
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
       additionalProperties: false
     CancelTaskRequest:
@@ -4684,8 +4744,9 @@ components:
       additionalProperties: false
     WorkerKpiPalette:
       type: object
-      required: [ranges, overdueColor]
+      required: [ranges, overdueColor, problemColor]
       properties:
+        problemColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
         ranges:
           type: array
           minItems: 1
@@ -4758,8 +4819,11 @@ components:
       additionalProperties: false
     WorkerFeedEntry:
       type: object
-      required: [entryId, version, taskId, routeIndex, routeStepIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, entryType, pinned, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
+      required: [entryId, version, taskId, routeIndex, routeStepIndex, routeStepCount, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, entryType, pinned, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount, hasProblem, incomplete, completedWorkPercent]
       properties:
+        hasProblem: { type: boolean }
+        incomplete: { type: boolean }
+        completedWorkPercent: { type: number, minimum: 0, maximum: 100 }
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         taskId: { type: string, format: uuid }
@@ -4853,8 +4917,9 @@ components:
       additionalProperties: false
     WorkerMaterial:
       type: object
-      required: [id, name, quantity, unit]
+      required: [id, name, quantity, unit, availabilityState]
       properties:
+        availabilityState: { type: string, enum: [AVAILABLE, MISSING, RESTORED, COMPLETED] }
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1 }
         quantity: { type: number, minimum: 0 }
@@ -4862,8 +4927,9 @@ components:
       additionalProperties: false
     WorkerWork:
       type: object
-      required: [id, name, quantity, unit, durationMinutes, comment, sourceMediaIds]
+      required: [id, name, quantity, unit, durationMinutes, comment, sourceMediaIds, availabilityState]
       properties:
+        availabilityState: { type: string, enum: [AVAILABLE, MISSING, RESTORED, COMPLETED] }
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1 }
         quantity: { type: number, minimum: 0 }
@@ -4940,10 +5006,64 @@ components:
             - { type: string, format: uri-reference, pattern: '^/api/media/' }
             - { type: 'null' }
       additionalProperties: false
+    MissingTaskItem:
+      type: object
+      additionalProperties: false
+      required: [itemId, kind, name]
+      properties:
+        itemId: { type: string, format: uuid }
+        kind: { type: string, enum: [WORK, MATERIAL] }
+        name: { type: string }
+    TaskRequirementItem:
+      type: object
+      additionalProperties: false
+      required: [itemId, kind, name, state, linkedItemIds]
+      properties:
+        itemId: { type: string, format: uuid }
+        kind: { type: string, enum: [WORK, MATERIAL] }
+        name: { type: string }
+        state: { type: string, enum: [AVAILABLE, MISSING, RESTORED, COMPLETED] }
+        linkedItemIds:
+          type: array
+          items: { type: string, format: uuid }
+    TaskRequirements:
+      type: object
+      additionalProperties: false
+      required: [taskId, taskVersion, hasProblem, incomplete, completedWorkPercent, items]
+      properties:
+        taskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64 }
+        hasProblem: { type: boolean }
+        incomplete: { type: boolean }
+        completedWorkPercent: { type: number, minimum: 0, maximum: 100 }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TaskRequirementItem' }
+    ApplyTaskProblemToAllRequest:
+      type: object
+      additionalProperties: false
+      required: [operationId]
+      properties:
+        operationId: { type: string, format: uuid }
+    AppliedTaskProblemToAll:
+      type: object
+      additionalProperties: false
+      required: [affectedTaskIds]
+      properties:
+        affectedTaskIds:
+          type: array
+          items: { type: string, format: uuid }
     WorkerProblemReportRequest:
       type: object
       required: [operationId, comment, occurredAt, offlineLeaseId, attachments]
       properties:
+        expectedVersion: { oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }] }
+        missingItemIds:
+          description: Explicit item identities to mark missing immediately; requires expectedVersion when nonempty.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
         operationId:
           description: Stable report identity. Idempotency-Key must equal this UUID.
           type: string
@@ -4959,8 +5079,12 @@ components:
       additionalProperties: false
     WorkerProblemReport:
       type: object
-      required: [reportId, entryId, taskId, routeIndex, entryTitle, comment, occurredAt, recordedAt, attachments]
+      required: [reportId, entryId, taskId, routeIndex, entryTitle, comment, occurredAt, recordedAt, attachments, missingItems, unitNumber]
       properties:
+        missingItems:
+          type: array
+          items: { $ref: '#/components/schemas/MissingTaskItem' }
+        unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
         reportId: { type: string, format: uuid }
         entryId: { type: string, format: uuid }
         taskId: { type: string, format: uuid }
@@ -4997,8 +5121,13 @@ components:
       additionalProperties: false
     TaskProblemReport:
       type: object
-      required: [reportId, entryId, taskId, routeIndex, entryTitle, workerName, comment, occurredAt, recordedAt, readAt, attachments]
+      required: [reportId, entryId, taskId, routeIndex, entryTitle, workerName, comment, occurredAt, recordedAt, readAt, attachments, missingItems, unitNumber, appliedToAll]
       properties:
+        appliedToAll: { type: boolean }
+        missingItems:
+          type: array
+          items: { $ref: '#/components/schemas/MissingTaskItem' }
+        unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
         reportId: { type: string, format: uuid }
         entryId: { type: string, format: uuid }
         taskId: { type: string, format: uuid }
@@ -5027,8 +5156,11 @@ components:
       additionalProperties: false
     WorkerTaskDetail:
       type: object
-      required: [entryId, version, taskId, source, routeIndex, routeStepIndex, routeStepCount, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed]
+      required: [entryId, version, taskId, source, routeIndex, routeStepIndex, routeStepCount, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed, hasProblem, incomplete, completedWorkPercent]
       properties:
+        hasProblem: { type: boolean }
+        incomplete: { type: boolean }
+        completedWorkPercent: { type: number, minimum: 0, maximum: 100 }
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         taskId: { type: string, format: uuid }

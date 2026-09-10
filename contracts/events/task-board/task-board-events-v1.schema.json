@@ -429,6 +429,10 @@
       ],
       "properties": {
         "boardTaskId": {"type": "string", "format": "uuid"},
+        "hasProblem": {"type": "boolean"},
+        "incomplete": {"type": "boolean"},
+        "completedWorkPercent": {"type": "number", "minimum": 0, "maximum": 100},
+        "requirementsRevision": {"type": "string", "format": "uuid"},
         "warehouseId": {"type": "string", "format": "uuid"},
         "externalTaskId": {"$ref": "#/$defs/nullableUuid"},
         "status": {"enum": ["ACTIVE", "DONE", "CANCELLED"]},

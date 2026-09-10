@@ -62,6 +62,7 @@ public class KpiPaletteService {
       paletteRepository.saveAndFlush(palette);
       palette.replace(overdueColor, ranges);
     }
+    if (request.problemColor() != null) palette.changeProblemColor(normalizeColor(request.problemColor()));
     paletteRepository.saveAndFlush(palette);
     settings.setPalette(palette);
     return response(settingsRepository.saveAndFlush(settings));

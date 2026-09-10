@@ -298,6 +298,25 @@ class WorkerGatewayApiContractBoundaryTest {
     }
 
     @Test
+    fun `missing requirement report preserves fenced idempotent wire fields`() {
+        val request = WorkerProblemReportRequestDto(
+            operationId = "99999999-9999-9999-9999-999999999999",
+            comment = "Нет материала: Герметик",
+            occurredAt = "2026-08-09T08:03:00Z",
+            offlineLeaseId = "33333333-3333-3333-3333-333333333333",
+            attachments = emptyList(),
+            expectedVersion = 42,
+            missingItemIds = listOf("77777777-7777-7777-7777-777777777777"),
+        )
+
+        val encoded = json.encodeToString(request)
+
+        assertThat(encoded).contains("\"expectedVersion\":42")
+        assertThat(encoded).contains("\"missingItemIds\":[\"77777777-7777-7777-7777-777777777777\"]")
+        assertThat(encoded).contains("\"attachments\":[]")
+    }
+
+    @Test
     fun `device fixtures encode and decode the public registration shape`() {
         val registration = json.decodeFromString<WorkerDeviceRegistrationDto>(
             """

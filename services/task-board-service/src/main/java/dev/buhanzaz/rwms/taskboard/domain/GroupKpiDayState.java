@@ -106,13 +106,18 @@ public class GroupKpiDayState extends AbstractVersionedEntity {
   }
 
   public void addCompletedSegment(long budgetSeconds, long activeSegmentSeconds) {
+    addCompletedSegment(budgetSeconds, activeSegmentSeconds, true);
+  }
+
+  /** Partial work contributes time evidence without claiming that the task is finished. */
+  public void addCompletedSegment(long budgetSeconds, long activeSegmentSeconds, boolean taskCompleted) {
     budgetSeconds = positive(budgetSeconds);
     activeSegmentSeconds = nonNegative(activeSegmentSeconds);
     completedBudgetSeconds = Math.addExact(completedBudgetSeconds, budgetSeconds);
     earnedRemainingSeconds =
         Math.addExact(
             earnedRemainingSeconds, Math.max(Math.subtractExact(budgetSeconds, activeSegmentSeconds), 0));
-    completedTaskCount = Math.addExact(completedTaskCount, 1);
+    if (taskCompleted) completedTaskCount = Math.addExact(completedTaskCount, 1);
   }
 
   public void transition(

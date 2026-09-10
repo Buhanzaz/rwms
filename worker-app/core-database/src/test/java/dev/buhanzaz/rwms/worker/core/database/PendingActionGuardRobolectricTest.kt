@@ -16,6 +16,52 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class PendingActionGuardRobolectricTest {
     @Test
+    fun `missing requirement retains one fenced report identity and rejects a second stale tap`() = runTest {
+        val database = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(),
+            WorkerDatabase::class.java,
+        ).allowMainThreadQueries().build()
+        try {
+            val now = System.currentTimeMillis()
+            database.sessionDao().upsert(session(now))
+            val store = WorkerLocalStore(database, testPendingPayloadCipher(), Json)
+
+            store.enqueueMissingItem(
+                userId = USER_ID,
+                entryId = ENTRY_ID,
+                routeIndex = 2,
+                expectedVersion = 5,
+                itemId = "material-1",
+                itemKind = "MATERIAL",
+                itemName = "Краска",
+            )
+
+            val operation = database.outboxDao().pending(USER_ID).single()
+            val payload = Json.decodeFromString<PendingWorkerProblemReport>(store.decryptOutboxPayload(operation))
+            val secondTapFailure = runCatching {
+                store.enqueueMissingItem(
+                    userId = USER_ID,
+                    entryId = ENTRY_ID,
+                    routeIndex = 2,
+                    expectedVersion = 5,
+                    itemId = "work-2",
+                    itemKind = "WORK",
+                    itemName = "Покраска",
+                )
+            }.exceptionOrNull()
+
+            assertThat(operation.operationId).isEqualTo(payload.operationId)
+            assertThat(operation.expectedVersion).isEqualTo(5)
+            assertThat(payload.expectedVersion).isEqualTo(5)
+            assertThat(payload.missingItemIds).containsExactly("material-1")
+            assertThat(secondTapFailure).hasMessageThat().contains("ожидает синхронизации")
+            assertThat(database.outboxDao().pending(USER_ID)).containsExactly(operation)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `device reboot rejects new evidence and completion without mutating durable work`() = runTest {
         val database = Room.inMemoryDatabaseBuilder(
             RuntimeEnvironment.getApplication(),

@@ -411,6 +411,32 @@ cursor pages with a personal unread count. Marking a report read stores an
 idempotent per-user receipt; it does not mutate the report or task and later photo
 readiness does not reopen it. The panel uses the public gateway for both routes.
 
+Reports mark the task as problematic; the installation-wide palette exposes
+`problemColor` (initially `#FF3B30`). A nonempty `missingItemIds` also requires the
+observed entry `expectedVersion` and immediately marks the selected work/material
+and its frozen catalog-linked component `MISSING`. Maintenance owns requirement
+identities, normative seconds and deep links, exposed through its private
+`maintenance.task-requirements` read scope. Existing tasks resolve the same source
+snapshot on demand; no database backfill or label matching is used.
+Set `MAINTENANCE_SERVICE_URL` to the private maintenance-service origin. Outside the
+`dev` profile there is no default: missing configuration rejects requirement reads
+explicitly. The `dev` default is `http://127.0.0.1:8087`.
+
+`tasks/{taskId}/requirements` supplies the recovery checklist. Completing available
+work while resources are missing keeps the task `ACTIVE`, `suspended` and
+`incomplete`; source stages are not falsely completed. Completed work volume uses
+normative work seconds. Only that portion of the remaining budget enters the
+existing time-based KPI formula; partial closure does not increment completed-task
+count. Item completion persists across recovery, so later execution earns only the
+remaining budget. Resource-only remainders have zero normative budget.
+
+Restoration confirms exact `availableItemIds`; all missing members of each selected
+linked group must be explicitly included. Confirmed rows become `RESTORED`, while
+other missing groups remain blocked. A manager with warehouse `EDIT` can apply a
+report to all active tasks in that warehouse using `reportId/apply-to-all` and an
+idempotent operation UUID. Matching uses stable catalog node identities, never
+names; custom positions without catalog identities cannot be applied globally.
+
 ## HTTP boundaries
 
 The canonical contract is
@@ -504,7 +530,8 @@ payload or its business state.
 For `MAINTENANCE_REPAIR`, consecutive route entries assigned to the same physical queue are one
 worker execution package. Detail aggregates the complete segment's work, material, comment, and
 source-media snapshots; its duration and timer use only the still-unfinished members. TAKE keeps
-one representative assignment and KPI segment. One version-fenced COMPLETE atomically marks that
+one representative assignment and KPI segment. When no requirements are missing,
+one version-fenced COMPLETE atomically marks that
 representative and every later unfinished shadow member done, records assignment/time audit for
 each, emits one existing queue-entry completion fact per source-mapped repair stage, and promotes
 only the next different route segment. Non-maintenance sources remain entry-scoped. This changes no
@@ -532,9 +559,10 @@ For an already assigned WorkerApp task, its signed lease may instead carry the
 result photo and `COMPLETE` beyond that window: task state, assignment,
 expected version, photo gate and non-future occurrence time remain mandatory.
 `deadlineAt` remains operational task metadata and never vetoes a valid
-completion. Each accepted completion emits the canonical `QUEUE_ENTRY_COMPLETED`
+completion. Each accepted full completion emits the canonical `QUEUE_ENTRY_COMPLETED`
 fact; maintenance consumes the final mapped repair-stage fact to place the
-repair into pending acceptance.
+repair into pending acceptance. Partial completion with missing requirements emits no
+source-stage completion fact and retains the incomplete task for recovery.
 
 Before any live task read, the action path serializes attempts for the
 `operationId` with a transaction-scoped advisory lock. The first successful

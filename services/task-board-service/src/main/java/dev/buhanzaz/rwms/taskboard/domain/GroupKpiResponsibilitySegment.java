@@ -64,6 +64,15 @@ public class GroupKpiResponsibilitySegment extends AbstractVersionedEntity {
     close(GroupKpiSegmentOutcome.COMPLETED, at);
   }
 
+  /** Closes a partial execution with only the newly completed normative budget. */
+  public void completePortion(long completedBudget, OffsetDateTime at) {
+    if (completedBudget < 0 || completedBudget > budgetSeconds) {
+      throw new IllegalArgumentException("Completed budget exceeds responsibility budget");
+    }
+    budgetSeconds = completedBudget;
+    complete(at);
+  }
+
   public void returnToQueue(OffsetDateTime at) {
     close(GroupKpiSegmentOutcome.RETURNED, at);
   }

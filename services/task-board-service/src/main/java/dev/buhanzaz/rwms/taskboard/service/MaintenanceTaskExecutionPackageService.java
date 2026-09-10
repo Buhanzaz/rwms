@@ -122,7 +122,7 @@ final class MaintenanceTaskExecutionPackageService {
     TaskTimerSnapshot timer = current.timerSnapshot();
     if (timer == null
         || packageSteps.size() < 2
-        || packageDurationMinutes == null
+        || packageDurationMinutes == null || packageDurationMinutes == 0
         || isTerminal(current.status())) {
       return timer;
     }

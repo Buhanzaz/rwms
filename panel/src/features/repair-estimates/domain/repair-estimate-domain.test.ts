@@ -168,14 +168,14 @@ describe("catalog estimate additions", () => {
     ])
   })
 
-  it("aggregates catalog materials by node without copying a work comment", () => {
+  it("aggregates catalog materials by node and description without copying a work comment", () => {
     const material = catalogNode("00000000-0000-4000-8000-000000000062", {
       name: "Краска",
       nodeType: "MATERIAL",
     })
     const existing = {
       ...estimateLine("00000000-0000-4000-8000-000000000063", material),
-      description: "Старое описание материала",
+      description: "Краска",
       lineComment: "Комментарий к материалу",
     }
 
@@ -200,6 +200,57 @@ describe("catalog estimate additions", () => {
       comment: "Комментарий к работе",
     })
     expect(newMaterial.lineComment).toBe("")
+  })
+
+  it("preserves a location on work and material and separates their quantities by location", () => {
+    const work = catalogNode("00000000-0000-4000-8000-000000000081", {
+      name: "Покраска",
+      nodeType: "WORK",
+    })
+    const material = catalogNode("00000000-0000-4000-8000-000000000082", {
+      name: "Краска",
+      nodeType: "MATERIAL",
+    })
+    const walls = applyCatalogNodesToEstimateLines({
+      lines: [],
+      nodes: [work, material],
+      quantity: 2,
+      comment: "",
+      locationTitle: "Стена",
+    })
+    const floor = applyCatalogNodesToEstimateLines({
+      lines: walls,
+      nodes: [work, material],
+      quantity: 3,
+      comment: "",
+      locationTitle: "Пол",
+    })
+    const repeatedWalls = applyCatalogNodesToEstimateLines({
+      lines: floor,
+      nodes: [material],
+      quantity: 1,
+      comment: "",
+      locationTitle: "Стена",
+    })
+
+    expect(walls.map((line) => line.description)).toEqual([
+      "Покраска Стена",
+      "Краска Стена",
+    ])
+    expect(
+      repeatedWalls
+        .filter((line) => line.lineType === "MATERIAL")
+        .map((line) => [line.description, line.quantity])
+    ).toEqual([
+      ["Краска Стена", 3],
+      ["Краска Пол", 3],
+    ])
+    expect(repeatedWalls.map((line) => line.catalogSnapshot?.name)).toEqual([
+      "Покраска",
+      "Краска",
+      "Покраска",
+      "Краска",
+    ])
   })
 
   it("keeps photos on one work and strips legacy material fields", () => {

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
+import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
@@ -41,6 +42,42 @@ class MaintenanceCatalogAddSheetInteractionTest {
         renderCatalogAdd(nodeType = "MATERIAL", name = "Тестовый материал")
 
         openAndAssertNextVisible("Тестовый материал")
+    }
+
+    @Test
+    fun `selected location is passed with work and material into the document command`() {
+        val work = catalogNode("WORK", "Покраска")
+        val material = catalogNode("MATERIAL", "Краска").copy(showInMainMenu = false)
+        val wall = catalogNode("LOCATION", "Стена").copy(showInMainMenu = false, includeInEstimate = false)
+        var selected: List<CatalogNodeDto> = emptyList()
+        compose.setContent {
+            ManagerTheme(darkTheme = false) {
+                MaintenanceCatalogStep(
+                    editor = editor(),
+                    uiState = ManagerUiState(
+                        maintenanceCatalogNodes = listOf(work, material, wall),
+                        maintenanceCatalogLinks = listOf(
+                            CatalogLinkDto("work-material", "catalog-1", work.id, material.id, "DEPENDENCY", sortOrder = 0),
+                            CatalogLinkDto("material-wall", "catalog-1", material.id, wall.id, "FOLLOW_UP", sortOrder = 0),
+                        ),
+                    ),
+                    onAddCatalogNodes = { nodes, _, _, _, _, _ -> selected = nodes; true },
+                    onRefreshCatalog = {},
+                    onEdit = {},
+                    onContinue = {},
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Покраска").performClick()
+        compose.onNodeWithContentDescription("Краска").performClick()
+        compose.onNodeWithContentDescription("Стена").performClick()
+        compose.onNodeWithTag("maintenance-catalog-add-next").performClick()
+        compose.runOnIdle {
+            assertThat(selected.map(CatalogNodeDto::id))
+                .containsExactly(work.id, material.id, wall.id).inOrder()
+        }
     }
 
     private fun openAndAssertNextVisible(nodeName: String) {

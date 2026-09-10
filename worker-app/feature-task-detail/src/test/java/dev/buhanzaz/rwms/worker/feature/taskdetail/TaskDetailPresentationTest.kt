@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
+import androidx.compose.ui.graphics.Color
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.network.TaskSourceReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto
@@ -16,6 +17,38 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TaskDetailPresentationTest {
+    @Test
+    fun `partial completion never closes a locally pending task`() {
+        assertThat(shouldCloseAfterAuthoritativeCompletion("DONE", locallyPending = true)).isFalse()
+        assertThat(shouldCloseAfterAuthoritativeCompletion("PAUSED", locallyPending = false)).isFalse()
+        assertThat(shouldCloseAfterAuthoritativeCompletion("DONE", locallyPending = false)).isTrue()
+    }
+
+    @Test
+    fun `committed feed version invalidates an older non-pending detail`() {
+        assertThat(shouldRefreshDetailForCommittedFeed(8, 7, false, false, false, false, 0.0, 0.0, false)).isTrue()
+        assertThat(shouldRefreshDetailForCommittedFeed(8, 7, false, false, false, false, 0.0, 0.0, true)).isFalse()
+        assertThat(shouldRefreshDetailForCommittedFeed(7, 7, true, true, false, false, 0.0, 0.0, false)).isFalse()
+        assertThat(shouldRefreshDetailForCommittedFeed(7, 7, true, true, false, true, 100.0, 80.0, false)).isTrue()
+        assertThat(shouldRefreshDetailForCommittedFeed(8, null, false, false, false, false, 0.0, 0.0, false)).isFalse()
+    }
+
+    @Test
+    fun `missing and restored requirements have explicit card tones`() {
+        assertThat(requirementAvailabilityTone("MISSING")).isEqualTo(RequirementAvailabilityTone.MISSING)
+        assertThat(requirementAvailabilityTone("RESTORED")).isEqualTo(RequirementAvailabilityTone.RESTORED)
+        assertThat(requirementAvailabilityTone("AVAILABLE")).isEqualTo(RequirementAvailabilityTone.DEFAULT)
+        assertThat(restoredRequirementColor).isEqualTo(Color(0xFF238636))
+    }
+
+    @Test
+    fun `missing action requires active eligibility and has no pending report`() {
+        assertThat(canReportMissingRequirement("AVAILABLE", canReportMissing = true)).isTrue()
+        assertThat(canReportMissingRequirement("RESTORED", canReportMissing = true)).isTrue()
+        assertThat(canReportMissingRequirement("MISSING", canReportMissing = true)).isFalse()
+        assertThat(canReportMissingRequirement("AVAILABLE", canReportMissing = false)).isFalse()
+    }
+
     @Test
     fun `cabin transfer exposes exact cargo route materials comments and sibling steps`() {
         val presentation = requireNotNull(

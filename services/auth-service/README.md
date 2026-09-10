@@ -262,7 +262,9 @@ The `task-board-service` machine client always requires an externally supplied
 `TASK_BOARD_CLIENT_SECRET`, including in `dev` and `test`; the retired repository
 credential is rejected even when supplied through the environment. Its exact
 SERVICE scopes and audience are validated before any provisioning mutation.
-`TASK_BOARD_CLIENT_REVISION` defaults to `6`; set a value above the stored revision
+`TASK_BOARD_CLIENT_REVISION` defaults to `7`; this revision adds the separate
+`maintenance.task-requirements` read scope for frozen repair requirements. Each
+machine token still requests exactly one permitted scope. Set a value above the stored revision
 when rotating a previously customized client. Changing this client's secret
 atomically removes its stored authorizations and consents while retaining its
 registered-client identity. Restarting with the same revision and secret preserves

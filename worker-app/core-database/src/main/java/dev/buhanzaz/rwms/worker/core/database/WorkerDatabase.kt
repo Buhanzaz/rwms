@@ -28,7 +28,7 @@ import org.json.JSONObject
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 /**
@@ -489,6 +489,15 @@ abstract class WorkerDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** Persists server-owned incomplete/problem flags for an offline worker feed. */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `worker_task` ADD COLUMN `hasProblem` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `worker_task` ADD COLUMN `incomplete` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `worker_task` ADD COLUMN `completedWorkPercent` REAL NOT NULL DEFAULT 0.0")
+            }
+        }
     }
 }
 
@@ -514,6 +523,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_9_10,
                 WorkerDatabase.MIGRATION_10_11,
                 WorkerDatabase.MIGRATION_11_12,
+                WorkerDatabase.MIGRATION_12_13,
             )
             .build()
 }

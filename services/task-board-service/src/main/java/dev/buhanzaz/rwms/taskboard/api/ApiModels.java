@@ -1081,7 +1081,13 @@ public final class ApiModels {
       @NotBlank @Size(max = 1000) String reason) {}
 
   /** Manager-only reversible suspension command fenced by the observed task version. */
-  public record TaskSuspensionRequest(@NotNull @Min(0) Long expectedTaskVersion) {}
+  public record TaskSuspensionRequest(@NotNull @Min(0) Long expectedTaskVersion,
+      @Size(max = 2000) List<@NotNull UUID> availableItemIds) {
+    public TaskSuspensionRequest {
+      availableItemIds = availableItemIds == null ? List.of() : List.copyOf(availableItemIds);
+    }
+    public TaskSuspensionRequest(Long expectedTaskVersion) { this(expectedTaskVersion, List.of()); }
+  }
 
   public enum PreStartCancellationOutcome {
     CANCELLED,
@@ -1301,7 +1307,24 @@ public final class ApiModels {
       TaskTimerSnapshot timerSnapshot,
       TaskSourceReferenceDto source,
       @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience,
-      boolean suspended) {}
+      boolean suspended,
+      boolean hasProblem, boolean incomplete, double completedWorkPercent) {
+    public BoardEntryDto(UUID id, long version, UUID taskId, UUID externalTaskId,
+        long taskVersion, String title, String unitNumber, TaskStatus taskStatus,
+        LocalDate scheduledDate, TaskLane lane, int priority, boolean pinned,
+        UUID queueId, QueuePurpose queuePurpose, int routeIndex, int queuePosition,
+        EntryType entryType, EntryStatus status, String taskText,
+        Integer plannedDurationMinutes, OffsetDateTime activeStartedAt,
+        OffsetDateTime pausedAt, long activeWorkSeconds, List<AssignmentDto> assignments,
+        TaskTimerSnapshot timerSnapshot, TaskSourceReferenceDto source,
+        DriverTaskAudienceDto driverAudience, boolean suspended) {
+      this(id, version, taskId, externalTaskId, taskVersion, title, unitNumber, taskStatus,
+          scheduledDate, lane, priority, pinned, queueId, queuePurpose, routeIndex,
+          queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt,
+          pausedAt, activeWorkSeconds, assignments, timerSnapshot, source, driverAudience,
+          suspended, false, false, 0);
+    }
+  }
 
   /** Complete manager column or a server-selected native-surface subset of one physical queue. */
   public record BoardColumnDto(

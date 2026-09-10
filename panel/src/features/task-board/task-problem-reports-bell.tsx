@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   useInfiniteQuery,
   useMutation,
@@ -21,6 +21,7 @@ import {
 import {
   listTaskProblemReports,
   markTaskProblemReportRead,
+  applyTaskProblemReportToAll,
   taskProblemReportsQueryKey,
   type TaskProblemReportAttachment,
 } from "@/features/task-board/api/task-problem-reports-api"
@@ -217,15 +218,21 @@ export function TaskProblemReportsBell({
   accessToken,
   warehouseId,
   userId,
+  canApplyToAll = false,
 }: {
   accessToken: string | null
   warehouseId: string | null
   userId: string | null
+  canApplyToAll?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [readErrorReportId, setReadErrorReportId] = useState<string | null>(
     null
   )
+  const [applyErrorReportId, setApplyErrorReportId] = useState<string | null>(
+    null
+  )
+  const applyOperationIds = useRef(new Map<string, string>())
   const queryClient = useQueryClient()
   const queryKey = taskProblemReportsQueryKey(
     warehouseId ?? "none",
@@ -248,6 +255,32 @@ export function TaskProblemReportsBell({
       return queryClient.invalidateQueries({ queryKey })
     },
     onError: (_, reportId) => setReadErrorReportId(reportId),
+  })
+  const applyToAll = useMutation({
+    mutationFn: ({
+      reportId,
+      operationId,
+    }: {
+      reportId: string
+      operationId: string
+    }) =>
+      applyTaskProblemReportToAll(
+        accessToken!,
+        warehouseId!,
+        reportId,
+        operationId
+      ),
+    onSuccess: async (_, variables) => {
+      applyOperationIds.current.delete(variables.reportId)
+      setApplyErrorReportId(null)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey }),
+        queryClient.invalidateQueries({
+          queryKey: ["task-board", warehouseId],
+        }),
+      ])
+    },
+    onError: (_, variables) => setApplyErrorReportId(variables.reportId),
   })
   const reports = reportsQuery.data?.pages.flatMap((page) => page.reports) ?? []
   const unreadCount = reportsQuery.data?.pages[0]?.unreadCount ?? 0
@@ -334,6 +367,55 @@ export function TaskProblemReportsBell({
                     )}
                   </div>
                   <p className="mt-2 whitespace-pre-wrap">{report.comment}</p>
+                  {(report.missingItems ?? []).length ? (
+                    <p className="mt-2 text-xs text-destructive">
+                      Нет:{" "}
+                      {(report.missingItems ?? [])
+                        .map(
+                          (item) =>
+                            `${item.kind === "WORK" ? "работа" : "материал"} «${item.name}»`
+                        )
+                        .join(", ")}
+                      {report.unitNumber ? ` · ${report.unitNumber}` : ""}
+                    </p>
+                  ) : null}
+                  {(report.missingItems ?? []).length &&
+                  !report.appliedToAll &&
+                  canApplyToAll ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="destructive"
+                      className="mt-2"
+                      disabled={applyToAll.isPending}
+                      onClick={() => {
+                        const operationId =
+                          applyOperationIds.current.get(report.reportId) ??
+                          crypto.randomUUID()
+                        applyOperationIds.current.set(
+                          report.reportId,
+                          operationId
+                        )
+                        applyToAll.mutate({
+                          reportId: report.reportId,
+                          operationId,
+                        })
+                      }}
+                    >
+                      Применить ко всем заданиям
+                    </Button>
+                  ) : null}
+                  {applyErrorReportId === report.reportId ? (
+                    <p role="alert" className="mt-2 text-xs text-destructive">
+                      Не удалось применить отсутствие ко всем заданиям.
+                      Повторите попытку.
+                    </p>
+                  ) : null}
+                  {report.appliedToAll ? (
+                    <Badge className="mt-2" variant="destructive">
+                      Применено ко всем заданиям
+                    </Badge>
+                  ) : null}
                   {report.attachments.length ? (
                     <div
                       className="mt-2 flex flex-wrap gap-2"

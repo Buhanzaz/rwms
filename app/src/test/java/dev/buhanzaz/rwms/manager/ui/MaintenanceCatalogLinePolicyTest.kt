@@ -9,6 +9,43 @@ import org.junit.Test
 
 class MaintenanceCatalogLinePolicyTest {
     @Test
+    fun `location survives in both public line descriptions without becoming a billable line`() {
+        val work = node(id = "work", type = "WORK").copy(name = "Покраска")
+        val material = node(id = "material", type = "MATERIAL").copy(name = "Краска")
+        val wall = node(id = "wall", type = "LOCATION", includeInEstimate = false).copy(name = "Стена")
+        val selection = listOf(work, material, wall).filter(CatalogNodeDto::isMaintenanceSelectionNode)
+
+        val result = applyMaintenanceCatalogNodes(editor(), selection, "2", "Осмотр")
+        val publicLines = result.lines.map { line ->
+            maintenanceLineInput(line, selection.associateBy(CatalogNodeDto::id))
+        }
+
+        assertThat(publicLines.map { it.description }).containsExactly("Покраска Стена", "Краска Стена").inOrder()
+        assertThat(publicLines.map { it.catalogSnapshot?.name }).containsExactly("Покраска", "Краска").inOrder()
+        assertThat(publicLines.map { it.lineType }).containsExactly("WORK", "MATERIAL").inOrder()
+    }
+
+    @Test
+    fun `same material at separate locations keeps separate quantities and work selection`() {
+        val work = node(id = "work", type = "WORK")
+        val material = node(id = "material", type = "MATERIAL")
+        val wall = node(id = "wall", type = "LOCATION", includeInEstimate = false)
+        val floor = node(id = "floor", type = "LOCATION", includeInEstimate = false)
+        val wallSelection = listOf(work, material, wall)
+        val first = applyMaintenanceCatalogNodes(editor(), wallSelection, "2", "")
+        val wallWork = first.lines.single { it.lineType == "WORK" }
+        val floorSelection = listOf(work, material, floor)
+        val second = applyMaintenanceCatalogNodes(first, floorSelection, "3", "")
+        val result = applyMaintenanceCatalogNodes(second, wallSelection, "1", "", wallWork.id)
+
+        assertThat(result.lines.filter { it.lineType == "MATERIAL" }.map { it.description to it.quantity })
+            .containsExactly("material wall" to "3", "material floor" to "3").inOrder()
+        assertThat(result.lines.filter { it.lineType == "WORK" }).hasSize(2)
+        assertThat(result.hasSelectedCatalogWork(floorSelection, wallWork.id)).isFalse()
+        assertThat(result.hasSelectedCatalogWork(wallSelection, wallWork.id)).isTrue()
+    }
+
+    @Test
     fun `linked catalog selection applies its comment only to the work`() {
         val work = node(id = "work", type = "WORK")
         val material = node(id = "material", type = "MATERIAL")

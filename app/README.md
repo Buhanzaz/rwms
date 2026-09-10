@@ -78,6 +78,11 @@ repairs, acceptance, and camera/media steps. A screen never owns a durable
 business transition: it sends the public command and then observes or refreshes
 the server result.
 
+The selected catalog location (wall, floor, ceiling, or another configured location)
+is retained in both work and material descriptions. It is not a separate priced
+line. Repeated material quantities merge only when their catalog node and
+description match, so different locations remain distinct in estimates and tasks.
+
 The active inventory screen filters its existing cabin cards by canonical
 number prefix as the manager types; it does not render a separate autocomplete
 list. The add action appears only when no loaded warehouse cabin number starts

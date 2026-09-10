@@ -260,7 +260,9 @@ Machine client `task-board-service` всегда требует внешний
 `TASK_BOARD_CLIENT_SECRET`, включая профили `dev` и `test`; прежний секрет из
 репозитория отклоняется даже при передаче через environment. Точный набор SERVICE
 scopes и audience проверяется до любых изменений provisioning.
-`TASK_BOARD_CLIENT_REVISION` по умолчанию равен `6`; при ротации ранее изменённого
+`TASK_BOARD_CLIENT_REVISION` по умолчанию равен `7`; эта revision добавляет отдельный
+scope чтения `maintenance.task-requirements` для сохранённого состава ремонта.
+Каждый сервисный токен по-прежнему запрашивает ровно один разрешённый scope. При ротации ранее изменённого
 client задайте значение выше сохранённой revision. Смена секрета этого client
 атомарно удаляет его сохранённые authorizations и consents, сохраняя registered-client
 identity. Повторный запуск с той же revision и секретом сохраняет новые grants.

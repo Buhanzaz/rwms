@@ -114,6 +114,24 @@ class GroupKpiEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void partialBudgetAndRestoredRemainderAreCreditedOnlyOnce() {
+    Fixture fixture = fixture(EntryStatus.IN_PROGRESS, List.of());
+    OffsetDateTime started = at(9, 0);
+    evidence.beginSegment(WAREHOUSE_ID, fixture.group().getId(), fixture.entry(), started);
+    evidence.completeSegment(WAREHOUSE_ID, fixture.entry(), started.plusMinutes(10), 2880L);
+    assertThat(day(fixture.group()).getCompletedBudgetSeconds()).isEqualTo(2880);
+    assertThat(day(fixture.group()).getCompletedTaskCount()).isZero();
+    evidence.completeSegment(WAREHOUSE_ID, fixture.entry(), started.plusMinutes(10), 2880L);
+    assertThat(day(fixture.group()).getCompletedBudgetSeconds()).isEqualTo(2880);
+    fixture.entry().retainRequirementBudget(720);
+    entries.saveAndFlush(fixture.entry());
+    evidence.beginSegment(WAREHOUSE_ID, fixture.group().getId(), fixture.entry(), started.plusMinutes(10));
+    evidence.completeSegment(WAREHOUSE_ID, fixture.entry(), started.plusMinutes(12));
+    assertThat(day(fixture.group()).getCompletedBudgetSeconds()).isEqualTo(3600);
+    assertThat(day(fixture.group()).getCompletedTaskCount()).isOne();
+  }
+
+  @Test
   void idleGraceDoesNotPenalizeFirstFiveMinutesAndIdleRequiresAvailableWork() {
     Fixture fixture = fixture(EntryStatus.WAITING, List.of());
     OffsetDateTime idleStartedAt = at(9, 0);

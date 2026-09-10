@@ -130,7 +130,18 @@ public final class TaskBoardEventPayloads {
       Integer plannedDurationMinutes, OffsetDateTime deadlineAt, OffsetDateTime doneAt,
       @JsonInclude(JsonInclude.Include.NON_NULL) DriverTaskAudienceMode driverAudience,
       @JsonInclude(JsonInclude.Include.NON_NULL) UUID plannedDriverWorkerId,
-      boolean deleted, boolean suspended) {
+      boolean deleted, boolean suspended, boolean hasProblem, boolean incomplete,
+      double completedWorkPercent,
+      @JsonInclude(JsonInclude.Include.NON_NULL) UUID requirementsRevision) {
+    public BoardTaskFact(UUID boardTaskId, UUID warehouseId, UUID externalTaskId,
+        TaskStatus status, LocalDate scheduledDate, TaskLane lane, int priority, boolean pinned,
+        Integer plannedDurationMinutes, OffsetDateTime deadlineAt, OffsetDateTime doneAt,
+        DriverTaskAudienceMode driverAudience, UUID plannedDriverWorkerId,
+        boolean deleted, boolean suspended) {
+      this(boardTaskId, warehouseId, externalTaskId, status, scheduledDate, lane, priority,
+          pinned, plannedDurationMinutes, deadlineAt, doneAt, driverAudience,
+          plannedDriverWorkerId, deleted, suspended, false, false, 0, null);
+    }
     public BoardTaskFact(
         UUID boardTaskId, UUID warehouseId, UUID externalTaskId, TaskStatus status,
         LocalDate scheduledDate, TaskLane lane, int priority, boolean pinned,

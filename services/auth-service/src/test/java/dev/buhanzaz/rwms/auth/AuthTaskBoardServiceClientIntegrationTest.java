@@ -43,7 +43,8 @@ class AuthTaskBoardServiceClientIntegrationTest {
                 "warehouse.identity.read",
                 "warehouse.timezone.read",
                 "warehouse.lifecycle.read",
-                "warehouse.lifecycle.confirm")) {
+                "warehouse.lifecycle.confirm",
+                "maintenance.task-requirements")) {
             String body = mvc.perform(token(scope))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.scope").value(scope))

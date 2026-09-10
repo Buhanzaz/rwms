@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.worker.core.database.ServerTimeAnchor
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerSessionEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
@@ -22,6 +23,7 @@ import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -33,12 +35,31 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
 private data class DetailKey(val userId: String, val entryId: String)
+
+/** A newer committed feed projection must replace an older detail before the UI renders its fields. */
+internal fun shouldRefreshDetailForCommittedFeed(
+    taskVersion: Long?,
+    detailVersion: Long?,
+    taskHasProblem: Boolean?,
+    detailHasProblem: Boolean?,
+    taskIncomplete: Boolean?,
+    detailIncomplete: Boolean?,
+    taskCompletedWorkPercent: Double?,
+    detailCompletedWorkPercent: Double?,
+    locallyPending: Boolean,
+): Boolean = !locallyPending && taskVersion != null && detailVersion != null && (
+    taskVersion > detailVersion ||
+        taskHasProblem != detailHasProblem ||
+        taskIncomplete != detailIncomplete ||
+        taskCompletedWorkPercent != detailCompletedWorkPercent
+    )
 
 /**
  * Defines worker feature UI state; server data and authorization remain authoritative.
@@ -51,6 +72,7 @@ data class TaskDetailUiState(
     val assignments: List<WorkerAssignmentEntity> = emptyList(),
     val evidence: List<TaskEvidenceEntity> = emptyList(),
     val retryableEvidenceIds: Set<String> = emptySet(),
+    val hasPendingMissingItemReport: Boolean = false,
     val kpiPalette: WorkerKpiPaletteDto? = null,
     val error: String? = null,
 )
@@ -58,6 +80,7 @@ data class TaskDetailUiState(
 private data class SupportingState(
     val evidence: List<TaskEvidenceEntity>,
     val retryableEvidenceIds: Set<String>,
+    val hasPendingMissingItemReport: Boolean,
     val assignments: List<WorkerAssignmentEntity>,
     val session: WorkerSessionEntity?,
     val categoryPurposes: Map<String, String>,
@@ -94,6 +117,7 @@ class TaskDetailViewModel internal constructor(
     private val key = MutableStateFlow<DetailKey?>(null)
     private val errors = MutableStateFlow<String?>(null)
     private val refreshGeneration = AtomicLong()
+    private val lastFeedRefreshMarker = AtomicReference<String?>(null)
 
     val uiState: StateFlow<TaskDetailUiState> = key.flatMapLatest { requested ->
         if (requested == null) {
@@ -137,6 +161,9 @@ class TaskDetailViewModel internal constructor(
                 SupportingState(
                     evidence = evidence,
                     retryableEvidenceIds = retryable,
+                    hasPendingMissingItemReport = outbox.any {
+                        it.kind == WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT && it.expectedVersion != null
+                    },
                     assignments = assignments,
                     session = session,
                     categoryPurposes = categories.associate { it.queueId to it.queuePurpose },
@@ -164,9 +191,31 @@ class TaskDetailViewModel internal constructor(
                         it.entryId == requested.entryId && it.problemReportId == null
                     },
                     retryableEvidenceIds = evidenceWithRetry.retryableEvidenceIds,
+                    hasPendingMissingItemReport = evidenceWithRetry.hasPendingMissingItemReport,
                     kpiPalette = evidenceWithRetry.kpiPalette,
                     error = error,
                 )
+            }.onEach { state ->
+                val task = state.task
+                val detail = state.detail
+                if (
+                    shouldRefreshDetailForCommittedFeed(
+                        taskVersion = task?.version,
+                        detailVersion = detail?.version,
+                        taskHasProblem = task?.hasProblem,
+                        detailHasProblem = detail?.hasProblem,
+                        taskIncomplete = task?.incomplete,
+                        detailIncomplete = detail?.incomplete,
+                        taskCompletedWorkPercent = task?.completedWorkPercent,
+                        detailCompletedWorkPercent = detail?.completedWorkPercent,
+                        locallyPending = task?.locallyPending == true,
+                    ) &&
+                    lastFeedRefreshMarker.getAndSet(
+                        "${task!!.version}:${task.hasProblem}:${task.incomplete}:${task.completedWorkPercent}",
+                    ) != "${task.version}:${task.hasProblem}:${task.incomplete}:${task.completedWorkPercent}"
+                ) {
+                    refresh()
+                }
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TaskDetailUiState())
@@ -175,6 +224,7 @@ class TaskDetailViewModel internal constructor(
         val next = DetailKey(userId, entryId)
         if (key.value == next) return
         refreshGeneration.incrementAndGet()
+        lastFeedRefreshMarker.set(null)
         key.value = next
         errors.value = null
         refresh()
@@ -216,6 +266,36 @@ class TaskDetailViewModel internal constructor(
         if (evidenceId !in uiState.value.retryableEvidenceIds) return
         requestSync(current.userId)
         errors.value = null
+    }
+
+    /** Enqueues a fenced server command; the synchronized detail/feed remains authoritative. */
+    fun reportMissingItem(itemId: String, itemKind: String, itemName: String) {
+        val current = key.value ?: return
+        val state = uiState.value
+        val detail = state.detail ?: return
+        val task = state.task ?: return
+        if (itemKind !in setOf("WORK", "MATERIAL") || task.locallyPending) return
+        viewModelScope.launch {
+            try {
+                localStore.enqueueMissingItem(
+                    userId = current.userId,
+                    entryId = current.entryId,
+                    routeIndex = detail.routeIndex,
+                    expectedVersion = detail.version,
+                    itemId = itemId,
+                    itemKind = itemKind,
+                    itemName = itemName,
+                )
+                errors.value = null
+                requestSync(current.userId)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                errors.value = exception.safeWorkerUserMessage(
+                    "Не удалось сообщить об отсутствии. Обновите задание и повторите.",
+                )
+            }
+        }
     }
 
     fun perform(action: String, evidenceId: String? = null) {

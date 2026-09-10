@@ -10,6 +10,7 @@ import { canShowWarehouseHtmlImport } from "@/components/site-header-html-import
 import { EquipmentItemCountBadge } from "@/features/equipment/equipment-item-count-badge"
 import { TaskProblemReportsBell } from "@/features/task-board/task-problem-reports-bell"
 import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { HtmlImportHeaderAction } from "@/features/rental-items/html-import/html-import-workspace"
 import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
 import {
@@ -110,6 +111,10 @@ export function SiteHeader() {
           accessToken={accessToken}
           warehouseId={selectedWarehouse?.id ?? null}
           userId={currentUser?.id ?? null}
+          canApplyToAll={Boolean(
+            selectedWarehouse &&
+            hasWarehouseAccess(currentUser, selectedWarehouse.id, "EDIT")
+          )}
         />
         {canImportWarehouseHtml && selectedWarehouse ? (
           <HtmlImportHeaderAction

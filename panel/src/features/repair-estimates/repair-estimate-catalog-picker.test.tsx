@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -673,6 +679,11 @@ describe("RepairEstimateCatalogPicker", () => {
         name: "Выбрать: Проверка двери",
       })
     ).toBeTruthy()
+    expect(
+      onChange.mock.calls[0][0].map(
+        (line: { description: string }) => line.description
+      )
+    ).toEqual(["Монтаж двери Секция А", "Дверь Секция А"])
     expect(screen.queryByRole("button", { name: "Выбрать: Дверь" })).toBeNull()
   })
 
@@ -766,7 +777,9 @@ describe("RepairEstimateCatalogPicker", () => {
     expect(
       screen.getByRole("button", { name: "Выбрать: Третья работа" })
     ).toBeTruthy()
-    expect(screen.getByRole("button", { name: "К корню каталога" })).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "К корню каталога" })
+    ).toBeTruthy()
   })
 
   it("persists the first work before attaching its photos without adding it twice", async () => {
@@ -776,12 +789,14 @@ describe("RepairEstimateCatalogPicker", () => {
     )
     const user = userEvent.setup()
     const onChange = vi.fn()
-    const ensureMediaOwner = vi.fn().mockResolvedValue(
-      maintenanceEstimateMediaOwner(
-        "77777777-7777-4777-8777-777777777701",
-        "77777777-7777-4777-8777-777777777702"
+    const ensureMediaOwner = vi
+      .fn()
+      .mockResolvedValue(
+        maintenanceEstimateMediaOwner(
+          "77777777-7777-4777-8777-777777777701",
+          "77777777-7777-4777-8777-777777777702"
+        )
       )
-    )
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })

@@ -137,6 +137,14 @@ failed reports and their comment, with explicit immutable retry; queued is not
 displayed as delivered. Room 11→12 adds the nullable report association without
 changing existing result photos.
 
+The server may mark a work or material as `MISSING`, including linked requirements.
+Its recycling control creates one version-fenced, encrypted problem-report command
+and remains unavailable until that command is synchronized; the app never performs
+a local availability saga. Missing cards are red, restored cards are green, and the
+server-provided `problemColor` marks the task card. A COMPLETE accepted with missing
+requirements remains visibly incomplete with the server-provided completed-work share.
+Room 12→13 adds these task-projection fields without changing saved reports.
+
 A canonical `LOGISTICS_DRIVER_TASK` transfer is marked
 `Межскладское перемещение` on the task card and opens as `Межскладской рейс`.
 Logistics freezes the source-to-destination route, exact cabin numbers and

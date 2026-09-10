@@ -60,7 +60,8 @@ public class TaskBoardEventPayloadPolicy {
   private static final Map<Class<?>, Set<String>> OPTIONAL_COMPATIBILITY_FIELDS =
       Map.of(
           BoardTaskFact.class,
-          Set.of("driverAudience", "plannedDriverWorkerId", "suspended"),
+          Set.of("driverAudience", "plannedDriverWorkerId", "suspended", "hasProblem", "incomplete",
+              "completedWorkPercent", "requirementsRevision"),
           WorkQueueFact.class,
           Set.of("availableTaskLimit", "workerFeedEnabled"));
 
@@ -99,9 +100,12 @@ public class TaskBoardEventPayloadPolicy {
       Class<?> payloadType = PAYLOAD_TYPES.get(aggregateType);
       requireCanonicalRecordShape(payloadType, payload);
       JsonNode typedPayload = payload;
-      if (payloadType == BoardTaskFact.class && !payload.has("suspended")) {
+      if (payloadType == BoardTaskFact.class) {
         var compatible = (tools.jackson.databind.node.ObjectNode) payload.deepCopy();
-        compatible.put("suspended", false);
+        if (!payload.has("suspended")) compatible.put("suspended", false);
+        if (!payload.has("hasProblem")) compatible.put("hasProblem", false);
+        if (!payload.has("incomplete")) compatible.put("incomplete", false);
+        if (!payload.has("completedWorkPercent")) compatible.put("completedWorkPercent", 0);
         typedPayload = compatible;
       }
       strictObjectMapper.readerFor(payloadType).readValue(typedPayload);

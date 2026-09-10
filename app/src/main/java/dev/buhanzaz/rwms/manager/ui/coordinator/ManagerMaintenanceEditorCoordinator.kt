@@ -620,7 +620,7 @@ internal class ManagerMaintenanceEditorCoordinator(
         val editorMode = activeEditor.mode
         val canonicalNodes = nodes
             .mapNotNull { node -> catalogAccess.nodesById[node.id] }
-            .filter(CatalogNodeDto::isOperationalEstimateNode)
+            .filter(CatalogNodeDto::isMaintenanceSelectionNode)
             .filter { node ->
                 node.isAvailableForMaintenanceMode(
                     mode = editorMode,
@@ -628,7 +628,7 @@ internal class ManagerMaintenanceEditorCoordinator(
                 )
             }
             .distinctBy(CatalogNodeDto::id)
-        if (canonicalNodes.isEmpty()) {
+        if (canonicalNodes.none(CatalogNodeDto::isOperationalEstimateNode)) {
             message("Выбранные позиции больше недоступны в активном каталоге")
             return false
         }

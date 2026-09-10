@@ -45,6 +45,10 @@
   источниками и сверкой публикации.
 - `/api/internal/maintenance/v1/logistics/**` обслуживает оркестрацию смет возврата и
   ремонтных мест для logistics.
+- `/api/internal/maintenance/v1/repairs/{repairId}/task-requirements` отдаёт task-board-service
+  только замороженные требования работ/материалов этапов ремонта с единственным scope
+  `maintenance.task-requirements`. Маршрут не читает изменяемый активный каталог: связи — это
+  транзитивное неориентированное замыкание DEPENDENCY/FOLLOW_UP внутри замороженной версии каталога.
 
 Inventory-service может читать
 `GET /api/internal/maintenance/v1/inventory/return-estimates/{estimateId}` только со своим точным

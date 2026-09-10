@@ -88,6 +88,9 @@ export type TaskBoardEntryDto = {
   timerSnapshot?: TaskBoardTimerSnapshotDto | null
   assignments: TaskBoardAssignmentDto[]
   detailsHref: string | null
+  hasProblem?: boolean
+  incomplete?: boolean
+  completedWorkPercent?: number
 }
 
 export type TaskBoardSnapshotDto = {

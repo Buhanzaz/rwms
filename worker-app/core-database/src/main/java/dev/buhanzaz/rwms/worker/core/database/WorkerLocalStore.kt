@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.worker.core.database
 import android.os.SystemClock
 import androidx.room.withTransaction
 import java.util.UUID
+import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -105,6 +106,52 @@ class WorkerLocalStore @Inject constructor(
         database.outboxDao().observePending(userId)
 
     fun observeConflicts(userId: String): Flow<List<WorkerConflictEntity>> = database.conflictDao().observeOpen(userId)
+
+    /** Queues one version-fenced missing requirement report with a stable identity for replay. */
+    suspend fun enqueueMissingItem(
+        userId: String,
+        entryId: String,
+        routeIndex: Int,
+        expectedVersion: Long,
+        itemId: String,
+        itemKind: String,
+        itemName: String,
+    ) {
+        val lease = requireNotNull(leaseFor(userId)) { "Офлайн-доступ ещё не подготовлен" }
+        require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
+        val operationId = UUID.randomUUID().toString()
+        val payload = PendingWorkerProblemReport(
+            operationId = operationId,
+            routeIndex = routeIndex,
+            comment = if (itemKind == "MATERIAL") "Нет материала: $itemName" else "Недоступна работа: $itemName",
+            occurredAt = Instant.ofEpochMilli(lease.estimatedServerNow(SystemClock.elapsedRealtime())).toString(),
+            offlineLeaseId = requireNotNull(currentLeaseId(userId)),
+            attachments = emptyList(),
+            expectedVersion = expectedVersion,
+            missingItemIds = listOf(itemId),
+        )
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            check(database.outboxDao().pendingProblemReportCount(userId, entryId) == 0) {
+                "Сообщение об отсутствии уже ожидает синхронизации"
+            }
+            database.outboxDao().insert(
+                WorkerOutboxEntity(
+                    operationId = operationId,
+                    userId = userId,
+                    entryId = entryId,
+                    kind = WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT,
+                    encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload)),
+                    expectedVersion = expectedVersion,
+                    state = OUTBOX_PENDING,
+                    retryCount = 0,
+                    createdAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    lastError = null,
+                ),
+            )
+        }
+    }
 
     /**
      * Applies one fenced optimistic task state and its encrypted outbox command atomically.

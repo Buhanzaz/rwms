@@ -157,6 +157,9 @@ export function PaletteSettingsCard({
   const [overdueColor, setOverdueColor] = useState<string | null>(
     settings.palette?.overdueColor ?? null
   )
+  const [problemColor, setProblemColor] = useState<string | null>(
+    settings.palette?.problemColor ?? "#FF3B30"
+  )
   const [newBoundary, setNewBoundary] = useState("50")
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -304,6 +307,7 @@ export function PaletteSettingsCard({
         color: normalizeRgb(range.color)!,
       })),
       overdueColor: normalizeRgb(overdueColor)!,
+      problemColor: normalizeRgb(problemColor)!,
     })
   }
 
@@ -539,6 +543,15 @@ export function PaletteSettingsCard({
             Просроченные задания не используют цвет диапазона 0%.
           </FieldDescription>
           <FieldError>{validationError ?? actionError}</FieldError>
+        </Field>
+        <Field>
+          <FieldLabel>Цвет задания с проблемой</FieldLabel>
+          <ColorPopover label="проблемы" value={problemColor} disabled={blocked} onChange={setProblemColor}>
+            <Button type="button" variant="outline" className="rwms-button-color shadow-sm" style={{ backgroundColor: rangeBackground(problemColor), color: rangeForeground(problemColor) }} disabled={blocked}>
+              Цвет проблемы
+            </Button>
+          </ColorPopover>
+          <FieldDescription>Этот яркий цвет перекрывает KPI, когда рабочий сообщил о проблеме.</FieldDescription>
         </Field>
 
         <div className="flex flex-wrap gap-2">

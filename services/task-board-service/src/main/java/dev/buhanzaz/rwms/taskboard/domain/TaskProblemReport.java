@@ -64,6 +64,37 @@ public class TaskProblemReport extends AbstractVersionedEntity {
   @Column(name = "recorded_at", nullable = false)
   private OffsetDateTime recordedAt;
 
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+  @Column(name = "requested_missing_item_ids", nullable = false, columnDefinition = "jsonb")
+  private String requestedMissingItemIds = "[]";
+
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+  @Column(name = "missing_items", nullable = false, columnDefinition = "jsonb")
+  private String missingItems = "[]";
+
+  @Column(name = "unit_number", length = 64)
+  private String unitNumber;
+
+  @Column(name = "applied_to_all", nullable = false)
+  private boolean appliedToAll;
+
+  @Column(name = "expected_entry_version")
+  private Long expectedEntryVersion;
+
+  public void recordMissingItems(String requestedIds, String items, String location, Long expectedVersion) {
+    requestedMissingItemIds = Objects.requireNonNull(requestedIds);
+    missingItems = Objects.requireNonNull(items);
+    unitNumber = location;
+    expectedEntryVersion = expectedVersion;
+  }
+
+  public String getRequestedMissingItemIds() { return requestedMissingItemIds; }
+  public String getMissingItems() { return missingItems; }
+  public String getUnitNumber() { return unitNumber; }
+  public boolean isAppliedToAll() { return appliedToAll; }
+  public Long getExpectedEntryVersion() { return expectedEntryVersion; }
+  public void appliedToAll() { appliedToAll = true; }
+
   protected TaskProblemReport() {}
 
   /** Creates the server-derived immutable report and assigns its reviewed client operation ID. */

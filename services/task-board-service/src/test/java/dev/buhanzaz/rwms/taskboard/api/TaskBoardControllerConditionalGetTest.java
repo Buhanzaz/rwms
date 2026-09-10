@@ -152,7 +152,7 @@ class TaskBoardControllerConditionalGetTest {
             null,
             List.of(),
             0,
-            1);
+            1, false, false, 0);
     var feedJson = mapper.valueToTree(feedEntry);
     assertThat(feedJson.required("routeStepIndex").asInt()).isZero();
     assertThat(feedJson.required("routeStepCount").asInt()).isOne();
@@ -197,7 +197,7 @@ class TaskBoardControllerConditionalGetTest {
             List.of(),
             List.of(),
             1,
-            false);
+            false, false, false, 0);
 
     var detailJson = mapper.valueToTree(detail);
 

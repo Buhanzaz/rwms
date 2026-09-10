@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -85,6 +86,32 @@ class TaskQueueListComposeTest {
         compose.onNodeWithText("Продолжить выполнение").performClick()
 
         compose.runOnIdle { assertThat(opened.get()).isTrue() }
+    }
+
+    @Test
+    fun `problem task card exposes server incomplete progress`() {
+        compose.setContent {
+            RwmsWorkerTheme {
+                SingleTaskCard(
+                    task = task("blocked").copy(
+                        hasProblem = true,
+                        incomplete = true,
+                        completedWorkPercent = 80.0,
+                    ),
+                    kpiPalette = null,
+                    onOpen = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("task-problem-blocked").assertIsDisplayed()
+        compose.onNodeWithText("Незавершено: 80.0% работ выполнено").assertIsDisplayed()
+    }
+
+    @Test
+    fun `problem task card uses the configured worker palette color`() {
+        assertThat(workerTaskProblemColor("#0A62C9")).isEqualTo(Color(0xFF0A62C9))
+        assertThat(workerTaskProblemColor("not-a-color")).isEqualTo(Color(0xFFFF3B30))
     }
 
     @Test

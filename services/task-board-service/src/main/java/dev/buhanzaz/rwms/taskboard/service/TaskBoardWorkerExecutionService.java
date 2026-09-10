@@ -61,6 +61,7 @@ class TaskBoardWorkerExecutionService {
   private final LinkedQueueContinuationPolicy linkedQueues;
   private final WorkerInvalidationHub workerInvalidations;
   private final WorkerFeedRevisionStore workerFeedRevisions;
+  private final TaskRequirementService requirements;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -84,7 +85,9 @@ class TaskBoardWorkerExecutionService {
       PlanningReplanHoldFence replanHolds,
       LinkedQueueContinuationPolicy linkedQueues,
       WorkerInvalidationHub workerInvalidations,
-      WorkerFeedRevisionStore workerFeedRevisions) {
+      WorkerFeedRevisionStore workerFeedRevisions,
+      TaskRequirementService requirements) {
+    this.requirements = requirements;
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -264,7 +267,7 @@ class TaskBoardWorkerExecutionService {
         Long currentBudget = entry.getCurrentBudgetSeconds();
         if (originalBudget != null && currentBudget != null) {
           long remaining = currentBudget - entry.getActiveWorkSeconds();
-          entry.resetResponsibilitySegment(remaining > 0 ? remaining : originalBudget);
+          requirements.returnBudget(entry, remaining);
         } else {
           entry.setActiveWorkSeconds(0);
         }
@@ -274,7 +277,7 @@ class TaskBoardWorkerExecutionService {
         projectionWriter.save(entries, entry);
       }
     } else {
-      task.restore();
+      requirements.restore(task, request.availableItemIds());
     }
     task = projectionWriter.saveAndFlush(tasks, task);
     projectionWriter.flush();
@@ -342,7 +345,7 @@ class TaskBoardWorkerExecutionService {
       Long currentBudget = entry.getCurrentBudgetSeconds();
       if (originalBudget != null && currentBudget != null) {
         long remaining = currentBudget - entry.getActiveWorkSeconds();
-        entry.resetResponsibilitySegment(remaining > 0 ? remaining : originalBudget);
+        requirements.returnBudget(entry, remaining);
       } else {
         entry.setActiveWorkSeconds(0);
       }
@@ -696,6 +699,9 @@ class TaskBoardWorkerExecutionService {
     List<QueueEntry> taskRoute = entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId());
     List<QueueEntry> completionEntries =
         executionPackages.unfinishedExecutionEntries(entry, taskRoute);
+    if (requirements.hasMissing(entry.getTask(), completionEntries)) {
+      return completeIncomplete(warehouseId, entry, taskRoute, completionEntries);
+    }
     Set<UUID> completionEntryIds =
         completionEntries.stream()
             .map(QueueEntry::getId)
@@ -723,12 +729,10 @@ class TaskBoardWorkerExecutionService {
     streamsToLock.addAll(resumedEntries);
     streamsToLock.addAll(completionEntries);
     if (nextEntry != null) streamsToLock.add(nextEntry);
-    var streamVersions =
-        nextEntry == null
-            ? queuePositions.lockTaskAndEntryStreams(entry.getTask(), streamsToLock)
-            : queuePositions.lockEntryStreams(streamsToLock);
+    var streamVersions = queuePositions.lockTaskAndEntryStreams(entry.getTask(), streamsToLock);
     OffsetDateTime now = now();
     stopTimer(entry, now);
+    var completedRequirements = requirements.completeAvailable(entry.getTask(), completionEntries);
     Set<UUID> completedKpiGroups = kpiEvidence.completeSegment(warehouseId, entry, now);
     entry.setStatus(EntryStatus.DONE);
     entry.setDoneAt(now);
@@ -756,6 +760,12 @@ class TaskBoardWorkerExecutionService {
     if (nextEntry != null) {
       nextEntry.setEntryType(EntryType.REAL);
       projectionWriter.save(entries, nextEntry);
+      if (completedRequirements.tracked()) {
+        projectionWriter.saveAndFlush(tasks, entry.getTask());
+        eventSourcing.taskChanged(entry.getTask(), queuePositions.streamVersion(
+            streamVersions, TaskBoardAggregateType.BOARD_TASK, entry.getTask().getId()),
+            TaskBoardEventTypes.BOARD_TASK_CHANGED);
+      }
     } else {
       entry.getTask().setStatus(TaskStatus.DONE);
       entry.getTask().setDoneAt(now);
@@ -813,6 +823,65 @@ class TaskBoardWorkerExecutionService {
         resumed -> kpiEvidence.refreshEntryGroup(warehouseId, resumed.getId(), now));
     kpiEvidence.refreshWarehouse(warehouseId, now);
     return completedEntry;
+  }
+
+  /** Ends the available portion without exporting a source-stage completion. */
+  private QueueEntry completeIncomplete(UUID warehouseId, QueueEntry entry,
+      List<QueueEntry> route, List<QueueEntry> packageEntries) {
+    BoardTask task = entry.getTask();
+    Set<QueueEntry> unfinished = route.stream().filter(value -> UNFINISHED.contains(value.getStatus()))
+        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Set<QueueEntry> streams = new LinkedHashSet<>(unfinished);
+    streams.addAll(interruptionNeighbours(unfinished));
+    var versions = queuePositions.lockTaskAndEntryStreams(task, streams);
+    OffsetDateTime completedAt = now();
+    Map<UUID, Long> remainingBudgets = requirements.remainingBudgets(task, packageEntries);
+    long budgetBefore = packageEntries.stream().map(QueueEntry::getCurrentBudgetSeconds)
+        .filter(Objects::nonNull).mapToLong(Long::longValue).sum();
+    long creditedBudget = budgetBefore - remainingBudgets.values().stream().mapToLong(Long::longValue).sum();
+    stopTimer(entry, completedAt);
+    requirements.completeAvailable(task, packageEntries);
+    Set<UUID> groups = new LinkedHashSet<>(creditedBudget > 0
+        ? kpiEvidence.completeSegment(warehouseId, entry, completedAt, creditedBudget)
+        : kpiEvidence.returnSegment(warehouseId, entry, completedAt));
+    for (QueueEntry value : unfinished) {
+      if (!value.getId().equals(entry.getId())) {
+        groups.addAll(kpiEvidence.returnSegment(warehouseId, value, completedAt));
+        stopTimer(value, completedAt);
+      }
+      for (TaskAssignment assignment : assignments.findAllByQueueEntryIdAndStatusIn(
+          value.getId(), Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))) {
+        assignment.setStatus(value.getId().equals(entry.getId()) ? AssignmentStatus.DONE : AssignmentStatus.CANCELLED);
+        assignment.setFinishedAt(completedAt);
+        assignment.setPausedAt(null);
+        projectionWriter.save(assignments, assignment);
+        event(value, assignment.getWorker(), assignment.getWorkerGroup(), TimeEventType.FINISHED,
+            "Доступная часть выполнена; ожидаются отсутствующие материалы или работы", null, completedAt);
+      }
+      resolveInterruptions(value, completedAt);
+      closeInterruptedLinks(value, completedAt);
+      if (remainingBudgets.containsKey(value.getId())) {
+        value.retainRequirementBudget(remainingBudgets.get(value.getId()));
+      } else if (value.getCurrentBudgetSeconds() != null) {
+        value.retainRequirementBudget(value.getCurrentBudgetSeconds());
+      } else value.setActiveWorkSeconds(0);
+      value.setStatus(EntryStatus.WAITING);
+      value.setPauseOrigin(null);
+      value.setPausedAt(null);
+      projectionWriter.save(entries, value);
+    }
+    task.closeIncomplete();
+    projectionWriter.saveAndFlush(tasks, task);
+    projectionWriter.flush();
+    for (QueueEntry value : streams) eventSourcing.entryChanged(value,
+        queuePositions.streamVersion(versions, TaskBoardAggregateType.QUEUE_ENTRY, value.getId()),
+        unfinished.contains(value) ? TaskBoardEventTypes.QUEUE_ENTRY_RETURNING : TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
+    eventSourcing.taskChanged(task, queuePositions.streamVersion(versions, TaskBoardAggregateType.BOARD_TASK, task.getId()),
+        TaskBoardEventTypes.BOARD_TASK_CHANGED);
+    unfinished.forEach(value -> ownerProofs.publish(warehouseId, value.getId(), false));
+    groups.forEach(groupId -> kpiEvidence.refreshGroup(warehouseId, groupId, completedAt));
+    kpiEvidence.refreshWarehouse(warehouseId, completedAt);
+    return entry;
   }
 
   /**

@@ -64,6 +64,9 @@ function taskEntry(source: TaskBoardSourceDto | null): TaskBoardEntryDto {
     timerSnapshot: null,
     assignments: [],
     detailsHref: null,
+    hasProblem: false,
+    incomplete: false,
+    completedWorkPercent: 100,
   }
 }
 
@@ -71,6 +74,7 @@ function renderCard(
   source: TaskBoardSourceDto | null,
   {
     onDetails = vi.fn<(entry: TaskBoardEntryDto) => void>(),
+    onRequirements = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onEdit = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onTake = vi.fn<(entry: TaskBoardEntryDto) => void>(),
     onSuspend = vi.fn<(entry: TaskBoardEntryDto) => void>(),
@@ -94,6 +98,7 @@ function renderCard(
     repairComplexity = null,
   }: {
     onDetails?: (entry: TaskBoardEntryDto) => void
+    onRequirements?: (entry: TaskBoardEntryDto) => void
     onEdit?: (entry: TaskBoardEntryDto) => void
     onTake?: (entry: TaskBoardEntryDto) => void
     onSuspend?: (entry: TaskBoardEntryDto) => void
@@ -133,6 +138,7 @@ function renderCard(
       futureAvailabilityEligible={futureAvailabilityEligible}
       reorderEnabled={reorderEnabled}
       onDetails={onDetails}
+      onRequirements={onRequirements}
       onEdit={onEdit}
       onTake={onTake}
       onPause={vi.fn()}
@@ -169,6 +175,7 @@ function CollapsibleCard() {
       routeHighlighted={false}
       fullRouteSelected={false}
       onDetails={vi.fn()}
+      onRequirements={vi.fn()}
       onEdit={vi.fn()}
       onTake={vi.fn()}
       onPause={vi.fn()}
@@ -744,6 +751,42 @@ describe("TaskBoardCard KPI timer presentation", () => {
     expect(card.dataset.kpiColor).toBeUndefined()
     expect(card.style.backgroundColor).toBe("")
     expect(card.className).toContain("bg-muted")
+  })
+
+  it("uses the configured problem color before suspended and timer KPI appearance", () => {
+    renderCard(null, {
+      palette: { ...kpiPalette, problemColor: "#FF3B30" },
+      entryPatch: {
+        hasProblem: true,
+        suspended: true,
+        status: "WAITING",
+      },
+    })
+
+    const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
+    expect(card.dataset.kpiColor).toBe("#FF3B30")
+    expect(card.style.borderColor).toBe("rgb(255, 59, 48)")
+  })
+
+  it("uses the bright red problem default without a configured KPI palette", () => {
+    renderCard(null, { entryPatch: { hasProblem: true, status: "WAITING" } })
+
+    expect(
+      document.querySelector<HTMLElement>('[data-slot="card"]')!.dataset
+        .kpiColor
+    ).toBe("#FF3B30")
+  })
+
+  it("keeps requirements available after a restored task is no longer problematic", async () => {
+    const onRequirements = vi.fn()
+    const user = userEvent.setup()
+    const entry = renderCard(
+      { type: "MAINTENANCE_REPAIR", sourceId: "repair-1" },
+      { onRequirements, entryPatch: { hasProblem: false, incomplete: false } }
+    )
+
+    await user.click(screen.getByRole("button", { name: "Требования" }))
+    expect(onRequirements).toHaveBeenCalledWith(entry)
   })
 
   it("does not present cancelled assignment history as current executors", () => {

@@ -5,16 +5,20 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { TaskProblemReportsBell } from "@/features/task-board/task-problem-reports-bell"
 
-const { listTaskProblemReports, markTaskProblemReportRead } = vi.hoisted(
-  () => ({
-    listTaskProblemReports: vi.fn(),
-    markTaskProblemReportRead: vi.fn(),
-  })
-)
+const {
+  listTaskProblemReports,
+  markTaskProblemReportRead,
+  applyTaskProblemReportToAll,
+} = vi.hoisted(() => ({
+  listTaskProblemReports: vi.fn(),
+  markTaskProblemReportRead: vi.fn(),
+  applyTaskProblemReportToAll: vi.fn(),
+}))
 
 vi.mock("@/features/task-board/api/task-problem-reports-api", () => ({
   listTaskProblemReports,
   markTaskProblemReportRead,
+  applyTaskProblemReportToAll,
   taskProblemReportsQueryKey: (warehouseId: string, userId: string) => [
     "task-board",
     "problem-reports",
@@ -60,6 +64,9 @@ const report = {
   recordedAt: "2026-09-09T10:01:00Z",
   readAt: null,
   attachments: [],
+  missingItems: [],
+  unitNumber: null,
+  appliedToAll: false,
 }
 
 function renderBell() {
@@ -72,6 +79,7 @@ function renderBell() {
         accessToken="token"
         warehouseId="warehouse-1"
         userId="user-1"
+        canApplyToAll
       />
     </QueryClientProvider>
   )
@@ -112,6 +120,84 @@ describe("TaskProblemReportsBell", () => {
       )
     )
     await waitFor(() => expect(listTaskProblemReports).toHaveBeenCalledTimes(2))
+  })
+
+  it("applies a missing item with one idempotency key and invalidates the report list", async () => {
+    const missingReport = {
+      ...report,
+      missingItems: [
+        { itemId: "material-1", kind: "MATERIAL" as const, name: "Краска" },
+      ],
+      unitNumber: "БЫТ-001",
+    }
+    listTaskProblemReports.mockResolvedValue({
+      reports: [missingReport],
+      nextCursor: null,
+      unreadCount: 1,
+    })
+    applyTaskProblemReportToAll.mockResolvedValue({
+      affectedTaskIds: ["task-1"],
+    })
+    vi.stubGlobal("crypto", { randomUUID: () => "operation-1" })
+    const user = userEvent.setup()
+    renderBell()
+
+    await user.click(
+      await screen.findByRole("button", { name: /1 непрочитанных/ })
+    )
+    expect(await screen.findByText(/материал «Краска».*БЫТ-001/)).toBeTruthy()
+    await user.click(
+      screen.getByRole("button", { name: "Применить ко всем заданиям" })
+    )
+
+    await waitFor(() =>
+      expect(applyTaskProblemReportToAll).toHaveBeenCalledWith(
+        "token",
+        "warehouse-1",
+        report.reportId,
+        "operation-1"
+      )
+    )
+    await waitFor(() => expect(listTaskProblemReports).toHaveBeenCalledTimes(2))
+  })
+
+  it("keeps the operation ID when a failed bulk apply is retried", async () => {
+    const missingReport = {
+      ...report,
+      missingItems: [
+        { itemId: "work-1", kind: "WORK" as const, name: "Покраска" },
+      ],
+    }
+    listTaskProblemReports.mockResolvedValue({
+      reports: [missingReport],
+      nextCursor: null,
+      unreadCount: 1,
+    })
+    applyTaskProblemReportToAll
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ affectedTaskIds: [] })
+    vi.stubGlobal("crypto", { randomUUID: () => "operation-retry" })
+    const user = userEvent.setup()
+    renderBell()
+
+    await user.click(
+      await screen.findByRole("button", { name: /1 непрочитанных/ })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Применить ко всем заданиям" })
+    )
+    expect(
+      await screen.findByText(/Не удалось применить отсутствие/)
+    ).toBeTruthy()
+    await user.click(
+      screen.getByRole("button", { name: "Применить ко всем заданиям" })
+    )
+    await waitFor(() =>
+      expect(applyTaskProblemReportToAll).toHaveBeenCalledTimes(2)
+    )
+    expect(
+      applyTaskProblemReportToAll.mock.calls.map((call) => call[3])
+    ).toEqual(["operation-retry", "operation-retry"])
   })
 
   it("explains that reports require a selected warehouse", async () => {

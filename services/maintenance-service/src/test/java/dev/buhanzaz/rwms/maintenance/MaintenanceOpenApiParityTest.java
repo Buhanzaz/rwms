@@ -25,6 +25,7 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceTaskRequirementsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairPlaceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceSettingsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceTransferRepairController;
@@ -87,6 +88,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.CompletedReturnEstimateProofReader;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
+import dev.buhanzaz.rwms.maintenance.service.MaintenanceTaskRequirementsResolver;
 import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryAuthoritativeOutcomeService;
@@ -161,12 +163,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftyNinePathsAndSeventyOneOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allSixtyPathsAndSeventyTwoOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(59);
-    assertThat(openApiOperationCount(document)).isEqualTo(71);
-    assertThat(controllerOperations()).hasSize(71);
+    assertThat(child(document, "paths")).hasSize(60);
+    assertThat(openApiOperationCount(document)).isEqualTo(72);
+    assertThat(controllerOperations()).hasSize(72);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -584,7 +586,11 @@ class MaintenanceOpenApiParityTest {
                     HistoricalShipmentRentalItemStatus.FREE,
                     List.of(),
                     HistoricalShipmentClosureOutcome.NOT_REQUIRED), true));
+    MaintenanceTaskRequirementsResolver taskRequirements = mock(MaintenanceTaskRequirementsResolver.class);
+    when(taskRequirements.resolve(any(), any()))
+        .thenReturn(new RepairTaskRequirementsResponse(ID, ID, List.of()));
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
+            new MaintenanceTaskRequirementsController(authorizer, taskRequirements),
             new MaintenanceCatalogController(service, authorizer),
             new FurnitureEquipmentLinkController(furnitureLinks, authorizer),
             new MaintenanceEstimateController(service, logistics, authorizer),
@@ -676,6 +682,10 @@ class MaintenanceOpenApiParityTest {
     List<ParameterSpec> repairCapacityWarehouse = List.of(path("warehouseId"));
     List<ParameterSpec> idempotency = List.of(requiredHeader("Idempotency-Key"));
     List<OperationSpec> result = new ArrayList<>();
+    result.add(op("GET", "/api/internal/maintenance/v1/repairs/{repairId}/task-requirements",
+        "getRepairTaskRequirements", MaintenanceTaskRequirementsController.class, "get",
+        List.of(path("repairId"), query("warehouseId", true, "uuid", null)),
+        null, null, "200", "RepairTaskRequirements", false, "401", "403", "404"));
     result.add(op("GET", "/api/maintenance/v1/catalog/versions", "listCatalogVersions",
         MaintenanceCatalogController.class, "versions",
         append(List.of(
@@ -2027,6 +2037,8 @@ class MaintenanceOpenApiParityTest {
 
   private static Map<Class<?>, String> schemaMappings() {
     Map<Class<?>, String> values = new LinkedHashMap<>();
+    values.put(RepairTaskRequirementsResponse.class, "RepairTaskRequirements");
+    values.put(RepairTaskRequirementItem.class, "RepairTaskRequirementItem");
     values.put(ActorSnapshot.class, "ActorSnapshot");
     values.put(CabinContentsDispositionLineInput.class, "CabinContentsDispositionLineInput");
     values.put(CabinContentsDispositionPlanInput.class, "CabinContentsDispositionPlanInput");
@@ -2395,6 +2407,7 @@ class MaintenanceOpenApiParityTest {
         MaintenanceCatalogController.class,
         MaintenanceEstimateController.class,
         MaintenanceRepairController.class,
+        MaintenanceTaskRequirementsController.class,
         MaintenanceInventoryController.class,
         CompletedReturnEstimateProofController.class,
         MaintenanceLogisticsController.class,

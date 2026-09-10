@@ -192,6 +192,9 @@ function entry(
     timerSnapshot: timerSnapshot(source.timerSnapshot),
     assignments: list(source.assignments).map(assignment),
     detailsHref: detailsHref(entrySource),
+    hasProblem: source.hasProblem === undefined ? false : boolean(source.hasProblem),
+    incomplete: source.incomplete === undefined ? false : boolean(source.incomplete),
+    completedWorkPercent: source.completedWorkPercent === undefined ? 100 : finiteNumber(source.completedWorkPercent),
   }
 }
 
@@ -340,9 +343,13 @@ export function suspendHttpTaskBoardTask(
 
 export function restoreHttpTaskBoardTask(
   accessToken: string,
-  entry: TaskBoardEntryDto
+  entry: TaskBoardEntryDto,
+  availableItemIds: readonly string[] = []
 ) {
-  return changeTaskSuspension(accessToken, entry, "restore")
+  return bearerRequest<unknown>(accessToken, taskPath(entry, "restore"), {
+    method: "POST",
+    body: JSON.stringify({ expectedTaskVersion: entry.taskVersion, availableItemIds }),
+  }).then(parseBoard)
 }
 
 export function updateHttpTaskBoardWorkerPlan(params: {

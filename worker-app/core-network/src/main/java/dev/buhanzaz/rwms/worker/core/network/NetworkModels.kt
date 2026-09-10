@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.worker.core.network
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
 
 /** Transport models deliberately mirror the public worker OpenAPI contracts. */
 @Serializable
@@ -73,6 +74,7 @@ data class WorkerKpiRangeDto(
 data class WorkerKpiPaletteDto(
     val ranges: List<WorkerKpiRangeDto>,
     val overdueColor: String,
+    val problemColor: String = "#FF3B30",
 )
 
 @Serializable
@@ -166,6 +168,9 @@ data class WorkerFeedEntryDto(
     val assignments: List<WorkerAssignmentDto>,
     val readyEvidenceCount: Int,
     val resultPhotoMinCount: Int,
+    val hasProblem: Boolean = false,
+    val incomplete: Boolean = false,
+    val completedWorkPercent: Double = 0.0,
     // Older persisted feed fixtures have no schedule-aware timer. Null keeps
     // them decodable, but the UI does not continue their wall-clock timer.
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,
@@ -217,6 +222,7 @@ data class WorkerMaterialDto(
     val name: String,
     val quantity: Double,
     val unit: String?,
+    val availabilityState: String = "AVAILABLE",
 )
 
 /**
@@ -234,6 +240,7 @@ data class WorkerWorkDto(
     val comment: String?,
     // Old sanitized Room details predate work-level media binding.
     val sourceMediaIds: List<String> = emptyList(),
+    val availabilityState: String = "AVAILABLE",
 )
 
 @Serializable
@@ -354,6 +361,9 @@ data class WorkerTaskDetailDto(
     val relatedSteps: List<WorkerRelatedStepDto>,
     val resultPhotoMinCount: Int,
     val completionAllowed: Boolean,
+    val hasProblem: Boolean = false,
+    val incomplete: Boolean = false,
+    val completedWorkPercent: Double = 0.0,
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,
 )
 
@@ -405,6 +415,16 @@ data class WorkerProblemReportRequestDto(
     val occurredAt: String,
     val offlineLeaseId: String,
     val attachments: List<EvidenceReservationRequestDto>,
+    val expectedVersion: Long? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val missingItemIds: List<String> = emptyList(),
+)
+
+@Serializable
+data class MissingTaskItemDto(
+    val itemId: String,
+    val kind: String,
+    val name: String,
 )
 
 /** Author-owned report response remains readable while its photos finish after task closure. */
@@ -419,6 +439,8 @@ data class WorkerProblemReportDto(
     val occurredAt: String,
     val recordedAt: String,
     val attachments: List<TaskEvidenceDto>,
+    val missingItems: List<MissingTaskItemDto> = emptyList(),
+    val unitNumber: String? = null,
 )
 
 @Serializable

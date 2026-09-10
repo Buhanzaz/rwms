@@ -812,6 +812,41 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun `migration 12 to 13 preserves task projection and adds problem columns`() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-migration-12-13.db"
+        val versionTwelve = openHelper(
+            context = context,
+            name = name,
+            version = 12,
+            onCreate = { database ->
+                database.execSQL("CREATE TABLE `worker_task` (`localId` TEXT NOT NULL PRIMARY KEY)")
+                database.execSQL("INSERT INTO `worker_task` VALUES ('task')")
+            },
+        )
+        versionTwelve.writableDatabase
+        versionTwelve.close()
+
+        val versionThirteen = openHelper(
+            context = context,
+            name = name,
+            version = 13,
+            onCreate = { error("Expected the version 12 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_12_13.migrate(database) },
+        )
+        versionThirteen.writableDatabase.query(
+            "SELECT `hasProblem`, `incomplete`, `completedWorkPercent` FROM `worker_task` WHERE `localId` = 'task'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getInt(0)).isEqualTo(0)
+            assertThat(cursor.getInt(1)).isEqualTo(0)
+            assertThat(cursor.getDouble(2)).isEqualTo(0.0)
+        }
+        versionThirteen.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

@@ -17,6 +17,8 @@ spring:
             token-uri: ${AUTH_TOKEN_URI:http://localhost:9000/oauth2/token}
 
 rwms:
+  maintenance:
+    base-url: ${MAINTENANCE_SERVICE_URL:http://127.0.0.1:8087}
   security:
     dev-auth-bypass: ${TASK_BOARD_DEV_AUTH_BYPASS:false}
   auth:

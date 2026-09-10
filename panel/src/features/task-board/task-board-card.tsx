@@ -52,6 +52,7 @@ const statusLabels: Record<TaskBoardEntryStatus, string> = {
   DONE: "Завершено",
   CANCELLED: "Отменено",
 }
+const DEFAULT_PROBLEM_COLOR = "#FF3B30"
 
 function formatElapsed(seconds: number) {
   const hours = Math.floor(seconds / 3_600)
@@ -90,6 +91,20 @@ function kpiCardAppearance(
   now: number,
   palette: KpiPalette | null
 ) {
+  if (entry.hasProblem) {
+    const color = /^#[0-9A-F]{6}$/i.test(palette?.problemColor ?? "")
+      ? palette!.problemColor!
+      : DEFAULT_PROBLEM_COLOR
+    return {
+      color,
+      style: {
+        backgroundColor: `color-mix(in srgb, ${color} 22%, var(--card))`,
+        borderColor: color,
+        borderLeftWidth: "4px",
+      } satisfies CSSProperties,
+    }
+  }
+
   if (entry.entryType === "SHADOW" || entry.suspended) {
     return { color: null, style: undefined }
   }
@@ -296,6 +311,11 @@ function TaskBoardCardContent({
         ) : null}
         {entry.suspended ? (
           <Badge variant="secondary">Временно отключено</Badge>
+        ) : null}
+        {entry.incomplete ? (
+          <Badge variant="destructive">
+            Незавершено: {Math.round(entry.completedWorkPercent ?? 0)}%
+          </Badge>
         ) : null}
         <Badge variant="outline">
           Этап {entry.routeIndex + 1} из {entry.routeLength}
@@ -530,6 +550,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   futureAvailabilityEligible = false,
   reorderEnabled = false,
   onDetails,
+  onRequirements,
   onEdit,
   onTake,
   onPause,
@@ -555,6 +576,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   futureAvailabilityEligible?: boolean
   reorderEnabled?: boolean
   onDetails: (entry: TaskBoardEntryDto) => void
+  onRequirements?: (entry: TaskBoardEntryDto) => void
   onEdit: (entry: TaskBoardEntryDto) => void
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
@@ -787,6 +809,19 @@ export const TaskBoardCard = memo(function TaskBoardCard({
             >
               <HugeiconsIcon icon={ViewIcon} data-icon="inline-start" />
               Детали
+            </Button>
+          ) : null}
+          {entry.source?.type === "MAINTENANCE_REPAIR" &&
+          !entry.suspended &&
+          onRequirements ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full"
+              onClick={() => onRequirements(entry)}
+            >
+              Требования
             </Button>
           ) : null}
           {showPause ? (

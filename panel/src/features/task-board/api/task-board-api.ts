@@ -131,7 +131,8 @@ export function suspendTaskBoardTask(
 
 export function restoreTaskBoardTask(
   accessToken: string,
-  entry: TaskBoardEntryDto
+  entry: TaskBoardEntryDto,
+  availableItemIds: readonly string[] = []
 ) {
-  return restoreHttpTaskBoardTask(accessToken, entry)
+  return restoreHttpTaskBoardTask(accessToken, entry, availableItemIds)
 }

@@ -18,6 +18,12 @@ public class KpiPalette extends AbstractVersionedEntity {
   @Column(name = "overdue_color", nullable = false, length = 7)
   private String overdueColor;
 
+  @Column(name = "problem_color", nullable = false, length = 7)
+  private String problemColor = "#FF3B30";
+
+  public String getProblemColor() { return problemColor; }
+  public void changeProblemColor(String value) { problemColor = value; }
+
   @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
   @JoinColumn(name = "palette_id", nullable = false)
   @OrderBy("fromPercent ASC")

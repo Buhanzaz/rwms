@@ -74,6 +74,10 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper json;
 
+  @Autowired dev.buhanzaz.rwms.taskboard.service.TaskRequirementService requirements;
+  @Autowired dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventFactFactory eventFacts;
+  @Autowired dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository tasks;
+
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
@@ -301,6 +305,107 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
         .isNotEqualTo(firstPage.required("reports").required(0).required("reportId"));
   }
 
+  @Test
+  void missingLinkedItemsCloseOnlyAvailableWorkAndRestoreWithoutRecredit() throws Exception {
+    Fixture fixture = fixture();
+    UUID doneWork = UUID.randomUUID();
+    UUID missingWork = UUID.randomUUID();
+    UUID material = UUID.randomUUID();
+    UUID taskId = fixture.entry().taskId();
+    UUID entryId = fixture.entry().id();
+    var requirementItems = List.of(
+        new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(doneWork, "WORK", "Основная работа",
+            null, null, 4800, List.of(), List.of(entryId), "AVAILABLE"),
+        new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(missingWork, "WORK", "Монтаж",
+            null, null, 1200, List.of(material), List.of(entryId), "AVAILABLE"),
+        new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(material, "MATERIAL", "Панель",
+            null, null, 0, List.of(missingWork), List.of(entryId), "AVAILABLE"));
+    jdbc.update("update board_task set requirements=?::jsonb where id=?", json.writeValueAsString(requirementItems), taskId);
+    jdbc.update("update queue_entry set planned_duration_minutes=100,original_budget_seconds=6000,current_budget_seconds=6000,worker_works=?::jsonb,worker_materials=?::jsonb where id=?",
+        json.writeValueAsString(List.of(new TaskWorkSnapshotRequest(doneWork, "Основная работа", 1, "шт", 80, null),
+            new TaskWorkSnapshotRequest(missingWork, "Монтаж", 1, "шт", 20, null))),
+        json.writeValueAsString(List.of(new TaskMaterialSnapshotRequest(material, "Панель", 1, "шт"))), entryId);
+    var request = new LinkedHashMap<>(request(fixture, List.of()));
+    request.put("expectedVersion", workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId).version());
+    request.put("missingItemIds", List.of(material));
+    create(fixture, request).andExpect(status().isCreated())
+        .andExpect(jsonPath("$.missingItems.length()").value(2))
+        .andExpect(jsonPath("$.unitNumber").value("БТ-91"));
+    create(fixture, request).andExpect(status().isOk());
+    var detail = workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId);
+    assertThat(detail.hasProblem()).isTrue();
+    assertThat(detail.works()).filteredOn(work -> work.id().equals(missingWork))
+        .singleElement().satisfies(work -> assertThat(work.availabilityState()).isEqualTo("MISSING"));
+    board.complete(WAREHOUSE, entryId, new VersionCommand(detail.version()), fixture.workerId());
+    var checklist = requirements.get(WAREHOUSE, taskId);
+    assertThat(checklist.incomplete()).isTrue();
+    assertThat(checklist.completedWorkPercent()).isEqualTo(80);
+    assertThat(jdbc.queryForObject("select current_budget_seconds from queue_entry where id=?", Long.class, entryId)).isEqualTo(1200);
+    assertThat(workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId).incomplete()).isTrue();
+    assertThat(jdbc.queryForObject("select count(*) from outbox_event where event_type=?", Integer.class,
+        TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED)).isZero();
+    assertThatThrownBy(() -> board.restoreTask(WAREHOUSE, taskId,
+        new TaskSuspensionRequest(checklist.taskVersion(), List.of(material))))
+        .isInstanceOf(ConflictException.class);
+    board.restoreTask(WAREHOUSE, taskId, new TaskSuspensionRequest(checklist.taskVersion(), List.of(material, missingWork)));
+    detail = workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId);
+    assertThat(detail.works()).filteredOn(work -> work.id().equals(missingWork))
+        .singleElement().satisfies(work -> assertThat(work.availabilityState()).isEqualTo("RESTORED"));
+    board.take(WAREHOUSE, entryId, new TakeEntryRequest(detail.version(), null, fixture.workerId()), fixture.workerId());
+    detail = workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId);
+    board.complete(WAREHOUSE, entryId, new VersionCommand(detail.version()), fixture.workerId());
+    assertThat(requirements.get(WAREHOUSE, taskId).completedWorkPercent()).isEqualTo(100);
+    var persistedFact = json.readTree(jdbc.queryForObject(
+        "select payload::text from domain_event where aggregate_type='BOARD_TASK' and aggregate_id=? order by aggregate_version desc limit 1",
+        String.class, taskId.toString()));
+    var liveFact = json.valueToTree(eventFacts.boardTask(tasks.findById(taskId).orElseThrow(), false));
+    for (String field : List.of("hasProblem", "incomplete", "completedWorkPercent", "requirementsRevision")) {
+      assertThat(liveFact.required(field)).as("Persisted requirement fact %s", field)
+          .isEqualTo(persistedFact.required(field));
+    }
+    assertThat(jdbc.queryForObject("select current_budget_seconds from queue_entry where id=?", Long.class, entryId)).isEqualTo(1200);
+  }
+
+  @Test
+  void bulkApplicationIsWarehouseAuthorizedAndReplaysOriginalAffectedTasks() throws Exception {
+    Fixture fixture = fixture();
+    UUID node = UUID.randomUUID();
+    UUID firstItem = UUID.randomUUID();
+    var sourceItem = new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(firstItem, "MATERIAL", "Общий материал",
+        UUID.randomUUID(), node, 0, List.of(), List.of(fixture.entry().id()), "AVAILABLE");
+    jdbc.update("update board_task set requirements=?::jsonb where id=?",
+        json.writeValueAsString(List.of(sourceItem)), fixture.entry().taskId());
+    UUID definition = jdbc.queryForObject("select definition_id from work_queue where id=?", UUID.class,
+        fixture.entry().queueId());
+    var secondSnapshot = board.createTask(WAREHOUSE, new CreateBoardTaskRequest(null, "Другой ремонт", "БТ-92", null,
+        null, null, List.of(new RouteStepRequest(definition, "Работа", null))));
+    var second = secondSnapshot.columns().stream().flatMap(column -> column.entries().stream())
+        .filter(entry -> !entry.taskId().equals(fixture.entry().taskId())).findFirst().orElseThrow();
+    var secondItem = new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(UUID.randomUUID(), "MATERIAL", "Другое название",
+        UUID.randomUUID(), node, 0, List.of(), List.of(second.id()), "AVAILABLE");
+    jdbc.update("update board_task set requirements=?::jsonb where id=?", json.writeValueAsString(List.of(secondItem)), second.taskId());
+    var reportRequest = new LinkedHashMap<>(request(fixture, List.of()));
+    reportRequest.put("missingItemIds", List.of(firstItem));
+    reportRequest.put("expectedVersion", workerBoard.detail(fixture.workerId(), WAREHOUSE, fixture.entry().id()).version());
+    create(fixture, reportRequest).andExpect(status().isCreated());
+    UUID operation = UUID.randomUUID();
+    String url = PANEL_PATH + "/" + reportRequest.get("operationId") + "/apply-to-all";
+    String body = json.writeValueAsString(Map.of("operationId", operation));
+    mvc.perform(post(url).with(managerJwt(MANAGER, WAREHOUSE, "rwms.read"))
+        .header("Idempotency-Key", operation).contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isForbidden());
+    String first = mvc.perform(post(url).with(managerJwt(MANAGER, WAREHOUSE, "rwms.write"))
+        .header("Idempotency-Key", operation).contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.affectedTaskIds.length()").value(2))
+        .andReturn().getResponse().getContentAsString();
+    String repeated = mvc.perform(post(url).with(managerJwt(MANAGER, WAREHOUSE, "rwms.write"))
+        .header("Idempotency-Key", operation).contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+    assertThat(repeated).isEqualTo(first);
+    assertThat(requirements.get(WAREHOUSE, second.taskId()).items()).singleElement()
+        .satisfies(item -> assertThat(item.state()).isEqualTo("MISSING"));
+  }
+
   private Fixture fixture() {
     var workerClass = registry.createClass(new WorkerClassRequest(0L, "Проблемы", null, null, 10, true));
     var definition = registry.createQueueDefinition(
@@ -403,7 +508,8 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
   private static JwtRequestPostProcessor managerJwt(UUID managerId, UUID warehouseId, String scope) {
     return jwt().jwt(token -> token.subject(managerId.toString()).claim("principal_type", "USER")
         .claim("global_role", "WAREHOUSE_MANAGER").claim("scope", scope)
-        .claim("warehouse_access", List.of(Map.of("warehouseId", warehouseId.toString(), "level", "VIEW"))));
+        .claim("warehouse_access", List.of(Map.of("warehouseId", warehouseId.toString(), "level",
+            scope.contains("rwms.write") ? "EDIT" : "VIEW"))));
   }
 
   private record Fixture(UUID workerId, BoardEntryDto entry, OffsetDateTime occurredAt, UUID leaseId) {}

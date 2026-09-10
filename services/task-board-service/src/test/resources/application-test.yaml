@@ -25,6 +25,12 @@ spring:
           audiences: rwms-services
       client:
         registration:
+          maintenance-task-requirements:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: maintenance.task-requirements
           auth-service:
             provider: auth-service
             client-id: task-board-service

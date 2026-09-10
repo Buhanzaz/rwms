@@ -42,7 +42,8 @@ public record OAuthClientProperties(List<Client> clients) {
                     "warehouse.identity.read",
                     "warehouse.timezone.read",
                     "warehouse.lifecycle.read",
-                    "warehouse.lifecycle.confirm");
+                    "warehouse.lifecycle.confirm",
+                    "maintenance.task-requirements");
     static final String WORKER_ANDROID_CLIENT_ID = "rwms-worker-android";
     static final String DRIVER_ANDROID_CLIENT_ID = "rwms-driver-android";
     public static final String PANEL_CLIENT_ID = "rwms-panel";

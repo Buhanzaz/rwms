@@ -49,6 +49,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(
     controllers = {
       MaintenanceCatalogController.class,
+      dev.buhanzaz.rwms.maintenance.api.MaintenanceTaskRequirementsController.class,
       MaintenanceEstimateController.class,
       MaintenanceInventoryController.class,
       MaintenanceLogisticsController.class,
@@ -90,6 +91,47 @@ class MaintenanceBearerSecurityMockMvcTest {
 
   @MockitoBean RepairPlaceService repairPlaceService;
   @MockitoBean JwtDecoder jwtDecoder;
+  @MockitoBean dev.buhanzaz.rwms.maintenance.service.MaintenanceTaskRequirementsResolver taskRequirements;
+
+  @Test
+  void taskRequirementsAcceptOnlyExactTaskBoardServiceCredential() throws Exception {
+    String path = "/api/internal/maintenance/v1/repairs/" + ID + "/task-requirements";
+    org.mockito.Mockito.when(taskRequirements.resolve(ID, ID)).thenReturn(
+        new dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.RepairTaskRequirementsResponse(ID, ID, java.util.List.of()));
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+        .queryParam("warehouseId", ID.toString())).andExpect(status().isUnauthorized());
+    for (String scope : java.util.List.of("rwms.read", "maintenance.task-requirements maintenance.inventory")) {
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+          .queryParam("warehouseId", ID.toString()).with(jwt().jwt(token -> token.subject("task-board-service")
+              .audience(java.util.List.of("rwms-services")).claim("client_id", "task-board-service")
+              .claim("principal_type", "SERVICE").claim("scope", scope))))
+          .andExpect(status().isForbidden());
+    }
+    for (String principal : java.util.List.of("USER", "WORKER")) {
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+          .queryParam("warehouseId", ID.toString()).with(jwt().jwt(token -> token.subject("task-board-service")
+              .audience(java.util.List.of("rwms-services")).claim("client_id", "task-board-service")
+              .claim("principal_type", principal).claim("scope", "maintenance.task-requirements"))))
+          .andExpect(status().isForbidden());
+    }
+    for (String client : java.util.List.of("maintenance-service", "inventory-service")) {
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+          .queryParam("warehouseId", ID.toString()).with(jwt().jwt(token -> token.subject(client)
+              .audience(java.util.List.of("rwms-services")).claim("client_id", client)
+              .claim("principal_type", "SERVICE").claim("scope", "maintenance.task-requirements"))))
+          .andExpect(status().isForbidden());
+    }
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+        .queryParam("warehouseId", ID.toString()).with(jwt().jwt(token -> token.subject("task-board-service")
+            .audience(java.util.List.of("rwms-worker-api")).claim("client_id", "task-board-service")
+            .claim("principal_type", "SERVICE").claim("scope", "maintenance.task-requirements"))))
+        .andExpect(status().isForbidden());
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+        .queryParam("warehouseId", ID.toString()).with(jwt().jwt(token -> token.subject("task-board-service")
+            .audience(java.util.List.of("rwms-services")).claim("client_id", "task-board-service")
+            .claim("principal_type", "SERVICE").claim("scope", "maintenance.task-requirements"))))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.repairId").value(ID.toString()));
+  }
 
   @Test
   void globalSettingsPermitAdminWritesWithoutWarehouseAndRejectWarehouseManagerWrites()
@@ -154,6 +196,7 @@ class MaintenanceBearerSecurityMockMvcTest {
               operation.path()
                   .replace("{id}", ID.toString())
                   .replace("{inventoryId}", ID.toString())
+                  .replace("{estimateId}", ID.toString())
                   .replace("{findingId}", ID.toString())
                   .replace("{returnId}", ID.toString())
                   .replace("{shipmentId}", ID.toString())

@@ -25,6 +25,8 @@ data class PendingWorkerProblemReport(
     val occurredAt: String,
     val offlineLeaseId: String,
     val attachments: List<PendingEvidenceReservation>,
+    val expectedVersion: Long? = null,
+    val missingItemIds: List<String> = emptyList(),
 )
 
 /** Metadata for one encrypted bundle prepared by feature-camera before it enters a report draft. */
@@ -64,7 +66,8 @@ class WorkerProblemReportStore @Inject constructor(
 ) {
     fun observeDraft(userId: String, entryId: String): Flow<WorkerProblemReportDraftSnapshot?> =
         database.outboxDao().observeEntryProblemReports(userId, entryId).flatMapLatest { reports ->
-            val operation = reports.firstOrNull { it.state != OUTBOX_REPORTED }
+            val operation = reports.firstOrNull { it.state == OUTBOX_DRAFT }
+                ?: reports.firstOrNull { it.state != OUTBOX_REPORTED && isManualProblemReport(it) }
             operation ?: return@flatMapLatest flowOf(null)
             database.evidenceDao().observeForProblemReport(userId, operation.operationId).map { attachments ->
                 operation.toDraftSnapshot(attachments)
@@ -82,9 +85,14 @@ class WorkerProblemReportStore @Inject constructor(
         entryId: String,
         routeIndex: Int,
     ): WorkerProblemReportDraftSnapshot {
-        database.outboxDao().latestUnresolvedProblemReport(userId, entryId)?.let { existing ->
+        database.outboxDao().problemReportDraft(userId, entryId)?.let { existing ->
             return existing.toDraftSnapshot(database.evidenceDao().forProblemReport(userId, existing.operationId))
         }
+        database.outboxDao().unresolvedProblemReports(userId, entryId)
+            .firstOrNull(::isManualProblemReport)
+            ?.let { existing ->
+                return existing.toDraftSnapshot(database.evidenceDao().forProblemReport(userId, existing.operationId))
+            }
         val lease = requireNotNull(leaseFor(userId)) { "Сначала синхронизируйте задание" }
         val leaseId = requireNotNull(database.sessionDao().session(userId)?.leaseId) {
             "Офлайн-доступ ещё не подготовлен"
@@ -112,9 +120,10 @@ class WorkerProblemReportStore @Inject constructor(
             lastError = null,
         )
         return database.withTransaction {
-            val selected = database.outboxDao().latestUnresolvedProblemReport(userId, entryId) ?: operation.also {
-                database.outboxDao().insert(it)
-            }
+            val selected = database.outboxDao().problemReportDraft(userId, entryId)
+                ?: database.outboxDao().unresolvedProblemReports(userId, entryId)
+                    .firstOrNull(::isManualProblemReport)
+                ?: operation.also { database.outboxDao().insert(it) }
             selected.toDraftSnapshot(database.evidenceDao().forProblemReport(userId, selected.operationId))
         }
     }
@@ -264,6 +273,10 @@ class WorkerProblemReportStore @Inject constructor(
     private fun WorkerOutboxEntity.payload(): PendingWorkerProblemReport =
         runCatching { json.decodeFromString<PendingWorkerProblemReport>(pendingPayloadCipher.decrypt(encryptedPayload)) }
             .getOrElse { throw IllegalStateException("Черновик обращения повреждён", it) }
+
+    /** Missing-item reports are action controls, not drafts for the free-form problem sheet. */
+    private fun isManualProblemReport(operation: WorkerOutboxEntity): Boolean =
+        runCatching { operation.payload().missingItemIds.isEmpty() }.getOrDefault(false)
 
     private fun WorkerOutboxEntity.toDraftSnapshot(
         attachments: List<TaskEvidenceEntity>,

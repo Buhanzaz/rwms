@@ -152,6 +152,15 @@ contexts and screens are usable.
   photos. Unread counts and read receipts belong to the signed-in user; acknowledging
   a report refreshes only that user's warehouse report query. Pending photos and
   unavailable reads remain visible, never fabricated as successful or empty results.
+  Resource reports also show the cabin number and missing work/material list.
+  A warehouse editor can apply the same missing catalog resources to all active
+  tasks in that warehouse through the idempotent server command. Problem cards use
+  the separately configurable problem color. Incomplete tasks retain their credited
+  progress; restoration confirms complete linked groups in the server-backed
+  checklist, with missing rows red and restored rows green.
+- Catalog location choices are retained in both work and material descriptions,
+  without creating a priced location line. Material quantities at different
+  locations remain separate.
 - `/settings/warehouses` is presented as **Objects** and edits the warehouse-service aggregate
   directly. The form persists independent production/main checkboxes or one representative parent,
   uses the shared IANA timezone selector with a visible UTC offset, and exposes lifecycle/timezone

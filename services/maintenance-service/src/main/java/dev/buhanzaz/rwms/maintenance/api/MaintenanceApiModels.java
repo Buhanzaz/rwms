@@ -985,6 +985,18 @@ public final class MaintenanceApiModels {
   }
   public record RepairPlanResponse(
       UUID repairId, long repairVersion, List<RepairStageResponse> stages) {}
+  /** Frozen maintenance requirements consumed only by task-board for a repair-owned task. */
+  public record RepairTaskRequirementsResponse(
+      UUID repairId, UUID warehouseId, List<RepairTaskRequirementItem> items) {}
+  public record RepairTaskRequirementItem(
+      UUID itemId,
+      EstimateLineType kind,
+      String name,
+      UUID catalogVersionId,
+      UUID catalogNodeId,
+      long plannedWorkSeconds,
+      List<UUID> linkedItemIds,
+      List<UUID> entryIds) {}
   public record InventorySourceReference(
       UUID inventoryId,
       UUID findingId,

@@ -72,6 +72,48 @@ public class BoardTask extends AbstractVersionedEntity {
   @Column(name = "suspended", nullable = false)
   private boolean suspended;
 
+  @Column(name = "has_problem", nullable = false)
+  private boolean hasProblem;
+
+  @Column(name = "incomplete", nullable = false)
+  private boolean incomplete;
+
+  @Column(name = "completed_work_percent", nullable = false)
+  private double completedWorkPercent;
+
+  @Column(name = "requirements_revision")
+  private UUID requirementsRevision;
+
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+  @Column(name = "requirements", nullable = false, columnDefinition = "jsonb")
+  private String requirements = "[]";
+
+  public boolean isHasProblem() { return hasProblem; }
+  public boolean isIncomplete() { return incomplete; }
+  public double getCompletedWorkPercent() { return completedWorkPercent; }
+  public UUID getRequirementsRevision() { return requirementsRevision; }
+  public String getRequirements() { return requirements; }
+
+  /** Replaces availability under the owning task version and emits an opaque fact revision. */
+  public void recordRequirements(String value, double percent) {
+    requirements = java.util.Objects.requireNonNull(value);
+    completedWorkPercent = percent;
+    requirementsRevision = UUID.randomUUID();
+  }
+
+  public void reportProblem() { hasProblem = true; }
+
+  public void closeIncomplete() {
+    suspend();
+    incomplete = true;
+  }
+
+  public void restoreRequirements(boolean unresolved) {
+    restore();
+    incomplete = false;
+    hasProblem = unresolved;
+  }
+
   public boolean isSuspended() {
     return suspended;
   }

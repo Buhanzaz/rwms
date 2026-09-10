@@ -127,6 +127,12 @@ data class WorkerTaskEntity(
     /** Keeps a claimed or explicitly fixed REAL entry ahead of later route promotions. */
     @ColumnInfo(defaultValue = "0")
     val pinned: Boolean = false,
+    @ColumnInfo(defaultValue = "0")
+    val hasProblem: Boolean = false,
+    @ColumnInfo(defaultValue = "0")
+    val incomplete: Boolean = false,
+    @ColumnInfo(defaultValue = "0.0")
+    val completedWorkPercent: Double = 0.0,
 )
 
 @Entity(tableName = "worker_assignment", indices = [Index(value = ["userId", "entryId"])])

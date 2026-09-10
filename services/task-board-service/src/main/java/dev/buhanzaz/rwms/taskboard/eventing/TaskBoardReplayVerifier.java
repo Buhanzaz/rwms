@@ -271,6 +271,17 @@ public class TaskBoardReplayVerifier {
       }
       compatible.remove("suspended");
     }
+    if (type == TaskBoardAggregateType.BOARD_TASK) {
+      for (String field : List.of("hasProblem", "incomplete", "completedWorkPercent", "requirementsRevision")) {
+        boolean defaultValue = live.path(field).isMissingNode() || live.path(field).isNull()
+            || (live.path(field).isBoolean() && !live.path(field).asBoolean())
+            || (live.path(field).isNumber() && live.path(field).asDouble() == 0);
+        if (!stored.has(field) && defaultValue) {
+          if (compatible == null) compatible = (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+          compatible.remove(field);
+        }
+      }
+    }
     if (type == TaskBoardAggregateType.WORK_QUEUE) {
       for (String field : List.of("availableTaskLimit", "workerFeedEnabled")) {
         if (!stored.has(field)) {

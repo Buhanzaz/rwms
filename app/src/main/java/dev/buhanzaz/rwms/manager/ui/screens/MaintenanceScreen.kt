@@ -109,6 +109,7 @@ import dev.buhanzaz.rwms.manager.ui.catalogDisplayColorNeedsLightContent
 import dev.buhanzaz.rwms.manager.ui.isEmptyMaintenanceEstimate
 import dev.buhanzaz.rwms.manager.ui.isEmptyMaintenanceOutcome
 import dev.buhanzaz.rwms.manager.ui.maintenanceDocumentAlreadySubmitted
+import dev.buhanzaz.rwms.manager.ui.maintenanceCatalogLineDescription
 import dev.buhanzaz.rwms.manager.ui.maintenanceWorkRoutingOptions
 import dev.buhanzaz.rwms.manager.ui.maintenanceHasCoverPhoto
 import dev.buhanzaz.rwms.manager.ui.maintenanceHasPhotos
@@ -1284,7 +1285,7 @@ internal fun MaintenanceCatalogStep(
                     catalogMessage = "Расположение выбирается после связанного материала."
                 } else {
                     openAdd(
-                        nodes = listOf(pendingWork, pendingMaterial),
+                        nodes = listOf(pendingWork, pendingMaterial, node),
                         quantityNode = pendingMaterial,
                         navigationNode = node,
                     )
@@ -2393,7 +2394,11 @@ internal fun maintenanceCatalogExistingWorkCandidates(
         .map(CatalogNodeDto::id)
         .toSet()
     return editor.lines.filter { line ->
-        line.lineType == "WORK" && line.catalogNodeId in workNodeIds
+        line.lineType == "WORK" && line.catalogNodeId in workNodeIds &&
+            (nodes.none { it.nodeType == "LOCATION" } ||
+                nodes.firstOrNull { it.id == line.catalogNodeId }?.let { node ->
+                    line.description == maintenanceCatalogLineDescription(node, nodes)
+                } == true)
     }
 }
 

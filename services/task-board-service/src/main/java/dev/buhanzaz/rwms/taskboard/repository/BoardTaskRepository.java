@@ -15,6 +15,9 @@ import org.springframework.data.repository.query.Param;
 public interface BoardTaskRepository extends JpaRepository<BoardTask, UUID> {
   boolean existsByExternalTaskId(UUID externalTaskId);
 
+  List<BoardTask> findAllByWarehouseIdAndStatusOrderById(
+      UUID warehouseId, dev.buhanzaz.rwms.taskboard.domain.TaskStatus status);
+
   Optional<BoardTask> findByExternalTaskId(UUID externalTaskId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)

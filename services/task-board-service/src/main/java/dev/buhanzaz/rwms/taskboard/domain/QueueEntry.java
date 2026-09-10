@@ -76,6 +76,11 @@ public class QueueEntry extends AbstractVersionedEntity {
   @JdbcTypeCode(SqlTypes.JSON)
   private String workerWorks = "[]";
 
+  @Column(name = "requirements_revision")
+  private UUID requirementsRevision;
+
+  public void requirementsChanged() { requirementsRevision = UUID.randomUUID(); }
+
   @Column(name = "worker_materials", nullable = false, columnDefinition = "jsonb")
   @JdbcTypeCode(SqlTypes.JSON)
   private String workerMaterials = "[]";
@@ -192,6 +197,16 @@ public class QueueEntry extends AbstractVersionedEntity {
 
   public String getWorkerWorks() {
     return workerWorks;
+  }
+
+  /** A fully credited requirement package may retain a zero-budget resource-only remainder. */
+  public void retainRequirementBudget(long remainingSeconds) {
+    if (originalBudgetSeconds == null || remainingSeconds < 0) {
+      throw new IllegalArgumentException("Остаточный бюджет не может быть отрицательным");
+    }
+    currentBudgetSeconds = remainingSeconds;
+    plannedDurationMinutes = Math.toIntExact(Math.floorDiv(remainingSeconds + 59L, 60L));
+    activeWorkSeconds = 0;
   }
 
   public void setWorkerWorks(String value) {

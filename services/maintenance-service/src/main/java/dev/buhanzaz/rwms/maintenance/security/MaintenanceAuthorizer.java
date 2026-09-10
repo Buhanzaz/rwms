@@ -107,6 +107,20 @@ public class MaintenanceAuthorizer {
     }
   }
 
+  /** Restricts task requirement reads to the exact task-board service credential. */
+  public void requireTaskBoardService(Jwt jwt) {
+    if (jwt == null || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !"task-board-service".equals(jwt.getSubject())
+        || !"task-board-service".equals(jwt.getClaimAsString("client_id"))
+        || jwt.getAudience().size() != 1 || !jwt.getAudience().contains("rwms-services")) {
+      throw new AccessDeniedException("Exact task-board-service principal is required");
+    }
+    List<String> granted = scopes(jwt);
+    if (granted.size() != 1 || !"maintenance.task-requirements".equals(granted.getFirst())) {
+      throw new AccessDeniedException("Exact maintenance.task-requirements scope is required");
+    }
+  }
+
   public UUID subjectId(Jwt jwt) {
     if (developmentPublicBypass) return DEV_SUBJECT;
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {

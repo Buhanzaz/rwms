@@ -38,6 +38,9 @@ public class SecurityConfiguration {
       authorize
           .requestMatchers("/api/internal/maintenance/v1/logistics/**")
           .hasAuthority("SCOPE_maintenance.logistics");
+      authorize
+          .requestMatchers("/api/internal/maintenance/v1/repairs/*/task-requirements")
+          .hasAuthority("SCOPE_maintenance.task-requirements");
       if (bypass) authorize.requestMatchers("/api/maintenance/**").permitAll();
       authorize.anyRequest().authenticated();
     });

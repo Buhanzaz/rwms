@@ -252,6 +252,12 @@ public class GroupKpiEvidenceService {
 
   @Transactional
   public Set<UUID> completeSegment(UUID warehouseId, QueueEntry entry, OffsetDateTime at) {
+    return completeSegment(warehouseId, entry, at, null);
+  }
+
+  @Transactional
+  public Set<UUID> completeSegment(UUID warehouseId, QueueEntry entry, OffsetDateTime at,
+      Long completedBudget) {
     List<GroupKpiResponsibilitySegment> completed =
         segments.findAllByQueueEntryIdAndOutcome(
             entry.getId(), GroupKpiSegmentOutcome.OPEN);
@@ -264,7 +270,8 @@ public class GroupKpiEvidenceService {
     LocalDate localDate = clock.localDate(warehouseId, at.toInstant());
     LocalDate dataAvailableFrom = clock.dataAvailableFrom(warehouseId).orElseThrow();
     for (GroupKpiResponsibilitySegment segment : completed) {
-      segment.complete(at);
+      if (completedBudget == null) segment.complete(at);
+      else segment.completePortion(segment.getBudgetSeconds() == 0 ? 0 : completedBudget, at);
       segments.saveAndFlush(segment);
       if (segment.getBudgetSeconds() > 0) {
         DayHandle handle =
@@ -276,7 +283,7 @@ public class GroupKpiEvidenceService {
                 at);
         handle
             .value()
-            .addCompletedSegment(segment.getBudgetSeconds(), segment.getActiveSeconds());
+            .addCompletedSegment(segment.getBudgetSeconds(), segment.getActiveSeconds(), completedBudget == null);
         publish(handle.value(), handle.created());
       }
     }
