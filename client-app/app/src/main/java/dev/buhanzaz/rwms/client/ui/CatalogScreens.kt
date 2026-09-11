@@ -400,7 +400,7 @@ private fun CustomerCatalogContent(
                     state = catalogScroll,
                     modifier = Modifier
                         .fillMaxSize()
-                        .fadeIntoCatalogHeader(24.dp)
+                        .fadeIntoCatalogHeader(8.dp)
                         .testTag("catalog-screen"),
                     contentPadding = PaddingValues(
                         start = 16.dp,
