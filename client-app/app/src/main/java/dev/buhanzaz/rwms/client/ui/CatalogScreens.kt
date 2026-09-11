@@ -286,6 +286,7 @@ fun CabinCatalogScreen(
     onWarehouse: (CustomerWarehouse) -> Unit,
     avatarUrl: String? = null,
     avatarInitials: String? = null,
+    bottomOverlayHeight: Dp = 0.dp,
 ) {
     var furnitureCabin by remember { mutableStateOf<String?>(null) }
     CustomerCatalogContent(
@@ -296,6 +297,7 @@ fun CabinCatalogScreen(
         onMenu = onMenu, onProfile = onProfile, onFilters = onFilters, onLoadMore = onLoadMore,
         onToggleCabin = onToggleCabin, onFurniture = { furnitureCabin = it }, onPhoto = onPhoto,
         onWarehouse = onWarehouse, avatarUrl = avatarUrl, avatarInitials = avatarInitials ?: state.profileInitials(),
+        bottomOverlayHeight = bottomOverlayHeight,
     )
     furnitureCabin?.let { cabinId ->
         FurnitureSheet(
@@ -361,6 +363,7 @@ private fun CustomerCatalogContent(
     avatarUrl: String? = null,
     avatarInitials: String? = null,
     requiresLogin: Boolean = false,
+    bottomOverlayHeight: Dp = 0.dp,
 ) {
     var showFilters by remember { mutableStateOf(false) }
     val catalogScroll = rememberLazyListState()
@@ -405,7 +408,7 @@ private fun CustomerCatalogContent(
                         start = 16.dp,
                         end = 16.dp,
                         top = padding.calculateTopPadding() + 8.dp,
-                        bottom = padding.calculateBottomPadding() + 20.dp,
+                        bottom = maxOf(padding.calculateBottomPadding(), bottomOverlayHeight) + 20.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,

@@ -295,8 +295,8 @@ the presentation policy is in
 [`CustomerPolicies.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerPolicies.kt).
 
 Navigation uses the drawer with the BLOCK BOX logo on all window sizes. A full-width cart action
-below the cabin catalog shows the selected cabin count when nonzero and reserves its own space so
-that it cannot cover the list. Other screens
+overlays the bottom of the cabin catalog when its selected count is nonzero. The list viewport
+continues to the screen edge; measured bottom content padding lets the last card scroll above the action. Other screens
 have no persistent cart shortcut. Forward, back and predictive-back transitions are
 synchronized full-width slides between opaque screens. Back from the cart or
 profile restores the preceding screen; drawer destinations retain the rental catalog (or city

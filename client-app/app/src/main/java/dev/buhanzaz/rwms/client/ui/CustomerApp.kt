@@ -62,6 +62,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -583,8 +585,11 @@ private fun SignedInNavigation(
                         )
                     }
                     entry<CatalogRoute> {
-                        Column(Modifier.fillMaxSize()) {
-                            Box(Modifier.weight(1f)) {
+                        val density = LocalDensity.current
+                        var cartButtonHeight by remember { mutableStateOf(0) }
+                        val cartVisible = state.selectedCabinIds.isNotEmpty()
+                        Box(Modifier.fillMaxSize()) {
+                            Box(Modifier.fillMaxSize()) {
                                 CabinCatalogScreen(
                                     state = state,
                                     onMenu = { coroutineScope.launch { drawerState.open() } },
@@ -596,13 +601,16 @@ private fun SignedInNavigation(
                                     onEquipment = onEquipment,
                                     onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
                                     avatarUrl = state.profile?.avatar?.thumbnailUrl,
+                                    bottomOverlayHeight = if (cartVisible) with(density) { cartButtonHeight.toDp() } else 0.dp,
                                 )
                             }
-                            if (state.selectedCabinIds.isNotEmpty()) {
+                            if (cartVisible) {
                                 CustomerCartButton(
                                     count = state.selectedCabinIds.size,
                                     onClick = { if (backStack.lastOrNull() is CatalogRoute) backStack.add(CartRoute) },
-                                    modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding()
+                                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                        .onSizeChanged { cartButtonHeight = it.height }
+                                        .navigationBarsPadding().imePadding()
                                         .padding(horizontal = 16.dp, vertical = 12.dp),
                                 )
                             }
