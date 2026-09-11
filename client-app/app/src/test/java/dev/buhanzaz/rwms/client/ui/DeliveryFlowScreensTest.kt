@@ -154,9 +154,9 @@ class DeliveryFlowScreensTest {
         composeRule.onNodeWithText("12 500 ₽").assertExists()
         composeRule.onNodeWithText("Особая зона доставки", substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("Изохрона", substring = true).assertDoesNotExist()
-        val explanationBounds = composeRule.onNodeWithTag("delivery-date-explanation").fetchSemanticsNode().boundsInRoot
-        val priceBounds = composeRule.onNodeWithTag("delivery-price").fetchSemanticsNode().boundsInRoot
-        assertThat(priceBounds.top).isAtLeast(explanationBounds.bottom)
+        composeRule.onNodeWithTag("delivery-date-explanation").assertDoesNotExist()
+        composeRule.onNodeWithText("Доставка · шаг 2 из 4").assertDoesNotExist()
+        composeRule.onNodeWithTag("delivery-price").assertIsDisplayed()
         val firstDateBounds = composeRule.onNodeWithTag("delivery-date-2026-09-01")
             .fetchSemanticsNode().boundsInRoot
         assertThat(priceBounds.bottom).isAtMost(firstDateBounds.top)

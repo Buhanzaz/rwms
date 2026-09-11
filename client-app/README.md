@@ -141,7 +141,7 @@ from the warehouse service's `city` field; warehouses in the same city retain se
 show an address/name to distinguish them. The inset header centers the city between menu and
 profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
 selected warehouse's inquiry. A filter action expands an opaque, scrollable facet panel over the cabins without shifting them.
-The cabin list is clipped below the fixed header, fades into that boundary and extends to the bottom screen edge. Each change
+The cabin list extends behind the header and to the bottom screen edge. Like WorkerApp, a 24dp fade inside the header fully hides rows above its fade band. Each change
 and reset immediately requests server results; rapid changes retain the latest choice until the
 current request finishes. Each single-choice filter occupies one full row; its options open
 downward as one attached surface, push the following filters down and close after selection.
@@ -200,6 +200,8 @@ rescheduling offers; fixed windows retain their time ordering. Date/time steps s
 server delivery price once when all offers have the same price; differing prices remain explicit
 on their rows. Confirmation shows the hold deadline in the selected warehouse’s timezone. The
 server remains responsible for hold expiry and the final bill.
+Date/time screens omit step counters; date rows retain one downward preview arrow. Checkout and
+payment share a printed receipt treatment with a BLOCK BOX heading, dashed rules and a torn-paper edge.
 
 The map uses the stylable `MapType.VECTOR_MAP` in flat 2D mode at the logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a
 bottom-right current-location arrow. A tapped, suggested or device point is rendered immediately

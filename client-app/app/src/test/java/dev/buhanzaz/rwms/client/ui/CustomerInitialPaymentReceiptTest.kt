@@ -38,7 +38,8 @@ class CustomerInitialPaymentReceiptTest {
                 CustomerInitialPaymentReceipt(CustomerObservedPayment(payment, SystemClock.elapsedRealtime()), false) { confirms++ }
             }
         }
-        compose.onNodeWithText("СЧЁТ НА ОПЛАТУ · НЕ ФИСКАЛЬНЫЙ ЧЕК").assertIsDisplayed()
+        compose.onNodeWithText("СЧЁТ НА ОПЛАТУ").assertIsDisplayed()
+        compose.onNodeWithText("НЕ ФИСКАЛЬНЫЙ ЧЕК").assertIsDisplayed()
         compose.onNodeWithText("3 шт. × 350 ₽/мес. × 2 мес.").assertDoesNotExist()
         compose.onNodeWithText("14 100 ₽").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("initial-payment-receipt-details-toggle").performScrollTo().performClick()

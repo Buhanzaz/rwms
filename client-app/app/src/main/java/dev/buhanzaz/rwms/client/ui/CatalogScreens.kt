@@ -389,23 +389,22 @@ private fun CustomerCatalogContent(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
-            // This pane starts below the fixed header, so a cabin cannot be drawn above it while scrolling.
+            // Match WorkerApp: the viewport extends behind the header; only its last 24dp fade in.
             Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(top = padding.calculateTopPadding())
                     .clipToBounds(),
             ) {
                 LazyColumn(
                     state = catalogScroll,
                     modifier = Modifier
                         .fillMaxSize()
-                        .fadeIntoCatalogHeader(8.dp)
+                        .fadeIntoCatalogHeader((padding.calculateTopPadding() - 8.dp).coerceAtLeast(1.dp))
                         .testTag("catalog-screen"),
                     contentPadding = PaddingValues(
                         start = 16.dp,
                         end = 16.dp,
-                        top = 8.dp,
+                        top = padding.calculateTopPadding() + 8.dp,
                         bottom = padding.calculateBottomPadding() + 20.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -471,7 +470,7 @@ private fun CustomerCatalogContent(
                 }
                 AnimatedVisibility(
                     visible = showFilters,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = padding.calculateTopPadding()).padding(horizontal = 16.dp),
                     enter = expandVertically(expandFrom = Alignment.Top),
                     exit = shrinkVertically(shrinkTowards = Alignment.Top),
                 ) {
@@ -491,14 +490,14 @@ private fun CustomerCatalogContent(
     }
 }
 
-/** Fades cabins into the clipped catalog edge immediately below the fixed header. */
-private fun Modifier.fadeIntoCatalogHeader(fadeEnd: Dp): Modifier =
+/** Matches WorkerApp's 24dp mask inside the header and fully hides every pixel above that band. */
+private fun Modifier.fadeIntoCatalogHeader(headerBottom: Dp): Modifier =
     graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithCache {
             val mask = Brush.verticalGradient(
                 colors = listOf(Color.Transparent, Color.Black),
-                startY = 0f,
-                endY = fadeEnd.toPx().coerceAtLeast(1f),
+                startY = (headerBottom - 24.dp).toPx().coerceAtLeast(0f),
+                endY = headerBottom.toPx().coerceAtLeast(1f),
             )
             onDrawWithContent {
                 drawContent()

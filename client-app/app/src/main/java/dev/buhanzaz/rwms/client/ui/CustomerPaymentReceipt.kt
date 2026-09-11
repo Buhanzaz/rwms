@@ -2,18 +2,20 @@ package dev.buhanzaz.rwms.client.ui
 
 import android.os.SystemClock
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.Schedule
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -29,6 +31,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -45,6 +50,43 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 
 internal const val CUSTOMER_PAYMENT_CHECKING_MESSAGE = "Проверяем результат оплаты…"
+
+/** Paper edge shared by the order preview and its server-issued payment receipt. */
+internal val CustomerReceiptShape = GenericShape { size, _ ->
+    val tooth = size.width / 24f
+    val depth = tooth / 2f
+    moveTo(0f, 0f)
+    lineTo(size.width, 0f)
+    lineTo(size.width, size.height - depth)
+    for (index in 23 downTo 0) {
+        lineTo((index + 0.5f) * tooth, size.height)
+        lineTo(index * tooth, size.height - depth)
+    }
+    close()
+}
+
+/** Printed-style heading used consistently before checkout and payment. */
+@Composable
+internal fun CustomerReceiptHeading(title: String) {
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("BLOCK BOX", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleLarge)
+        Text(title, fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelMedium)
+        CustomerReceiptDivider()
+    }
+}
+
+/** Dashed printed rule separating receipt facts and totals. */
+@Composable
+internal fun CustomerReceiptDivider() {
+    val color = MaterialTheme.colorScheme.outlineVariant
+    Canvas(Modifier.fillMaxWidth().height(1.dp)) {
+        drawLine(color, Offset(0f, size.height / 2), Offset(size.width, size.height / 2),
+            strokeWidth = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())))
+    }
+}
 
 /** Receipt plus monotonic observation time: changing the device clock cannot extend payment. */
 data class CustomerObservedPayment(val payment: CustomerOrderPayment, val receivedElapsedMillis: Long) {
@@ -84,10 +126,11 @@ fun CustomerInitialPaymentReceipt(
     Surface(
         modifier = Modifier.fillMaxWidth().testTag("initial-payment-receipt"),
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        shape = RoundedCornerShape(16.dp),
+        shape = CustomerReceiptShape,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            CustomerReceiptHeading("СЧЁТ НА ОПЛАТУ")
             if (receipt == null) {
                 Text("Счёт ещё не выставлен. Оплата не подтверждена.")
                 if (payment.state == null && payment.expiresAt == null && payment.orderStatus == "SAVED") {
@@ -99,14 +142,16 @@ fun CustomerInitialPaymentReceipt(
                     )
                 }
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Заказ № ${receipt.orderNumber}", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "СЧЁТ НА ОПЛАТУ · НЕ ФИСКАЛЬНЫЙ ЧЕК",
+                        "НЕ ФИСКАЛЬНЫЙ ЧЕК",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                CustomerReceiptDivider()
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Итого", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -176,7 +221,7 @@ fun CustomerInitialPaymentReceipt(
                     )
                 }
                 if (detailsVisible) {
-                    HorizontalDivider()
+                    CustomerReceiptDivider()
                     receipt.lines.forEach { line ->
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
