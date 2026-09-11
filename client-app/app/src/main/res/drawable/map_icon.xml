@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native vector representation of the supplied map_icon.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="56dp" android:height="56dp"
+    android:viewportWidth="263" android:viewportHeight="264">
+    <path android:pathData="M230.125,110C230.125,187 131.5,253 131.5,253C131.5,253 32.875,187 32.875,110C32.875,83.7436 43.2658,58.5625 61.7616,39.9964C80.2574,21.4303 105.343,11 131.5,11C157.657,11 182.743,21.4303 201.238,39.9964C219.734,58.5625 230.125,83.7436 230.125,110Z"
+        android:strokeColor="#234467" android:strokeWidth="4"
+        android:strokeLineCap="round" android:strokeLineJoin="round">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="230.531" android:startY="10.8642"
+                android:endX="31.5701" android:endY="252.395">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#BF549AC5" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#549AC5" android:fillType="evenOdd"
+        android:pathData="M159.514,79.563L181.582,58.4803H135.437V79.5618L159.514,79.563ZM135.437,107.118H157.533V86.0361H135.437V107.118ZM186.378,107.118V63.0335L164.276,84.1443V107.118H186.378ZM128.684,113.599H193.124V52H128.684V113.599Z" />
+    <path android:fillColor="#204B79" android:fillType="evenOdd"
+        android:pathData="M106.589,134.673H128.692V113.598H106.589V134.673ZM77.7441,157.683L99.8452,136.565V113.599H77.7429V157.684L77.7441,157.683ZM128.692,162.229V141.146H104.61L82.5418,162.229H128.692ZM71.0012,168.709H135.437V107.118H71L71.0012,168.709Z" />
+</vector>

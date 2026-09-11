@@ -173,23 +173,17 @@ internal fun CustomerStoreLogo(
 @Composable
 internal fun CustomerStoreBackground(
     modifier: Modifier = Modifier,
-    videoBackgroundEnabled: Boolean = false,
+    videoBackgroundEnabled: Boolean = true,
 ) {
-    val artworkAlpha = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.2f
-    Box(modifier.background(MaterialTheme.colorScheme.background)) {
+    if (videoBackgroundEnabled) {
+        CustomerWelcomeAtmosphere(modifier)
+    } else {
         Image(
             painter = painterResource(R.drawable.background_caustic_poster),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            alpha = artworkAlpha,
-            modifier = Modifier.matchParentSize(),
+            modifier = modifier,
         )
-        if (videoBackgroundEnabled && LocalCustomerStoreVideoBackgroundEnabled.current && !LocalInspectionMode.current) {
-            CustomerVideoBackground(
-                videoRes = R.raw.background_caustic,
-                modifier = Modifier.matchParentSize().graphicsLayer { alpha = artworkAlpha },
-            )
-        }
     }
 }
 

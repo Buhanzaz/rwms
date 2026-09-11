@@ -3,8 +3,6 @@ package dev.buhanzaz.rwms.client.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PointF
 import android.location.LocationManager
 import android.os.CancellationSignal
@@ -537,7 +535,7 @@ private class YandexDeliveryMapHandle(
     private val map: Map = mapView.mapWindow.map
     private val markerImage = deliveryMarkerImage(context)
     private val markerStyle = IconStyle()
-        .setAnchor(PointF(0.5f, 1f))
+        .setAnchor(PointF(0.5f, 253f / 264f))
         .setScale(1f)
         .setZIndex(10f)
     private val lifecycleObserver = YandexMapLifecycleObserver(mapView)
@@ -751,28 +749,17 @@ private fun GeoObject.toDeliveryLocation(
     return GeocodedDeliveryLocation(address, point.latitude, point.longitude)
 }
 
-/** Renders the imported SVG wordmark at display density with a tip anchored to the selected point. */
+/** Renders map_icon.svg at display density; the original pin tip anchors the selected point. */
 private fun deliveryMarkerImage(context: Context): ImageProvider {
     val density = context.resources.displayMetrics.density
-    val width = (104f * density).roundToInt().coerceAtLeast(1)
+    val width = (56f * 263f / 264f * density).roundToInt().coerceAtLeast(1)
     val height = (56f * density).roundToInt().coerceAtLeast(1)
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap).apply { scale(density, density) }
-    val pin = Path().apply {
-        moveTo(44f, 43f)
-        lineTo(52f, 56f)
-        lineTo(60f, 43f)
-        close()
-    }
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
-    }
-    canvas.drawPath(pin, paint)
-    canvas.drawRoundRect(0f, 0f, 104f, 46f, 8f, 8f, paint)
-    val logo = requireNotNull(ContextCompat.getDrawable(context, R.drawable.block_box_logo_svg))
-    logo.setBounds(8, 5, 96, 41)
+    val canvas = Canvas(bitmap)
+    val logo = requireNotNull(ContextCompat.getDrawable(context, R.drawable.map_icon))
+    logo.setBounds(0, 0, width, height)
     logo.draw(canvas)
-    return ImageProvider.fromBitmap(bitmap, true, "block-box-svg-delivery-pin-${context.resources.displayMetrics.densityDpi}")
+    return ImageProvider.fromBitmap(bitmap, true, "map-icon-svg-${context.resources.displayMetrics.densityDpi}")
 }
 
 /** MapKit styling changes presentation only; roads, addresses and provider labels remain native. */

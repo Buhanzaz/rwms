@@ -49,7 +49,7 @@ because the current auth contract has no recovery operation. It never reports a 
 
 The shared design follows the active Panel and Logistics interfaces: cool white surfaces,
 restrained borders and shadows, and neutral graphite dark surfaces. The caustic artwork remains a
-subtle shared background behind signed-in screens. Cyrillic Geist is used for
+full-strength animated background behind signed-in screens. Cyrillic Geist is used for
 headings and body copy; the approved gradient actions retain their Golos Text typography.
 The SIL Open Font Licenses are packaged under
 `app/src/main/assets/licenses/`. The approved 12 dp gradient buttons keep their shadow and press
@@ -58,7 +58,7 @@ and accessible touch targets. The wordmark has a contrasting dark appearance. Th
 icon fills the system mask with the supplied gradient and preserves both complete glyphs from [`Logo_App.svg`](../Logo_App.svg), without an inset card around the artwork.
 The silent caustic Media3 loop is the background of every application screen, pauses outside the foreground and
 is released when its screen composition leaves. The signed-out flow keeps its own full-strength loop; the
-application shell supplies the restrained loop for loading, guest and signed-in content, so no route has two
+application shell supplies the same full-strength loop for loading, guest and signed-in content, so no route has two
 players. Its light palette is retained independently of the catalog appearance. A poster extracted from the same
 video at the supplied form reference phase supports initial drawing and deterministic native rendering. Catalog
 content and dialogs use opaque surfaces. The visual system lives in
@@ -203,7 +203,7 @@ server remains responsible for hold expiry and the final bill.
 
 The map uses the stylable `MapType.VECTOR_MAP` in flat 2D mode at the logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a
 bottom-right current-location arrow. A tapped, suggested or device point is rendered immediately
-with the imported SVG company logo rendered at display density on a white pin. Its blue palette and night mode follow the app's explicit
+with the supplied `map_icon.svg` pin rendered at display density and anchored at its tip. Its blue palette and night mode follow the app's explicit
 light/dark appearance. The shared header and glass controls use the same palette; map controls hide
 while the keyboard is open. The native map uses MapKit's movable TextureView mode so it follows
 Compose page transitions. The required Yandex attribution stays above the complete address panel at the bottom left,

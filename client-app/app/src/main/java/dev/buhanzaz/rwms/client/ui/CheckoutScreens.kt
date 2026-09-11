@@ -259,6 +259,7 @@ private fun CartCabinCard(
                     TextButton(
                         onClick = onAdditional,
                         enabled = !busy,
+                        contentPadding = PaddingValues(vertical = 8.dp),
                         modifier = Modifier.testTag("cart-additional-${cabin.unitId}"),
                     ) {
                         Text("+ Дополнительно")
@@ -267,6 +268,7 @@ private fun CartCabinCard(
                     TextButton(
                         onClick = onRemove,
                         enabled = !busy,
+                        contentPadding = PaddingValues(vertical = 8.dp),
                         modifier = Modifier.testTag("cart-remove-${cabin.unitId}"),
                     ) {
                         Text("Удалить", color = MaterialTheme.colorScheme.error)
