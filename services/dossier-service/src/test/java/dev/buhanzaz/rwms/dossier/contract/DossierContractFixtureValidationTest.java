@@ -174,7 +174,7 @@ class DossierContractFixtureValidationTest {
                     "BOARD_TASK",
                     0,
                     """
-                    {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":null,"status":"ACTIVE","scheduledDate":"2026-07-18","lane":"SCHEDULED","priority":3,"pinned":false,"plannedDurationMinutes":null,"deadlineAt":null,"doneAt":null,"deleted":false}
+                    {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":null,"status":"ACTIVE","scheduledDate":"2026-07-18","lane":"SCHEDULED","priority":3,"pinned":false,"plannedDurationMinutes":null,"deadlineAt":null,"doneAt":null,"deleted":false,"hasProblem":true,"incomplete":true,"completedWorkPercent":50,"requirementsRevision":"10000000-0000-0000-0000-000000000021"}
                     """
                         .formatted(AGGREGATE_ID, WAREHOUSE_ID))),
             Map.entry(
