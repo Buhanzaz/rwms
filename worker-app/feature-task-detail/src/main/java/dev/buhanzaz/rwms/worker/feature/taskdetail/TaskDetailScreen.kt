@@ -50,14 +50,20 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -263,11 +269,14 @@ fun TaskDetailScreen(
         },
     ) { padding ->
         val layoutDirection = LocalLayoutDirection.current
+        // The scaffold padding ends below the 8dp outer margin and 60dp header surface.
+        // Moving back 38dp places the mask transition at that surface's vertical midpoint.
+        val headerFadeEnd = (padding.calculateTopPadding() - 38.dp).coerceAtLeast(1.dp)
         LazyColumn(
             // Let the list viewport reach beneath the shell surfaces. Applying Scaffold's
             // padding to the modifier shrinks the viewport and leaves the scroll content ending
             // in mid-air; contentPadding keeps the first/last rows safe while preserving clipping.
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().fadeIntoTaskHeader(headerFadeEnd),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(
                 start = padding.calculateStartPadding(layoutDirection),
@@ -459,6 +468,21 @@ fun TaskDetailScreen(
         )
     }
 }
+
+/** Fades task rows only as they pass the visible header, while keeping the header untouched. */
+private fun Modifier.fadeIntoTaskHeader(fadeEnd: Dp): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithCache {
+            val mask = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, Color.Black),
+                startY = 0f,
+                endY = fadeEnd.toPx().coerceAtLeast(1f),
+            )
+            onDrawWithContent {
+                drawContent()
+                drawRect(mask, blendMode = BlendMode.DstIn)
+            }
+        }
 
 /** Opaque completion choice surface shared by ordinary and inter-warehouse tasks. */
 @Composable
