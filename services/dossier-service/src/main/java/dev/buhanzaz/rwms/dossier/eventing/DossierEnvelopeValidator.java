@@ -317,6 +317,7 @@ public final class DossierEnvelopeValidator {
     Set<String> requiredMedia = Set.of("mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees");
     Set<String> media = new HashSet<>(requiredMedia);
     media.add("folderId");
+    media.add("clientReferenceId");
     Map<String, String> mediaCodes = Map.of(
         "media.media.ready.v1", "MEDIA_READY",
         "media.media.failed.v1", "MEDIA_FAILED",

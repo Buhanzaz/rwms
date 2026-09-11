@@ -413,6 +413,22 @@ class DossierEnvelopeValidatorTest {
     assertThat(event.subjectCapable()).isFalse();
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"TASK_BOARD_ENTRY", "DRIVER_SHIFT"})
+  void acceptsClientReferencedEvidenceWithoutInventingACabinAssociation(String ownerType) {
+    UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000023");
+    String fact = envelope("media.media.ready.v1", "media-service", "MEDIA", mediaId,
+        """
+        {"mediaId":"%s","folderId":"%s","clientReferenceId":"%s","ownerType":"%s","ownerId":"%s","warehouseId":"%s","kind":"IMAGE","status":"READY","generation":1,"rotationDegrees":0}
+        """.formatted(mediaId, CABIN_ID, EVENT_ID, ownerType, CABIN_ID, WAREHOUSE_ID))
+        .replace("\"aggregateVersion\":0", "\"aggregateVersion\":1");
+    DossierValidatedEvent event = validator.validate("rwms.media.media.v1", 0, 23,
+        mediaId.toString(), fact.getBytes(StandardCharsets.UTF_8));
+    assertThat(event.cabinId()).isNull();
+    assertThat(event.subjectCapable()).isFalse();
+    assertThat(event.payload().required("clientReferenceId").stringValue()).isEqualTo(EVENT_ID.toString());
+  }
+
   @Test
   void validatesTaskEvidenceCabinPhotoAsACabinSubject() {
     UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000009");
