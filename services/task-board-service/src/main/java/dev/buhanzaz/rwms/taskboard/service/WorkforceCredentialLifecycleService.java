@@ -254,7 +254,7 @@ public class WorkforceCredentialLifecycleService {
     }
   }
 
-  /** Deletes an unreferenced worker after the credential-side operation is settled. */
+  /** Archives a worker after auth deletion; completed work and historical identities are retained. */
   void deleteWorker(UUID warehouseId, UUID id, long expectedVersion) {
     try (var ignored = credentialCoordinator.tryAcquire(id)) {
       tx.executeWithoutResult(
@@ -323,8 +323,13 @@ public class WorkforceCredentialLifecycleService {
                         groupStreamVersions.get(group.getId()),
                         TaskBoardEventTypes.WORKER_GROUP_MEMBERS_CHANGED);
                   });
+              jdbc.update(
+                  "update worker_current_group_interval set ended_at=clock_timestamp() "
+                      + "where worker_id=? and ended_at is null", id);
+              worker.archive();
+              projectionWriter.saveAndFlush(workers, worker);
+              projectionWriter.refresh(worker);
               eventSourcing.deleted(worker, streamVersion);
-              projectionWriter.delete(workers, worker);
               projectionWriter.flush();
             });
       } catch (RuntimeException exception) {
@@ -635,8 +640,9 @@ public class WorkforceCredentialLifecycleService {
   }
 
   private void ensureWorkerEmpty(UUID id) {
-    if (taskAssignments.existsByWorkerId(id) || events.existsByWorkerId(id)) {
-      throw new ConflictException("Используемого рабочего можно только деактивировать");
+    if (!taskAssignments.findAllByWorkerIdAndStatusIn(
+        id, java.util.Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED)).isEmpty()) {
+      throw new ConflictException("Перед удалением рабочего завершите или отмените его задания");
     }
   }
 

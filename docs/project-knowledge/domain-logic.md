@@ -291,6 +291,13 @@ non-published baseline facts. It does not change workforce data or credential ma
 Existing streams and subsequent optimistic concurrency remain unchanged. Evidence:
 [`V53 workforce adoption`](../../services/task-board-service/src/main/resources/db/migration/V53__restore_missing_workforce_event_streams.sql).
 
+Deleting a worker or group removes its operational directory entry, not its execution history.
+V57 retains an inactive archived row for assignment/time/KPI foreign keys; directory reads and
+commands exclude it. Worker deletion keeps the existing auth-owned deletion/reconciliation
+workflow. Current membership and open group intervals are closed, and ACTIVE/PAUSED assignments
+must be completed or cancelled first. Deleted group names can be reused without changing old
+assignment identities. Evidence: [workforce deletion tests](../../services/task-board-service/src/test/java/dev/buhanzaz/rwms/taskboard/WorkforceDeletionIntegrationTest.java).
+
 Only a warehouse `EDIT` user can temporarily suspend a taken ordinary task through the panel
 commands `POST /api/task-board/warehouses/{warehouseId}/task-board/tasks/{taskId}/suspend`
 and `/restore`, fenced by `expectedTaskVersion`. Native worker principals cannot invoke them.

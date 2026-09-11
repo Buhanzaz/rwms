@@ -15,6 +15,13 @@ import org.springframework.data.repository.query.Param;
 
 /** Warehouse-scoped worker queries, including login uniqueness and locked credential workflows. */
 public interface WorkerRepository extends JpaRepository<Worker, UUID> {
+  /** Directory reads exclude archived identities; historical JPA associations remain loadable. */
+  @Override
+  @Query("select worker from Worker worker where worker.id = :id and worker.archived = false")
+  Optional<Worker> findById(@Param("id") UUID id);
+
+  @Query("select worker from Worker worker where worker.warehouseId = :warehouseId "
+      + "and worker.archived = false order by worker.displayName")
   List<Worker> findAllByWarehouseIdOrderByDisplayNameAsc(UUID warehouseId);
 
   boolean existsByContractorCompanyId(UUID companyId);

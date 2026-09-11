@@ -117,7 +117,7 @@ public class WorkforceController {
     return service.reconcileDisableCredentials(warehouseId, id, request.expectedVersion());
   }
 
-  /** Deletes an unreferenced worker under the supplied version fence. */
+  /** Archives a worker under the supplied version fence, preserving completed work history. */
   @DeleteMapping("/workers/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void deleteWorker(

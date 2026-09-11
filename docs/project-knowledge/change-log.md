@@ -377,5 +377,7 @@ work. Newest entries go first; never rewrite the meaning of an older row.
 
 
 | Date       | Area             | Durable change                                                  | Evidence                              | Verification     |
+| 2026-09-11 | Workforce directory deletion | Workers and groups can be removed while retaining completed assignments, time events and KPI history. Auth deletion remains coordinated; unfinished assignments block removal. Archived group names can be reused. | [V57](../../services/task-board-service/src/main/resources/db/migration/V57__archive_deleted_workforce_profiles.sql), [deletion tests](../../services/task-board-service/src/test/java/dev/buhanzaz/rwms/taskboard/WorkforceDeletionIntegrationTest.java) | 4 PostgreSQL deletion/upgrade cases, 6 current-group cases, auth deletion failure/retry case and 15 settings UI tests passed. |
+
 | ---------- | ---------------- | --------------------------------------------------------------- | ------------------------------------- | ---------------- |
 | YYYY-MM-DD | Domain/component | What ownership, invariant, boundary or contract meaning changed | Links to contract/code/migration/test | Exact checks run |

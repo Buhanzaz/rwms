@@ -60,6 +60,27 @@ public class Worker extends AbstractVersionedEntity {
   @Column(name = "active", nullable = false)
   private boolean active = true;
 
+  @Column(name = "archived", nullable = false)
+  private boolean archived;
+
+  public boolean isArchived() {
+    return archived;
+  }
+
+  /** Removes this directory identity after auth deletion, retaining historical foreign keys. */
+  public void archive() {
+    archived = true;
+    active = false;
+    appLogin = null;
+    currentGroup = null;
+    credentialStatus = CredentialStatus.NOT_CONFIGURED;
+    credentialError = null;
+    credentialOperationId = null;
+    credentialOperationType = null;
+    credentialOperationStartedAt = null;
+    touch();
+  }
+
   @Column(name = "comment_text", length = 1000)
   private String comment;
 

@@ -2289,6 +2289,9 @@ paths:
       operationId: resetWorkerCredentials
       requestBody:
         required: true
+      description: >-
+        Removes the worker from the directory after auth account deletion. Completed work and
+        group interval history are retained. Active or paused assignments block deletion with 409.
         content:
           application/json:
             schema: { $ref: '#/components/schemas/CredentialPasswordRequest' }
@@ -2634,6 +2637,9 @@ paths:
       requestBody:
         required: true
         content:
+      description: >-
+        Removes the group from the directory, detaches its current members and retains completed
+        work and interval history. Active or paused assignments block deletion with 409.
           application/json:
             schema: { $ref: '#/components/schemas/GroupAvailabilityRequest' }
       responses:

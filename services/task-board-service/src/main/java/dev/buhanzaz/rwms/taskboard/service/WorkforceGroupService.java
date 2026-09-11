@@ -213,11 +213,20 @@ public class WorkforceGroupService {
           var group = requireGroup(warehouseId, id);
           checkVersion(group.getVersion(), expectedVersion, "Группа");
           long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER_GROUP, id);
-          if (members.existsByWorkerGroupId(id) || taskAssignments.existsByWorkerGroupId(id)) {
-            throw new ConflictException("Используемую группу можно только деактивировать");
+          if (!taskAssignments.findAllByWorkerGroupIdAndStatusIn(
+              id, java.util.Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED)).isEmpty()) {
+            throw new ConflictException("Перед удалением группы завершите или отмените её задания");
           }
+          workers.findAllByCurrentGroupId(id).stream()
+              .sorted(java.util.Comparator.comparing(worker -> worker.getId().toString()))
+              .forEach(worker -> changeCurrentGroup(warehouseId, worker, null));
+          projectionWriter.deleteAll(members, members.findAllByWorkerGroupId(id));
+          closeAvailabilityInterval(id,
+              jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class));
+          group.archive();
+          projectionWriter.saveAndFlush(groups, group);
+          projectionWriter.refresh(group);
           eventSourcing.deleted(group, streamVersion);
-          projectionWriter.delete(groups, group);
           projectionWriter.flush();
         });
   }

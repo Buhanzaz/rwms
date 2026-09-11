@@ -10,7 +10,6 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
@@ -22,10 +21,6 @@ import java.time.OffsetDateTime;
 @Entity
 @Table(
     name = "worker_group",
-    uniqueConstraints =
-        @UniqueConstraint(
-            name = "uk_worker_group_name",
-            columnNames = {"warehouse_id", "name"}),
     indexes =
         @Index(
             name = "idx_worker_group_warehouse",
@@ -54,6 +49,20 @@ public class WorkerGroup extends AbstractVersionedEntity {
 
   @Column(name = "active", nullable = false)
   private boolean active = true;
+
+  @Column(name = "archived", nullable = false)
+  private boolean archived;
+
+  public boolean isArchived() {
+    return archived;
+  }
+
+  /** Retains historical group identity while removing it from the operational directory. */
+  public void archive() {
+    archived = true;
+    active = false;
+    touch();
+  }
 
   @Enumerated(EnumType.STRING)
   @Column(name = "operational_status", nullable = false, length = 32)

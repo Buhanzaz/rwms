@@ -711,6 +711,10 @@ and identity constraints, and leaves every existing plan compatible through null
 - Warehouse readiness cannot succeed while task/queue/credential/evidence or
   operation-mark work is unresolved.
 - Outbox and sanitized DLT recovery preserve the immutable envelope and audit
+- Worker/group deletion archives the directory identity after checking unfinished assignments.
+  Worker auth deletion must succeed first. Completed assignments, time events and KPI intervals
+  retain their foreign keys; current membership is detached and open intervals are closed.
+  Archived profiles cannot be edited or selected again; a deleted group's name can be reused.
   the reviewed action.
 
 ## Observability and failure behavior

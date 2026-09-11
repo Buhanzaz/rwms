@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => ({
   createQueueDefinition: vi.fn(),
   updateQueueDefinition: vi.fn(),
   deleteQueueDefinition: vi.fn(),
+  deleteWorker: vi.fn(),
+  deleteGroup: vi.fn(),
   reorderQueueDefinitions: vi.fn(),
   linkQueueDefinitions: vi.fn(),
   globalRole: "SYSTEM_ADMIN" as CurrentUser["globalRole"],
@@ -82,6 +84,8 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
     createQueueDefinition: mocks.createQueueDefinition,
     updateQueueDefinition: mocks.updateQueueDefinition,
     deleteQueueDefinition: mocks.deleteQueueDefinition,
+    deleteWorker: mocks.deleteWorker,
+    deleteGroup: mocks.deleteGroup,
     reorderQueueDefinitions: mocks.reorderQueueDefinitions,
     linkQueueDefinitions: mocks.linkQueueDefinitions,
     disableGroup: mocks.disableGroup,
@@ -301,6 +305,8 @@ beforeEach(() => {
   mocks.createQueueDefinition.mockResolvedValue(queueDefinitionFixture())
   mocks.updateQueueDefinition.mockResolvedValue(queueDefinitionFixture())
   mocks.deleteQueueDefinition.mockResolvedValue(undefined)
+  mocks.deleteWorker.mockResolvedValue(undefined)
+  mocks.deleteGroup.mockResolvedValue(undefined)
   mocks.reorderQueueDefinitions.mockResolvedValue([])
   mocks.linkQueueDefinitions.mockResolvedValue([])
   mocks.disableGroup.mockResolvedValue({})
@@ -682,4 +688,46 @@ describe("TaskBoardSettingsPage workforce operations", () => {
     ).toBeTruthy()
     expect(within(editor).getByRole("button", { name: "Удалить" })).toBeTruthy()
   })
+
+  it.each(["worker", "group"] as const)(
+    "deletes a %s with the observed version and explains retained history",
+    async (kind) => {
+      const user = userEvent.setup()
+      const worker = workerFixture()
+      const group = groupFixture()
+      mocks.listClasses.mockResolvedValue([classFixture()])
+      mocks.listWorkers.mockResolvedValue([worker])
+      mocks.listGroups.mockResolvedValue([group])
+      renderPage()
+      await user.click(
+        await screen.findByRole("radio", {
+          name: kind === "worker" ? "Рабочие" : "Бригады",
+        })
+      )
+      await user.click(screen.getByRole("button", { name: "Изменить" }))
+      const editor = await screen.findByRole("dialog", {
+        name: kind === "worker" ? "Рабочий" : "Бригада",
+      })
+      await user.click(within(editor).getByRole("button", { name: "Удалить" }))
+      const confirmation = await screen.findByRole("alertdialog", {
+        name: "Удалить запись?",
+      })
+      expect(confirmation.textContent).toContain(
+        "История выполненных работ сохранится"
+      )
+      await user.click(
+        within(confirmation).getByRole("button", { name: "Удалить" })
+      )
+      await waitFor(() =>
+        expect(
+          kind === "worker" ? mocks.deleteWorker : mocks.deleteGroup
+        ).toHaveBeenCalledWith(
+          "task-board-token",
+          WAREHOUSE_ID,
+          kind === "worker" ? worker.id : group.id,
+          kind === "worker" ? worker.version : group.version
+        )
+      )
+    }
+  )
 })

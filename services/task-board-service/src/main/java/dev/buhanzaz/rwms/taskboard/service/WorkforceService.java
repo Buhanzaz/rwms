@@ -90,7 +90,7 @@ public class WorkforceService {
     return credentialLifecycle.reconcileDisableCredentials(warehouseId, id, expectedVersion);
   }
 
-  /** Deletes an unreferenced worker after the credential-side operation is settled. */
+  /** Archives a worker after the credential-side operation settles, retaining execution history. */
   public void deleteWorker(UUID warehouseId, UUID id, long expectedVersion) {
     credentialLifecycle.deleteWorker(warehouseId, id, expectedVersion);
   }
