@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -287,6 +288,7 @@ fun CabinCatalogScreen(
     avatarUrl: String? = null,
     avatarInitials: String? = null,
     bottomOverlayHeight: Dp = 0.dp,
+    bottomOverlay: @Composable BoxScope.() -> Unit = {},
 ) {
     var furnitureCabin by remember { mutableStateOf<String?>(null) }
     CustomerCatalogContent(
@@ -298,6 +300,7 @@ fun CabinCatalogScreen(
         onToggleCabin = onToggleCabin, onFurniture = { furnitureCabin = it }, onPhoto = onPhoto,
         onWarehouse = onWarehouse, avatarUrl = avatarUrl, avatarInitials = avatarInitials ?: state.profileInitials(),
         bottomOverlayHeight = bottomOverlayHeight,
+        bottomOverlay = bottomOverlay,
     )
     furnitureCabin?.let { cabinId ->
         FurnitureSheet(
@@ -364,6 +367,7 @@ private fun CustomerCatalogContent(
     avatarInitials: String? = null,
     requiresLogin: Boolean = false,
     bottomOverlayHeight: Dp = 0.dp,
+    bottomOverlay: @Composable BoxScope.() -> Unit = {},
 ) {
     var showFilters by remember { mutableStateOf(false) }
     val catalogScroll = rememberLazyListState()
@@ -470,6 +474,9 @@ private fun CustomerCatalogContent(
                             }
                         }
                     }
+                }
+                Box(Modifier.matchParentSize()) {
+                    bottomOverlay()
                 }
                 AnimatedVisibility(
                     visible = showFilters,

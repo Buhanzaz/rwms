@@ -588,22 +588,19 @@ private fun SignedInNavigation(
                         val density = LocalDensity.current
                         var cartButtonHeight by remember { mutableStateOf(0) }
                         val cartVisible = state.selectedCabinIds.isNotEmpty()
-                        Box(Modifier.fillMaxSize()) {
-                            Box(Modifier.fillMaxSize()) {
-                                CabinCatalogScreen(
-                                    state = state,
-                                    onMenu = { coroutineScope.launch { drawerState.open() } },
-                                    onProfile = ::openProfile,
-                                    onWarehouse = { onWarehouse(it, state.rememberWarehouseChoice) },
-                                    onFilters = onFilters,
-                                    onLoadMore = onLoadMoreCabins,
-                                    onToggleCabin = onToggleCabin,
-                                    onEquipment = onEquipment,
-                                    onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
-                                    avatarUrl = state.profile?.avatar?.thumbnailUrl,
-                                    bottomOverlayHeight = if (cartVisible) with(density) { cartButtonHeight.toDp() } else 0.dp,
-                                )
-                            }
+                        CabinCatalogScreen(
+                            state = state,
+                            onMenu = { coroutineScope.launch { drawerState.open() } },
+                            onProfile = ::openProfile,
+                            onWarehouse = { onWarehouse(it, state.rememberWarehouseChoice) },
+                            onFilters = onFilters,
+                            onLoadMore = onLoadMoreCabins,
+                            onToggleCabin = onToggleCabin,
+                            onEquipment = onEquipment,
+                            onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
+                            avatarUrl = state.profile?.avatar?.thumbnailUrl,
+                            bottomOverlayHeight = if (cartVisible) with(density) { cartButtonHeight.toDp() } else 0.dp,
+                        ) {
                             if (cartVisible) {
                                 CustomerCartButton(
                                     count = state.selectedCabinIds.size,
