@@ -118,8 +118,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.client"
         minSdk = 30
         targetSdk = 36
-        versionCode = 36
-        versionName = "0.1.35"
+        versionCode = 37
+        versionName = "0.1.36"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MAPKIT_API_KEY", "\"$mapkitApiKey\"")
         ndk {
