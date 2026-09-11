@@ -198,16 +198,23 @@ class CustomerConditionalNavigationTest {
         composeRule.onNodeWithTag("menu-button").performClick()
         composeRule.waitForIdle()
         composeRule.onAllNodesWithText("Аренда").assertCountEquals(1)
+        val drawer = composeRule.onNodeWithTag("customer-drawer").fetchSemanticsNode().boundsInRoot
+        val logo = composeRule.onNodeWithTag("drawer-logo", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val subtitle = composeRule.onNodeWithText("Аренда и доставка").fetchSemanticsNode().boundsInRoot
+        assertThat(logo.center.x).isWithin(1f).of(drawer.center.x)
+        assertThat(subtitle.center.x).isWithin(1f).of(drawer.center.x)
+        assertThat(drawer.width).isWithin(1f).of(264f * composeRule.density.density)
         composeRule.onNodeWithText("Свободные бытовки").assertDoesNotExist()
         composeRule.onNodeWithText("Как на телефоне").assertDoesNotExist()
         composeRule.onNodeWithTag("appearance-selector").assertDoesNotExist()
-        composeRule.onNodeWithText("Включить тёмную тему").assertExists()
+        composeRule.onNodeWithText("Светлая тема").assertExists()
         composeRule.onNodeWithTag("appearance-toggle").performScrollTo().performClick()
         composeRule.runOnIdle { assertThat(appearanceMode).isEqualTo(CustomerAppearanceMode.DARK) }
 
-        composeRule.onNodeWithText("Включить светлую тему").assertExists()
+        composeRule.onNodeWithText("Темная тема").assertExists()
         composeRule.onNodeWithTag("appearance-toggle").performScrollTo().performClick()
         composeRule.runOnIdle { assertThat(appearanceMode).isEqualTo(CustomerAppearanceMode.LIGHT) }
+        composeRule.onNodeWithText("Светлая тема").assertExists()
     }
 
     @Test

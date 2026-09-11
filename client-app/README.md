@@ -33,8 +33,8 @@ controls appear, with no greeting video or separate overlaid logo. System animat
 apply, and a completed greeting is not replayed on configuration changes.
 Authentication follows the supplied 404 × 874 canvases: full-screen caustic artwork,
 a field-width BLOCK BOX wordmark, bottom-aligned forms, translucent borderless fields and soft
-shadows. The wordmark keeps its width across entry and login, moves above registration, and
-shrinks above each scrollable form when the keyboard opens. Short forms keep their actions at the
+shadows. The wordmark keeps its full size when the keyboard opens and uses the worker app's
+centered position, moving only as needed to fit above the measured form. Short forms keep their actions at the
 bottom of the available canvas; the longer registration remains scrollable. Logo size and form
 position share the same layout constraints on every keyboard-animation frame. Registration submits with
 `Зарегистрироваться`, recovery uses `Отправить`, and login keeps `Вход`. System Back returns
@@ -130,12 +130,13 @@ Jetpack Compose Material 3 and Navigation 3 provide mutually exclusive
 signed-out and signed-in graphs. Every newly registered customer completes an
 individual profile. Existing individual/legal profile kinds remain immutable;
 `Доступ для юрлиц` is explained in profile settings, with no unsupported action in the drawer.
-The signed-in flow presents city selection with an optional `Remember selected city` checkbox before
+The signed-in flow presents city selection with an optional `Remember selected city` checkbox between the header and cities before
 loading server-returned free cabins. Menu and profile remain available at this step. City labels come
 from the warehouse service's `city` field; warehouses in the same city retain separate identities and
 show an address/name to distinguish them. The inset header centers the city between menu and
 profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
-selected warehouse's inquiry. A filter action expands an opaque facet panel in the same scrollable list as the cabins. Each change
+selected warehouse's inquiry. A filter action expands an opaque, scrollable facet panel over the cabins without shifting them.
+The cabin list extends to the screen edges and uses the worker app's fading mask beneath the fixed header. Each change
 and reset immediately requests server results; rapid changes retain the latest choice until the
 current request finishes. Each single-choice filter occupies one full row; its options open
 downward as one attached surface, push the following filters down and close after selection.
@@ -292,9 +293,9 @@ that it cannot cover the list. Other screens
 have no persistent cart shortcut. Forward, back and predictive-back transitions are
 synchronized full-width slides between opaque screens. Back from the cart or
 profile restores the preceding screen; drawer destinations retain the rental catalog (or city
-selection) as their root. The opaque, 296-dp-wide drawer has a compact brand header and closes before changing
-destinations. It exposes a single one-tap explicit
-light/dark appearance toggle; system and battery appearance sources are not supported. Screens and full-screen dialogs are
+selection) as their root. The opaque, 264-dp-wide drawer centers its logo and rental subtitle and closes before changing
+destinations. Its one-tap appearance toggle shows the current mode, `Светлая тема` or `Темная тема`;
+system and battery appearance sources are not supported. Screens and full-screen dialogs are
 edge-to-edge and IME-aware. Customer commands are serialized, 409 reloads
 authoritative cart state, and checkout is reconciled with the durable booking
 list.

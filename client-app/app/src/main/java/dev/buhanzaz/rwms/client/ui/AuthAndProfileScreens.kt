@@ -357,6 +357,31 @@ fun WarehouseScreen(
             contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (warehouses.isNotEmpty() && allowRemember) {
+                item(key = "remember-warehouse") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .toggleable(
+                                value = rememberWarehouse,
+                                enabled = !busy,
+                                role = Role.Checkbox,
+                                onValueChange = { rememberWarehouse = it },
+                            )
+                            .padding(vertical = 8.dp)
+                            .testTag("remember-warehouse"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = rememberWarehouse, onCheckedChange = null, enabled = !busy)
+                        Text(
+                            "Запомнить выбранный город",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
             if (busy) {
                 item { CustomerLoadingLine(tag = "warehouse-loading") }
             }
@@ -411,30 +436,6 @@ fun WarehouseScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-            } else if (warehouses.isNotEmpty() && allowRemember) {
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 56.dp)
-                            .toggleable(
-                                value = rememberWarehouse,
-                                enabled = !busy,
-                                role = Role.Checkbox,
-                                onValueChange = { rememberWarehouse = it },
-                            )
-                            .padding(vertical = 8.dp)
-                            .testTag("remember-warehouse"),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(checked = rememberWarehouse, onCheckedChange = null, enabled = !busy)
-                        Text(
-                            "Запомнить выбранный город",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         }

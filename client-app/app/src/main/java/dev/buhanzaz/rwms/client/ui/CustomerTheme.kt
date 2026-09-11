@@ -259,9 +259,9 @@ private val CustomerTypography = Typography(
 )
 
 /** Explicit CustomerApp appearance choices; no device-driven appearance is supported. */
-enum class CustomerAppearanceMode(val toggleActionTitle: String) {
-    LIGHT("Включить тёмную тему"),
-    DARK("Включить светлую тему"),
+enum class CustomerAppearanceMode(val title: String) {
+    LIGHT("Светлая тема"),
+    DARK("Темная тема"),
 }
 
 /** Returns the other explicit appearance used by the one-tap drawer action. */

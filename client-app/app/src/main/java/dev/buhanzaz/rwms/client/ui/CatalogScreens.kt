@@ -3,6 +3,8 @@ package dev.buhanzaz.rwms.client.ui
 import android.graphics.Color as AndroidColor
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -75,8 +77,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -87,6 +93,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -381,19 +388,89 @@ private fun CustomerCatalogContent(
             }
         },
     ) { padding ->
-        LazyColumn(
-            state = catalogScroll,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp)
-                .testTag("catalog-screen"),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (showFilters) {
-                item(key = "filters") {
+        Box(Modifier.fillMaxSize().clipToBounds()) {
+            LazyColumn(
+                state = catalogScroll,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .fadeIntoCatalogHeader((padding.calculateTopPadding() - 38.dp).coerceAtLeast(1.dp))
+                    .testTag("catalog-screen"),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = padding.calculateTopPadding() + 8.dp,
+                    bottom = padding.calculateBottomPadding() + 20.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (state.busy) {
+                    item {
+                        CustomerLoadingLine(
+                            modifier = Modifier.fillMaxWidth(),
+                            tag = if (requiresLogin) "guest-catalog-loading" else "catalog-loading",
+                        )
+                    }
+                }
+                state.error?.let { error ->
+                    item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp).testTag("guest-catalog-error")) }
+                }
+                if (state.cabins.isEmpty() && !state.busy && state.error == null) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().testTag("catalog-empty"),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                "Свободных бытовок по выбранным условиям нет",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                textAlign = TextAlign.Center,
+                            )
+                            if (state.filters.activeCount > 0) {
+                                TextButton(
+                                    onClick = { onFilters(CabinFilters()) },
+                                    modifier = Modifier.testTag("catalog-empty-clear-filters"),
+                                ) { Text("Сбросить фильтры") }
+                            }
+                        }
+                    }
+                }
+                items(state.cabins, key = CustomerCabin::unitId) { cabin ->
+                    val selected = cabin.unitId in state.selectedCabinIds
+                    CabinCard(
+                        cabin = cabin,
+                        selected = selected,
+                        onToggle = { onToggleCabin(cabin.unitId) },
+                        onFurniture = onFurniture?.let { action -> { action(cabin.unitId) } },
+                        requiresLogin = requiresLogin,
+                        busy = state.busy,
+                        onPhoto = { page -> onPhoto(cabin.unitId, page) },
+                    )
+                }
+                if (state.cabinPage + 1 < state.cabinTotalPages) {
+                    item {
+                        OutlinedButton(
+                            onClick = onLoadMore,
+                            modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
+                            enabled = !state.busy,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Text("Показать ещё")
+                        }
+                    }
+                }
+            }
+            AnimatedVisibility(
+                visible = showFilters,
+                modifier = Modifier.align(Alignment.TopCenter).padding(padding).padding(horizontal = 16.dp),
+                enter = expandVertically(expandFrom = Alignment.Top),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top),
+            ) {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 20.dp),
+                ) {
                     CabinFilterPanel(
                         current = state.filters,
                         facets = state.facets,
@@ -402,66 +479,24 @@ private fun CustomerCatalogContent(
                     )
                 }
             }
-            if (state.busy) {
-                item {
-                    CustomerLoadingLine(
-                        modifier = Modifier.fillMaxWidth(),
-                        tag = if (requiresLogin) "guest-catalog-loading" else "catalog-loading",
-                    )
-                }
-            }
-            state.error?.let { error ->
-                item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp).testTag("guest-catalog-error")) }
-            }
-            if (state.cabins.isEmpty() && !state.busy && state.error == null) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().testTag("catalog-empty"),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Text(
-                            "Свободных бытовок по выбранным условиям нет",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            textAlign = TextAlign.Center,
-                        )
-                        if (state.filters.activeCount > 0) {
-                            TextButton(
-                                onClick = { onFilters(CabinFilters()) },
-                                modifier = Modifier.testTag("catalog-empty-clear-filters"),
-                            ) { Text("Сбросить фильтры") }
-                        }
-                    }
-                }
-            }
-            items(state.cabins, key = CustomerCabin::unitId) { cabin ->
-                val selected = cabin.unitId in state.selectedCabinIds
-                CabinCard(
-                    cabin = cabin,
-                    selected = selected,
-                    onToggle = { onToggleCabin(cabin.unitId) },
-                    onFurniture = onFurniture?.let { action -> { action(cabin.unitId) } },
-                    requiresLogin = requiresLogin,
-                    busy = state.busy,
-                    onPhoto = { page -> onPhoto(cabin.unitId, page) },
-                )
-            }
-            if (state.cabinPage + 1 < state.cabinTotalPages) {
-                item {
-                    OutlinedButton(
-                        onClick = onLoadMore,
-                        modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
-                        enabled = !state.busy,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    ) {
-                        Text("Показать ещё")
-                    }
-                }
-            }
         }
     }
 }
+
+/** Matches the worker list mask as cabins pass beneath the fixed header and reach the screen edge. */
+private fun Modifier.fadeIntoCatalogHeader(fadeEnd: Dp): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithCache {
+            val mask = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, Color.Black),
+                startY = 0f,
+                endY = fadeEnd.toPx().coerceAtLeast(1f),
+            )
+            onDrawWithContent {
+                drawContent()
+                drawRect(mask, blendMode = BlendMode.DstIn)
+            }
+        }
 
 /** Keeps the catalog title and filter action inside the fixed customer header. */
 @Composable

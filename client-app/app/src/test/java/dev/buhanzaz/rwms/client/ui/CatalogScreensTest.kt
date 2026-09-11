@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
@@ -111,7 +112,7 @@ class CatalogScreensTest {
         composeRule.setContent {
             CustomerTheme {
                 CabinCatalogScreen(
-                    state = catalogState(),
+                    state = catalogState().copy(cabins = listOf(catalogCabin())),
                     onMenu = {},
                     onProfile = {},
                     onFilters = {},
@@ -124,7 +125,12 @@ class CatalogScreensTest {
             }
         }
 
+        val initialCard = composeRule.onNodeWithTag("cabin-cabin-1").fetchSemanticsNode().boundsInRoot
         composeRule.onNodeWithText("Фильтры").performClick()
+        val coveredCard = composeRule.onNodeWithTag("cabin-cabin-1").fetchSemanticsNode().boundsInRoot
+        val panel = composeRule.onNodeWithTag("catalog-filter-panel").fetchSemanticsNode().boundsInRoot
+        assertThat(coveredCard).isEqualTo(initialCard)
+        assertThat(panel.overlaps(coveredCard)).isTrue()
 
         composeRule.onNodeWithTag("catalog-filter-panel").assertExists()
         composeRule.onNodeWithText("Тип").assertExists()
@@ -178,7 +184,7 @@ class CatalogScreensTest {
         composeRule.onNodeWithText(compatibleDimension).assertExists()
         composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
         val dimensionOptionTag = "filter-option-Размер-$compatibleDimension"
-        composeRule.onNodeWithTag("catalog-screen").performScrollToNode(hasTestTag("filter-options-Размер"))
+        composeRule.onNodeWithTag("filter-options-Размер").performScrollTo()
         composeRule.onNodeWithTag(dimensionOptionTag).performScrollTo().assertIsDisplayed().performClick()
 
         composeRule.runOnIdle {
@@ -275,7 +281,8 @@ class CatalogScreensTest {
         val filterHeader = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
         assertThat(filterHeader).isEqualTo(originalHeader)
         composeRule.onNodeWithTag("filter-field-Пол").performScrollTo().performClick()
-        composeRule.onNodeWithText("Линолеум").performScrollTo().performClick()
+        composeRule.onNodeWithTag("filter-options-Пол").performScrollTo()
+        composeRule.onNodeWithTag("filter-option-Пол-Линолеум").performScrollTo().assertIsDisplayed().performClick()
         composeRule.onNodeWithTag("catalog-filter-button").performClick()
         composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
         assertThat(appliedFilters).isEqualTo(CabinFilters(linoleum = true))
@@ -404,7 +411,9 @@ class CatalogScreensTest {
 
         assertThat(stickyFilterBounds.top).isAtLeast(headerBounds.top)
         assertThat(stickyFilterBounds.bottom).isAtMost(headerBounds.bottom)
-        assertThat(catalogBounds.top).isWithin(1f).of(headerBounds.bottom + 8f * composeRule.density.density)
+        assertThat(catalogBounds.top).isEqualTo(0f)
+        assertThat(catalogBounds.bottom).isEqualTo(composeRule.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
+        assertThat(cardBounds.top).isWithin(1f).of(headerBounds.bottom + 16f * composeRule.density.density)
         assertThat(filterBounds.width).isLessThan(cardBounds.width)
         composeRule.onNodeWithText("Пластиковое окно").assertExists()
         composeRule.onNodeWithText("Усиленная дверь").assertExists()

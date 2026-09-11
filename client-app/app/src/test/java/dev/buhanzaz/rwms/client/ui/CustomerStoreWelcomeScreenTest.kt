@@ -77,7 +77,7 @@ class CustomerStoreWelcomeScreenTest {
         assertThat(loginLogo.width).isEqualTo(logo.width)
         assertThat(loginLogo.width).isWithin(1f).of(login.width)
         assertThat(loginLogo.top).isAtLeast(0f)
-        assertThat(loginLogo.center.y).isLessThan(logo.center.y)
+        assertThat(loginLogo.center.y).isWithin(1f).of(logo.center.y)
         assertThat(loginLogo.bottom).isAtMost(login.top)
         composeRule.onNodeWithText("Вход").assertExists()
         composeRule.onNodeWithText("Войти").assertDoesNotExist()
@@ -144,13 +144,32 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.onNodeWithTag("customer-auth-logo").assertIsDisplayed()
         val keyboardLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
         assertThat(keyboardLogo.top).isAtLeast(0f)
-        assertThat(keyboardLogo.height).isLessThan(initial.height)
+        assertThat(keyboardLogo.height).isWithin(1f).of(initial.height)
         composeRule.onNodeWithTag("customer-registration-phone").performScrollTo().performTextInput("+79990000000")
         dispatchKeyboardInset(0)
         composeRule.mainClock.advanceTimeBy(500)
         val restored = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
         assertThat(restored.height).isGreaterThan(0f)
         assertThat(restored.width).isWithin(1f).of(initial.width)
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `login keyboard preserves logo size and keeps it above the credentials`() {
+        setAuthContent()
+        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        val initial = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        dispatchKeyboardInset(338)
+        val keyboardLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        val field = composeRule.onNodeWithTag("customer-login-username").fetchSemanticsNode().boundsInRoot
+        assertThat(keyboardLogo.width).isWithin(1f).of(initial.width)
+        assertThat(keyboardLogo.height).isWithin(1f).of(initial.height)
+        assertThat(keyboardLogo.top).isAtLeast(0f)
+        assertThat(keyboardLogo.bottom).isAtMost(field.top)
+        composeRule.onNodeWithTag("customer-login-submit").performScrollTo().assertIsDisplayed()
+        dispatchKeyboardInset(0)
+        val restored = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        assertThat(restored.top).isWithin(1f).of(initial.top)
     }
 
     private fun dispatchKeyboardInset(bottom: Int) {

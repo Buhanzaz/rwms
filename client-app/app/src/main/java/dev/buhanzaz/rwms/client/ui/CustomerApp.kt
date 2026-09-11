@@ -467,7 +467,7 @@ private fun SignedInNavigation(
         gesturesEnabled = !current.isDeliveryFlowRoute() && !editingAvatar,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(296.dp).fillMaxHeight().testTag("customer-drawer"),
+                modifier = Modifier.width(264.dp).fillMaxHeight().testTag("customer-drawer"),
                 drawerContainerColor = MaterialTheme.colorScheme.surface,
                 drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
             ) {
@@ -480,6 +480,7 @@ private fun SignedInNavigation(
                     Column(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         CustomerStoreLogo(
                             Modifier.width(148.dp).height(61.dp).testTag("drawer-logo"),
@@ -523,10 +524,10 @@ private fun SignedInNavigation(
                     val nextAppearanceMode = appearanceMode.toggle()
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
-                        label = { Text(appearanceMode.toggleActionTitle) },
+                        label = { Text(appearanceMode.title) },
                         selected = false,
                         onClick = { onAppearanceMode(nextAppearanceMode) },
-                        icon = { Icon(nextAppearanceMode.appearanceIcon(), contentDescription = null) },
+                        icon = { Icon(appearanceMode.appearanceIcon(), contentDescription = null) },
                         modifier = Modifier.testTag("appearance-toggle"),
                     )
                     NavigationDrawerItem(

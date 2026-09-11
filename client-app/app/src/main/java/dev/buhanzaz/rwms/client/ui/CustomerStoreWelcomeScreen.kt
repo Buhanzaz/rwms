@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.client.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,10 +13,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -148,35 +148,23 @@ private fun CustomerAuthenticationContent(
     BoxWithConstraints(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
     ) {
-        val fullCanvasHeight = maxHeight
         BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
-            val fullLogoHeight = (maxWidth - 76.dp) / (234f / 96f)
-            val logoHeight = if (page == CustomerAuthenticationPage.START) {
-                fullLogoHeight
-            } else {
-                // Respond from the first IME frame; the form uses this same measured logo boundary.
-                val availableFraction = if (fullCanvasHeight > 0.dp) (maxHeight / fullCanvasHeight).coerceIn(0f, 1f) else 1f
-                val resizedHeight = fullLogoHeight * (1f - 1.5f * (1f - availableFraction))
-                minOf(fullLogoHeight, maxHeight / 4, maxOf(32.dp, resizedHeight))
-            }
+            val logoWidth = (maxWidth - 76.dp).coerceAtLeast(0.dp)
+            val logoHeight = logoWidth * (96f / 234f)
             val formTop = maxHeight - with(density) { formHeightPx.toDp() }
-            val logoTarget = when (page) {
-                CustomerAuthenticationPage.START -> maxOf(
-                    8.dp,
-                    minOf((maxHeight - logoHeight) / 2, formTop - 24.dp - logoHeight),
-                )
-                else -> 8.dp
-            }
-            val logoTop by animateDpAsState(logoTarget, tween(300), label = "customer-auth-logo-position")
+            val logoTop = minOf(
+                (maxHeight - logoHeight) / 2,
+                formTop - 16.dp - logoHeight,
+            ).coerceAtLeast(0.dp)
             CustomerStoreLogo(
-                Modifier.fillMaxWidth().padding(horizontal = 38.dp).height(logoHeight)
-                    .graphicsLayer { translationY = logoTop.toPx() }
+                Modifier.align(Alignment.TopCenter).offset(y = logoTop)
+                    .requiredSize(width = logoWidth, height = logoHeight)
                     .customerGreetingWave(greetingProgress).testTag("customer-auth-logo"),
             )
             val formModifier = if (page == CustomerAuthenticationPage.START) {
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().onSizeChanged { formHeightPx = it.height }
             } else {
-                Modifier.fillMaxSize().padding(top = logoTop + logoHeight + 8.dp)
+                Modifier.fillMaxSize().padding(top = logoHeight + 16.dp)
             }
             when (page) {
                 CustomerAuthenticationPage.START -> CustomerAuthActions(
@@ -190,12 +178,14 @@ private fun CustomerAuthenticationContent(
                     message, submitting, onLogin,
                     onForgotPasswordSelected = { navigate(CustomerAuthenticationPage.PASSWORD_RECOVERY) },
                     modifier = formModifier,
+                    onFormHeightChanged = { formHeightPx = it },
                 )
                 CustomerAuthenticationPage.REGISTRATION -> CustomerRegistrationForm(
-                    message, submitting, onRegister, formModifier,
+                    message, submitting, onRegister, formModifier, { formHeightPx = it },
                 )
                 CustomerAuthenticationPage.PASSWORD_RECOVERY -> CustomerPasswordRecoveryForm(
                     modifier = formModifier,
+                    onFormHeightChanged = { formHeightPx = it },
                 )
             }
         }
@@ -258,6 +248,7 @@ private fun CustomerLoginForm(
     onLogin: (String, String, Boolean) -> Unit,
     onForgotPasswordSelected: () -> Unit,
     modifier: Modifier,
+    onFormHeightChanged: (Int) -> Unit,
 ) {
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
@@ -278,6 +269,7 @@ private fun CustomerLoginForm(
         buttonSpacing = 8.dp,
         bottomPadding = 37.dp,
         modifier = modifier,
+        onFormHeightChanged = onFormHeightChanged,
         screenTag = "customer-login-screen",
         auxiliaryContent = { enabled ->
             Row(Modifier.fillMaxWidth().padding(top = 7.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -296,6 +288,7 @@ private fun CustomerRegistrationForm(
     submitting: Boolean,
     onRegister: (String, String, String, String, String, String, String) -> Unit,
     modifier: Modifier,
+    onFormHeightChanged: (Int) -> Unit,
 ) {
     var login by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
@@ -331,13 +324,14 @@ private fun CustomerRegistrationForm(
         bottomPadding = 39.dp,
         buttonSpacing = 36.dp,
         modifier = modifier,
+        onFormHeightChanged = onFormHeightChanged,
         screenTag = "customer-registration-screen",
     )
 }
 
 /** Matches the supplied recovery form and reports the real missing capability when submitted. */
 @Composable
-private fun CustomerPasswordRecoveryForm(modifier: Modifier) {
+private fun CustomerPasswordRecoveryForm(modifier: Modifier, onFormHeightChanged: (Int) -> Unit) {
     var contact by rememberSaveable { mutableStateOf("") }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
     CustomerAuthForm(
@@ -354,6 +348,7 @@ private fun CustomerPasswordRecoveryForm(modifier: Modifier) {
         buttonSpacing = 28.dp,
         bottomPadding = 36.dp,
         modifier = modifier,
+        onFormHeightChanged = onFormHeightChanged,
         screenTag = "customer-password-recovery-screen",
     )
 }
@@ -369,6 +364,7 @@ private fun CustomerAuthForm(
     screenTag: String,
     onSubmit: () -> Unit,
     modifier: Modifier,
+    onFormHeightChanged: (Int) -> Unit,
     message: String? = null,
     fieldSpacing: Dp = 14.dp,
     labelSpacing: Dp = 11.dp,
@@ -394,7 +390,8 @@ private fun CustomerAuthForm(
     }
     BoxWithConstraints(modifier.testTag("customer-auth-form-viewport")) {
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = maxHeight)
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onSizeChanged { onFormHeightChanged(it.height) }.verticalScroll(rememberScrollState())
                 .padding(horizontal = 38.dp).padding(top = 20.dp, bottom = bottomPadding).testTag(screenTag),
             verticalArrangement = Arrangement.Bottom,
         ) {

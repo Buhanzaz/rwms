@@ -152,6 +152,11 @@ class ProfileAndWarehouseScreensTest {
         }
 
         composeRule.onNodeWithTag("warehouse-location-icon", useUnmergedTree = true).assertExists()
+        val header = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
+        val remember = composeRule.onNodeWithTag("remember-warehouse").fetchSemanticsNode().boundsInRoot
+        val city = composeRule.onNodeWithTag("warehouse-option-warehouse-spb").fetchSemanticsNode().boundsInRoot
+        assertThat(remember.top).isAtLeast(header.bottom)
+        assertThat(remember.bottom).isAtMost(city.top)
         composeRule.onNodeWithTag("remember-warehouse").performClick()
         composeRule.onNodeWithText("Санкт-Петербург").performClick()
 
