@@ -46,7 +46,8 @@ Private routes are narrow by design:
 - `/api/internal/maintenance/v1/repairs/{repairId}/task-requirements` exposes only frozen
   repair-stage work/material requirements to task-board-service with its sole
   `maintenance.task-requirements` scope. It never reads the mutable active catalog: links are the
-  transitive undirected DEPENDENCY/FOLLOW_UP closure within each frozen catalog version.
+  transitive undirected DEPENDENCY closure within each frozen catalog version. FOLLOW_UP
+  links are catalog navigation paths and do not couple requirement availability.
 
 Inventory-service may read
 `GET /api/internal/maintenance/v1/inventory/return-estimates/{estimateId}` only with its exact

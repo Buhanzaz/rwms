@@ -422,6 +422,14 @@ Set `MAINTENANCE_SERVICE_URL` to the private maintenance-service origin. Outside
 `dev` profile there is no default: missing configuration rejects requirement reads
 explicitly. The `dev` default is `http://127.0.0.1:8087`.
 
+Workers can undo a missing mark through
+`POST /worker/v1/entries/{entryId}/requirements/{itemId}/restore`. The active participant supplies
+`expectedVersion`, an owned offline lease and an `operationId` matching `Idempotency-Key`.
+Only missing members of the selected dependency group become `RESTORED`; unrelated and completed
+rows and immutable reports remain unchanged. V56 admits `RESTORE_ITEM` in the native durable receipt
+store so exact retries cannot undo a later missing mark. Catalog `FOLLOW_UP` paths never couple
+availability. Refreshing frozen links preserves all recorded states and work accounting.
+
 `tasks/{taskId}/requirements` supplies the recovery checklist. Completing available
 work while resources are missing keeps the task `ACTIVE`, `suspended` and
 `incomplete`; source stages are not falsely completed. Completed work volume uses
@@ -703,6 +711,10 @@ and identity constraints, and leaves every existing plan compatible through null
   replays return `409` without applying another effect.
 - Credential reset/disable/delete workflows preserve pending/ambiguous states
   and have explicit reconciliation commands rather than local rollback.
+- Worker/group deletion archives the directory identity after checking unfinished assignments.
+  Worker auth deletion must succeed first. Completed assignments, time events and KPI intervals
+  retain their foreign keys; current membership is detached and open intervals are closed.
+  Archived profiles cannot be edited or selected again; a deleted group's name can be reused.
 - Worker media inbox rows remain pending until their referenced evidence exists;
   a reconciler retries them idempotently.
 - Slinger push is at least once: an expired lease can be reclaimed, transient
@@ -711,10 +723,6 @@ and identity constraints, and leaves every existing plan compatible through null
 - Warehouse readiness cannot succeed while task/queue/credential/evidence or
   operation-mark work is unresolved.
 - Outbox and sanitized DLT recovery preserve the immutable envelope and audit
-- Worker/group deletion archives the directory identity after checking unfinished assignments.
-  Worker auth deletion must succeed first. Completed assignments, time events and KPI intervals
-  retain their foreign keys; current membership is detached and open intervals are closed.
-  Archived profiles cannot be edited or selected again; a deleted group's name can be reused.
   the reviewed action.
 
 ## Observability and failure behavior

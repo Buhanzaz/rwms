@@ -127,8 +127,11 @@ scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
 
 The problem sheet saves its comment and up to ten encrypted photos as a Room
-draft. Its paperclip opens the camera or Android's single/multiple gallery
-picker. Closing the sheet or app preserves the draft. Sending atomically
+draft. Gallery opens an embedded MediaStore thumbnail grid in a bottom sheet above
+the still-mounted task and report/completion dialog, after photo permission.
+Selection attaches photos directly; dismissing the gallery leaves the original
+dialog open. The sheet cannot be dismissed while photos are being saved.
+Closing the sheet or app preserves the draft. Sending atomically
 freezes the encrypted declaration and enables its photo uploads; sync posts
 the complete report before uploading photos or completing that task. Report
 photos are separate from result evidence and never satisfy a completion gate.
@@ -138,10 +141,14 @@ displayed as delivered. Room 11→12 adds the nullable report association withou
 changing existing result photos.
 
 The server may mark a work or material as `MISSING`, including linked requirements.
-Its recycling control creates one version-fenced, encrypted problem-report command
-and remains unavailable until that command is synchronized; the app never performs
-a local availability saga. Missing cards are red, restored cards are green, and the
-server-provided `problemColor` marks the task card. A COMPLETE accepted with missing
+The row control creates one version-fenced, encrypted problem-report command.
+Tapping a missing row's undo control queues `RESTORE_ITEM`, sent to the dedicated
+`/worker/v1/entries/{entryId}/requirements/{itemId}/restore` endpoint with the same
+operation identity on retries. Task-board restores the exact dependency group; the app
+never calculates authoritative linked state. Controls wait for synchronization.
+Missing rows show a red background and an explicit status; restored rows return to
+the same translucent white surface as available rows. The historical problem flag
+neither tints the task screen nor adds a general problem banner. A COMPLETE accepted with missing
 requirements remains visibly incomplete with the server-provided completed-work share.
 Room 12→13 adds these task-projection fields without changing saved reports.
 
@@ -198,8 +205,8 @@ repair-stage lines. The same COMPLETE closes every remaining member of that pack
 Other task sources retain entry-level execution.
 
 Completing a task opens three equal-width, vertically stacked actions: CameraX,
-Android photo picker, and cancel. The picker accepts up to ten images. Every
-camera batch and every picker selection is physically oriented, converted to a
+an embedded gallery bottom sheet, and cancel. The gallery accepts up to ten images
+and leaves the completion dialog visible behind it. Every camera batch and selection is physically oriented, converted to a
 local WebP original plus SMALL/MEDIUM/LARGE WebP upload parts, encrypted, and
 durably queued in capture or selection order. The last successfully confirmed photo
 and its COMPLETE command enter the same Room transaction; the screen callback only
@@ -319,7 +326,7 @@ An encrypted JPEG captured before the Room 8→9 upgrade retains its original
 reservation and may finish once through the compatible source-upload shape;
 media-service pins that exact object without rotating, decoding or compressing
 it. New evidence never enters this recovery path.
-Gallery images use Android's multi-select photo picker with a ten-image limit.
+Gallery images use the embedded MediaStore bottom sheet with a ten-image limit.
 They are copied sequentially into transient private cache and pass through the
 same orientation, 8 MP, 15 MB, WebP and encrypted evidence pipeline before each
 temporary copy is removed. A partial batch keeps and schedules already durable

@@ -24,7 +24,7 @@ class MaintenanceTaskRequirementsResolverTest {
       repairs, stages, links, new MaintenanceCommandSupport(null, null, json, mock(PlatformTransactionManager.class)));
 
   @Test
-  void followsDeepFrozenLinksBothWaysWithoutIncludingUnlinkedSiblingsOrOtherVersions() {
+  void followsFrozenDependenciesBothWaysWithoutFollowingNavigationPathsOrOtherVersions() {
     UUID version = UUID.randomUUID(), newer = UUID.randomUUID();
     UUID workNode = UUID.randomUUID(), materialNode = UUID.randomUUID();
     UUID location = UUID.randomUUID(), option = UUID.randomUUID();
@@ -35,8 +35,9 @@ class MaintenanceTaskRequirementsResolverTest {
     UUID entry = UUID.randomUUID();
     source(List.of(stage(entry, List.of(work), List.of(material, sibling, newerLine))));
     when(links.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(version)).thenReturn(List.of(
-        link(version, workNode, location, "DEPENDENCY"), link(version, location, option, "FOLLOW_UP"),
-        link(version, option, materialNode, "DEPENDENCY"), link(version, option, location, "FOLLOW_UP")));
+        link(version, workNode, location, "DEPENDENCY"), link(version, location, option, "DEPENDENCY"),
+        link(version, option, materialNode, "DEPENDENCY"), link(version, option, location, "FOLLOW_UP"),
+        link(version, location, sibling.catalogSnapshot().nodeId(), "FOLLOW_UP")));
     when(links.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(newer)).thenReturn(List.of());
 
     var result = resolver.resolve(repairId, warehouseId);

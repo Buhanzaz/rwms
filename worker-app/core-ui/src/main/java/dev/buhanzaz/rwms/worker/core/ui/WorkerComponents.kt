@@ -108,16 +108,7 @@ private fun WorkerTopBar(
                             .testTag(if (onBack == null) "menu-button" else "header-back"),
                     ) {
                         if (onBack == null) {
-                            Surface(
-                                modifier = Modifier.size(36.dp),
-                                shape = CircleShape,
-                                color = Color.Transparent,
-                                border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline),
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Filled.Menu, contentDescription = "Открыть меню")
-                                }
-                            }
+                            Icon(Icons.Filled.Menu, contentDescription = "Открыть меню")
                         } else {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,

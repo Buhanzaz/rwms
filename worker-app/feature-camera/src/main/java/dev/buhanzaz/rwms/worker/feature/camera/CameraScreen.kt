@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.worker.feature.camera
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentUris
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -9,7 +10,10 @@ import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.media.MediaActionSound
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import android.provider.Settings
+import android.widget.Toast
 import android.view.OrientationEventListener
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -45,11 +49,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -59,16 +67,23 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -85,6 +100,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -106,12 +122,15 @@ import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.WorkerButton as Button
 import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmapFile
+import coil3.compose.AsyncImage
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 private val WorkerCameraBlue = Color(0xFF3B82F6)
 private val WorkerCameraPanel = Color(0xE6191919)
@@ -212,16 +231,14 @@ fun CameraScreen(
     }
 }
 
-/**
- * Opens Android's full-screen document picker and imports up to ten selected images as encrypted task evidence.
- * Completion callers defer sync until the matching task action has entered the outbox.
- */
+/** In-app Telegram-style photo sheet layered above the still-mounted task dialog. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GalleryImportScreen(
+fun GalleryImportSheet(
     userId: String,
     entryId: String,
     routeIndex: Int,
-    onBack: () -> Unit,
+    onDismiss: () -> Unit,
     onSaved: (evidenceIds: List<String>) -> Unit,
     requestSyncAfterSave: Boolean = true,
     completeAfterSave: Boolean = false,
@@ -230,41 +247,29 @@ fun GalleryImportScreen(
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var pickerOpened by rememberSaveable { mutableStateOf(false) }
-    var selectionError by rememberSaveable { mutableStateOf<String?>(null) }
     val selectionLimit = maxPhotos.coerceIn(1, 10)
-    val importPhotos: (List<Uri>) -> Unit = { uris ->
-        if (uris.isEmpty()) {
-            onBack()
+    val sheetHeight = (LocalConfiguration.current.screenHeightDp * 0.72f).dp
+    GalleryBottomSheet(saving = state.saving, onDismiss = onDismiss) {
+        if (state.saving) {
+            GallerySaveProgress(maxHeight = sheetHeight)
         } else {
-            viewModel.confirmGallery(
-                userId,
-                entryId,
-                routeIndex,
-                uris,
-                requestSyncAfterSave,
-                completeAfterSave,
-                problemReportId,
+            EmbeddedGallerySheet(
+                selectionLimit = selectionLimit,
+                maxHeight = sheetHeight,
+                onSelected = { uris ->
+                    viewModel.confirmGallery(
+                        userId,
+                        entryId,
+                        routeIndex,
+                        uris,
+                        requestSyncAfterSave,
+                        completeAfterSave,
+                        problemReportId,
+                    )
+                },
+                onDismiss = onDismiss,
+                error = state.error,
             )
-        }
-    }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.size > selectionLimit) {
-            selectionError = "Можно выбрать не более $selectionLimit фото за раз."
-        } else {
-            selectionError = null
-            importPhotos(uris)
-        }
-    }
-    fun openPicker() {
-        selectionError = null
-        picker.launch(arrayOf("image/*"))
-    }
-
-    LaunchedEffect(Unit) {
-        if (!pickerOpened) {
-            pickerOpened = true
-            openPicker()
         }
     }
     LaunchedEffect(state.savedEvidenceIds) {
@@ -273,26 +278,245 @@ fun GalleryImportScreen(
             onSaved(evidenceIds)
         }
     }
+}
 
-    WorkerScreenScaffold(title = "Фото из галереи", onBack = onBack) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            (selectionError ?: state.error)?.let { error ->
-                Text(
-                    error,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                )
-                Button(
-                    onClick = ::openPicker,
-                    modifier = Modifier.padding(top = 16.dp),
-                ) { Text("Выбрать другие фото") }
+/** Production sheet guard: an import in progress cannot be hidden by a swipe or Back. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun GalleryBottomSheet(
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    val context = LocalContext.current
+    val savingState by rememberUpdatedState(saving)
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { target -> target != SheetValue.Hidden || !savingState },
+    )
+    BackHandler(enabled = saving) {
+        Toast.makeText(context, "Фотографии добавляются", Toast.LENGTH_SHORT).show()
+    }
+    ModalBottomSheet(
+        onDismissRequest = {
+            if (saving) {
+                Toast.makeText(context, "Фотографии добавляются", Toast.LENGTH_SHORT).show()
+            } else {
+                onDismiss()
             }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        sheetState = sheetState,
+        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = !saving),
+        content = content,
+    )
+}
+
+@Composable
+private fun GallerySaveProgress(
+    message: String = "Добавляем фотографии…",
+    maxHeight: androidx.compose.ui.unit.Dp,
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight).height(240.dp).background(WorkerCameraPanel),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            CircularProgressIndicator(color = WorkerCameraBlue)
+            Text(message, color = Color.White)
         }
     }
+}
+
+/**
+ * Reads local images for the in-app sheet. Android 14's selected-photos permission is also a
+ * valid read grant, so a worker can attach only the photos they permitted.
+ */
+@Composable
+private fun EmbeddedGallerySheet(
+    selectionLimit: Int,
+    maxHeight: androidx.compose.ui.unit.Dp,
+    onSelected: (List<Uri>) -> Unit,
+    onDismiss: () -> Unit,
+    error: String?,
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val permissions = galleryMediaPermissions()
+    var granted by remember { mutableStateOf(context.hasAnyPermission(permissions)) }
+    var loading by remember { mutableStateOf(false) }
+    var photos by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var reloadVersion by remember { mutableIntStateOf(0) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        granted = context.hasAnyPermission(permissions)
+    }
+
+    DisposableEffect(lifecycleOwner, context, permissions.contentHashCode()) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) granted = context.hasAnyPermission(permissions)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(granted, reloadVersion) {
+        if (!granted) {
+            permissionLauncher.launch(permissions)
+        } else {
+            loading = true
+            val result = withContext(Dispatchers.IO) { runCatching(context::mediaStorePhotos) }
+            photos = result.getOrDefault(emptyList())
+            loadError = result.exceptionOrNull()?.let { "Не удалось открыть галерею. Повторите попытку." }
+            loading = false
+        }
+    }
+    when {
+        !granted -> GallerySheetMessage(
+            message = "Разрешите доступ к фотографиям, чтобы открыть галерею.",
+            actionLabel = "Настройки",
+            onAction = context::openApplicationSettings,
+            onDismiss = onDismiss,
+            maxHeight = maxHeight,
+        )
+        loading -> GallerySaveProgress("Загружаем фотографии…", maxHeight)
+        loadError != null -> GallerySheetMessage(
+            message = loadError.orEmpty(),
+            actionLabel = "Повторить",
+            onAction = { reloadVersion++ },
+            onDismiss = onDismiss,
+            maxHeight = maxHeight,
+        )
+        else -> GallerySheetGrid(
+            photos = photos,
+            selectionLimit = selectionLimit,
+            onSelected = onSelected,
+            onDismiss = onDismiss,
+            maxHeight = maxHeight,
+            error = error,
+        )
+    }
+}
+
+@Composable
+internal fun GallerySheetGrid(
+    photos: List<Uri>,
+    selectionLimit: Int,
+    onSelected: (List<Uri>) -> Unit,
+    onDismiss: () -> Unit,
+    maxHeight: androidx.compose.ui.unit.Dp,
+    error: String? = null,
+) {
+    val selected = remember { mutableStateListOf<Uri>() }
+    Column(
+            modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight).padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Галерея", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("Отмена") }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            if (photos.isEmpty()) {
+                Text(
+                    "В галерее пока нет фотографий",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(96.dp),
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(photos, key = Uri::toString) { uri ->
+                        val isSelected = uri in selected
+                        Surface(
+                            modifier = Modifier
+                                .size(104.dp)
+                                .clickable {
+                                    if (isSelected) {
+                                        selected.remove(uri)
+                                    } else if (selected.size < selectionLimit) {
+                                        selected.add(uri)
+                                    }
+                                }
+                                .semantics { contentDescription = "Фото из галереи" },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) WorkerCameraBlue.copy(alpha = 0.32f) else Color.Black,
+                            border = if (isSelected) {
+                                androidx.compose.foundation.BorderStroke(2.dp, WorkerCameraBlue)
+                            } else {
+                                null
+                            },
+                        ) {
+                            Box {
+                                AsyncImage(
+                                    model = uri,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                )
+                                if (isSelected) {
+                                    Surface(
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp),
+                                        shape = CircleShape,
+                                        color = WorkerCameraBlue,
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text("${selected.indexOf(uri) + 1}", color = Color.White)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Button(
+                onClick = { onSelected(selected.toList()) },
+                enabled = selected.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp),
+            ) { Text("Добавить (${selected.size})") }
+        }
+}
+
+@Composable
+private fun GallerySheetMessage(
+    message: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+    onDismiss: () -> Unit,
+    maxHeight: androidx.compose.ui.unit.Dp,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight).padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Галерея", style = MaterialTheme.typography.titleLarge)
+        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        Button(onClick = onAction) { Text(actionLabel) }
+        TextButton(onClick = onDismiss) { Text("Отмена") }
+    }
+}
+
+private fun Context.mediaStorePhotos(): List<Uri> {
+    val projection = arrayOf(MediaStore.Images.Media._ID)
+    return contentResolver.query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection,
+        null,
+        null,
+        "${MediaStore.Images.Media.DATE_ADDED} DESC",
+    )?.use { cursor ->
+        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        buildList {
+            while (cursor.moveToNext()) {
+                add(ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cursor.getLong(idColumn)))
+            }
+        }
+    }.orEmpty()
 }
 
 @Composable
@@ -1261,6 +1485,21 @@ private fun persistWorkerCameraJpeg(
 
 private fun Context.hasCameraPermission(): Boolean =
     ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.hasPermission(permission: String): Boolean =
+    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.hasAnyPermission(permissions: Array<String>): Boolean =
+    permissions.any(::hasPermission)
+
+private fun galleryMediaPermissions(): Array<String> = when {
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+        Manifest.permission.READ_MEDIA_IMAGES,
+        Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+    )
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+    else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+}
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

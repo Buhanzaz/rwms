@@ -22,6 +22,7 @@ import dev.buhanzaz.rwms.worker.core.network.MediaAssetPageDto
 import dev.buhanzaz.rwms.worker.core.network.TaskEvidenceDto
 import dev.buhanzaz.rwms.worker.core.network.UploadSessionDto
 import dev.buhanzaz.rwms.worker.core.network.UploadedObjectDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerRequirementRestoreRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerActionRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerActionResultDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerCategoryDto
@@ -98,6 +99,32 @@ class WorkerProblemReportSyncRobolectricTest {
         assertThat(api.events.indexOf("report")).isLessThan(api.events.indexOf("upload:$PHOTO_B"))
         assertThat(api.events.indexOf("complete")).isGreaterThan(api.events.indexOf("upload:$PHOTO_A"))
         assertThat(api.events.indexOf("complete")).isGreaterThan(api.events.indexOf("upload:$PHOTO_B"))
+    }
+
+    @Test
+    fun `restoration retries the exact item and operation without sending a completion`() = runTest {
+        val now = System.currentTimeMillis()
+        database.taskDao().upsertAll(listOf(task(now, resultPhotoMinCount = 0)))
+        val original = completionOutbox(now)
+        val pending = PendingWorkerAction(
+            operationId = "restore-operation", action = "RESTORE_ITEM", expectedVersion = 4,
+            workerGroupId = null, occurredAt = OCCURRED_AT, offlineLeaseId = LEASE, itemId = "hanger",
+        )
+        database.outboxDao().insert(original.copy(
+            operationId = pending.operationId, encryptedPayload = cipher.encrypt(json.encodeToString(pending)),
+        ))
+        val api = ReportApi().apply { restoreFailuresRemaining = 1 }
+        val sync = coordinator(api, RecordingUploader(api.events))
+
+        assertThat(sync.sync(USER)).isInstanceOf(WorkerSyncOutcome.Retry::class.java)
+        assertThat(database.outboxDao().pending(USER).single().operationId).isEqualTo(pending.operationId)
+        assertThat(sync.sync(USER)).isEqualTo(WorkerSyncOutcome.Complete)
+
+        assertThat(api.restoreRequests).hasSize(2)
+        assertThat(api.restoreRequests[0]).isEqualTo(api.restoreRequests[1])
+        assertThat(api.restoreRequests[0].expectedVersion).isEqualTo(4)
+        assertThat(api.events).doesNotContain("complete")
+        assertThat(database.outboxDao().pending(USER)).isEmpty()
     }
 
     @Test
@@ -397,6 +424,24 @@ class WorkerProblemReportSyncRobolectricTest {
 
     private inner class ReportApi : WorkerGatewayApi {
         val events = mutableListOf<String>()
+        val restoreRequests = mutableListOf<WorkerRequirementRestoreRequestDto>()
+        var restoreFailuresRemaining = 0
+        override suspend fun restoreRequirement(
+            entryId: String, itemId: String, idempotencyKey: String, request: WorkerRequirementRestoreRequestDto,
+        ): Response<WorkerActionResultDto> {
+            assertThat(entryId).isEqualTo(ENTRY)
+            assertThat(itemId).isEqualTo("hanger")
+            assertThat(idempotencyKey).isEqualTo(request.operationId)
+            events += "restore"
+            restoreRequests += request
+            if (restoreFailuresRemaining-- > 0) throw java.io.IOException("offline")
+            return Response.success(WorkerActionResultDto("APPLIED", 5, detail().copy(
+                status = "IN_PROGRESS",
+                materials = listOf(dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto(
+                    "hanger", "Вешалка", 1.0, "шт", "RESTORED",
+                )),
+            )))
+        }
         val reportRequests = mutableListOf<WorkerProblemReportRequestDto>()
         val ownReportCalls = AtomicInteger()
         val detailCalls = AtomicInteger()

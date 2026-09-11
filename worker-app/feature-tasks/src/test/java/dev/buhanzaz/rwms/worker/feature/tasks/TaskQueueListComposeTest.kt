@@ -89,6 +89,22 @@ class TaskQueueListComposeTest {
     }
 
     @Test
+    fun `historical problem does not add a general problem banner`() {
+        compose.setContent {
+            RwmsWorkerTheme {
+                SingleTaskCard(
+                    task = task("reported").copy(hasProblem = true, incomplete = false),
+                    kpiPalette = null,
+                    onOpen = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("task-problem-reported").assertDoesNotExist()
+        compose.onNodeWithText("В задании отмечена проблема").assertDoesNotExist()
+    }
+
+    @Test
     fun `problem task card exposes server incomplete progress`() {
         compose.setContent {
             RwmsWorkerTheme {

@@ -46,7 +46,7 @@ class WorkerGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(15)
+        assertThat(expected).hasSize(16)
         assertWithMessage(
             "WorkerGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -79,6 +79,20 @@ class WorkerGatewayApiContractBoundaryTest {
             .filterValues { route -> route.gatewayPath.isEmpty() }
             .keys
         assertThat(dynamicMethods).containsExactly("uploadMediaContent", "mediaContent")
+    }
+
+    @Test
+    fun `requirement restore uses its exact four-field fenced command`() {
+        val request = WorkerRequirementRestoreRequestDto(
+            operationId = "11111111-1111-1111-1111-111111111111",
+            expectedVersion = 9,
+            occurredAt = "2026-09-11T10:00:00Z",
+            offlineLeaseId = "22222222-2222-2222-2222-222222222222",
+        )
+        val encoded = json.encodeToString(request)
+        assertThat(json.parseToJsonElement(encoded).jsonObject.keys)
+            .containsExactly("operationId", "expectedVersion", "occurredAt", "offlineLeaseId")
+        assertThat(json.decodeFromString<WorkerRequirementRestoreRequestDto>(encoded)).isEqualTo(request)
     }
 
     @Test
@@ -530,6 +544,7 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
         "applyAction" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/actions", "$taskBoard /worker/v1/entries/{entryId}/actions"),
         "reserveEvidence" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/evidence-reservations", "$taskBoard /worker/v1/entries/{entryId}/evidence-reservations"),
         "createProblemReport" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/problem-reports", "$taskBoard /worker/v1/entries/{entryId}/problem-reports"),
+        "restoreRequirement" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/requirements/{itemId}/restore", "$taskBoard /worker/v1/entries/{entryId}/requirements/{itemId}/restore"),
         "workerProblemReport" to route("GET", "/api/task-board/worker/v1/problem-reports/{reportId}", "$taskBoard /worker/v1/problem-reports/{reportId}"),
         "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "unregisterDevice" to route("DELETE", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),

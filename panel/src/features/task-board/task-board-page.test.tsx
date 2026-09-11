@@ -443,6 +443,103 @@ afterEach(() => {
 })
 
 describe("task board warehouse access", () => {
+  it("refreshes worker requirement changes in the open board and drops restored selections", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const entry = { ...taskEntry("restore", "Восстановление"), suspended: true }
+    const currentBoard = {
+      ...board,
+      queues: [{ ...board.queues[0]!, entries: [entry] }],
+    }
+    const requirements = {
+      taskId: entry.taskId,
+      taskVersion: 9,
+      hasProblem: true,
+      incomplete: true,
+      completedWorkPercent: 80,
+      items: [
+        {
+          itemId: "work-1",
+          kind: "WORK",
+          name: "Установка вешалки",
+          state: "MISSING",
+          linkedItemIds: ["material-1"],
+        },
+        {
+          itemId: "material-1",
+          kind: "MATERIAL",
+          name: "Вешалка",
+          state: "MISSING",
+          linkedItemIds: ["work-1"],
+        },
+        {
+          itemId: "other",
+          kind: "MATERIAL",
+          name: "Краска",
+          state: "AVAILABLE",
+          linkedItemIds: [],
+        },
+      ],
+    }
+    const userEventApi = userEvent.setup()
+    renderPage("EDIT", { currentBoard, requirements })
+    await userEventApi.click(
+      await screen.findByRole("button", {
+        name: "Восстановить тестовое задание",
+      })
+    )
+    const work = await screen.findByRole("checkbox", {
+      name: /Работа: Установка вешалки/,
+    })
+    const material = screen.getByRole("checkbox", { name: /Материал: Вешалка/ })
+    const other = screen.getByRole("checkbox", { name: /Материал: Краска/ })
+    await userEventApi.click(material)
+    expect(work.getAttribute("aria-checked")).toBe("true")
+    expect(material.getAttribute("aria-checked")).toBe("true")
+    expect(other.closest("label")?.className).not.toContain("bg-destructive")
+    await userEventApi.click(work)
+    expect(work.getAttribute("aria-checked")).toBe("false")
+    expect(material.getAttribute("aria-checked")).toBe("false")
+    await userEventApi.click(material)
+
+    mocks.getTaskBoard.mockResolvedValue({
+      ...currentBoard,
+      queues: [
+        {
+          ...currentBoard.queues[0]!,
+          entries: [{ ...entry, suspended: false }],
+        },
+      ],
+    })
+    mocks.getTaskRequirements.mockResolvedValue({
+      ...requirements,
+      taskVersion: 10,
+      items: requirements.items.map((item) =>
+        item.state === "MISSING" ? { ...item, state: "RESTORED" } : item
+      ),
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_001)
+    })
+    expect(screen.getByTestId("first-visible-task-suspended").textContent).toBe(
+      "false"
+    )
+    expect(work.getAttribute("aria-checked")).toBe("false")
+    expect(material.getAttribute("aria-checked")).toBe("false")
+    expect(material.closest("label")?.className).toContain("bg-green-500")
+    expect(material.closest("label")?.className).not.toContain("bg-destructive")
+    expect(other.closest("label")?.className).not.toContain("bg-green-500")
+    await userEventApi.click(
+      screen.getByRole("button", { name: "Восстановить" })
+    )
+    await waitFor(() =>
+      expect(mocks.restoreTaskBoardTask).toHaveBeenCalledWith(
+        "task-board-token",
+        expect.objectContaining({ taskVersion: 10 }),
+        []
+      )
+    )
+  })
+
   it("restores exactly the transitive missing group with the fresh requirements version", async () => {
     const entry = {
       ...taskEntry("restore", "Восстановление"),

@@ -57,7 +57,7 @@ import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.WorkerStoreLaunchGate
 import dev.buhanzaz.rwms.worker.core.ui.WorkerStoreLogo
 import dev.buhanzaz.rwms.worker.feature.camera.CameraScreen
-import dev.buhanzaz.rwms.worker.feature.camera.GalleryImportScreen
+import dev.buhanzaz.rwms.worker.feature.camera.GalleryImportSheet
 import dev.buhanzaz.rwms.worker.feature.login.LoginScreen
 import dev.buhanzaz.rwms.worker.feature.taskdetail.TaskDetailScreen
 import dev.buhanzaz.rwms.worker.feature.taskdetail.TaskDetailViewModel
@@ -137,6 +137,24 @@ internal fun newCameraRoute(
     maxPhotos = maxPhotos,
 )
 
+/** Gallery selection overlays the task and its dialog; camera capture owns a full-screen entry. */
+internal fun openWorkerCapture(
+    backStack: MutableList<NavKey>,
+    galleryBackStack: MutableList<NavKey>,
+    request: CameraRoute,
+) {
+    if (request.fromGallery) {
+        if (galleryBackStack.isEmpty()) galleryBackStack.add(request)
+    } else {
+        backStack.add(request)
+    }
+}
+
+/** Removes only the gallery/camera route that received the picker result. */
+internal fun closeCameraRoute(backStack: MutableList<NavKey>, route: CameraRoute) {
+    if (backStack.lastOrNull() == route) backStack.removeLastOrNull()
+}
+
 @Serializable
 private data object ProfileRoute : NavKey
 
@@ -164,6 +182,7 @@ internal data class PhotoRoute(
 @Composable
 private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -> Unit) {
     val backStack = rememberNavBackStack(BoardRoute)
+    val galleryBackStack = rememberNavBackStack()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val tasksViewModel = hiltViewModel<TasksViewModel>()
@@ -215,7 +234,7 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = backStack.lastOrNull() !is CameraRoute &&
+        gesturesEnabled = galleryBackStack.isEmpty() && backStack.lastOrNull() !is CameraRoute &&
             backStack.lastOrNull() !is PhotoRoute &&
             backStack.lastOrNull() !is AvatarEditorRoute,
         drawerContent = {
@@ -282,7 +301,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 } else {
                     val openCamera: (Pair<Int, Boolean>) -> Unit =
                         dropUnlessResumedWithArgument { request ->
-                            backStack.add(
+                            openWorkerCapture(
+                                backStack,
+                                galleryBackStack,
                                 newCameraRoute(
                                     task.entryId,
                                     request.first,
@@ -291,7 +312,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                             )
                         }
                     val openGallery: (Int) -> Unit = dropUnlessResumedWithArgument { routeIndex ->
-                        backStack.add(
+                        openWorkerCapture(
+                            backStack,
+                            galleryBackStack,
                             newCameraRoute(
                                 task.entryId,
                                 routeIndex,
@@ -312,7 +335,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                         },
                         onGallery = openGallery,
                         onReportCapture = { reportId, routeIndex, remainingPhotos, fromGallery ->
-                            backStack.add(
+                            openWorkerCapture(
+                                backStack,
+                                galleryBackStack,
                                 newCameraRoute(
                                     task.entryId,
                                     routeIndex,
@@ -333,7 +358,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
             }
             entry<TaskRoute> { route ->
                 val openCamera: (Pair<Int, Boolean>) -> Unit = dropUnlessResumedWithArgument { request ->
-                    backStack.add(
+                    openWorkerCapture(
+                        backStack,
+                        galleryBackStack,
                         newCameraRoute(
                             route.entryId,
                             request.first,
@@ -342,7 +369,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                     )
                 }
                 val openGallery: (Int) -> Unit = dropUnlessResumedWithArgument { routeIndex ->
-                    backStack.add(
+                    openWorkerCapture(
+                        backStack,
+                        galleryBackStack,
                         newCameraRoute(
                             route.entryId,
                             routeIndex,
@@ -363,7 +392,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                     },
                     onGallery = openGallery,
                     onReportCapture = { reportId, routeIndex, remainingPhotos, fromGallery ->
-                        backStack.add(
+                        openWorkerCapture(
+                            backStack,
+                            galleryBackStack,
                             newCameraRoute(
                                 route.entryId,
                                 routeIndex,
@@ -385,33 +416,18 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 )
             }
             entry<CameraRoute> { route ->
-                val closeCamera = dropUnlessResumed { backStack.removeLastOrNull() }
-                val onSaved: (List<String>) -> Unit = { closeCamera() }
-                if (route.fromGallery) {
-                    GalleryImportScreen(
-                        userId = userId,
-                        entryId = route.entryId,
-                        routeIndex = route.routeIndex,
-                        onBack = closeCamera,
-                        onSaved = onSaved,
-                        requestSyncAfterSave = !route.completeAfterSave && route.problemReportId == null,
-                        completeAfterSave = route.completeAfterSave,
-                        problemReportId = route.problemReportId,
-                        maxPhotos = route.maxPhotos,
-                    )
-                } else {
-                    CameraScreen(
-                        userId = userId,
-                        entryId = route.entryId,
-                        routeIndex = route.routeIndex,
-                        onBack = closeCamera,
-                        onSaved = onSaved,
-                        requestSyncAfterSave = !route.completeAfterSave && route.problemReportId == null,
-                        completeAfterSave = route.completeAfterSave,
-                        problemReportId = route.problemReportId,
-                        maxPhotos = route.maxPhotos,
-                    )
-                }
+                val closeCamera = { closeCameraRoute(backStack, route) }
+                CameraScreen(
+                    userId = userId,
+                    entryId = route.entryId,
+                    routeIndex = route.routeIndex,
+                    onBack = closeCamera,
+                    onSaved = { closeCamera() },
+                    requestSyncAfterSave = !route.completeAfterSave && route.problemReportId == null,
+                    completeAfterSave = route.completeAfterSave,
+                    problemReportId = route.problemReportId,
+                    maxPhotos = route.maxPhotos,
+                )
             }
             entry<ProfileRoute> {
                 ProfileScreen(
@@ -457,6 +473,20 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
         )
     }
 
+    WorkerGalleryOverlay(galleryBackStack) { request, closeGallery ->
+        GalleryImportSheet(
+            userId = userId,
+            entryId = request.entryId,
+            routeIndex = request.routeIndex,
+            onDismiss = closeGallery,
+            onSaved = { closeGallery() },
+            requestSyncAfterSave = !request.completeAfterSave && request.problemReportId == null,
+            completeAfterSave = request.completeAfterSave,
+            problemReportId = request.problemReportId,
+            maxPhotos = request.maxPhotos,
+        )
+    }
+
     incomingSlingerTask
         ?.takeUnless { task ->
             (backStack.lastOrNull() as? TaskRoute)?.entryId == task.entryId
@@ -468,6 +498,28 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 onTake = { takeSlingerTask(task.entryId) },
             )
         }
+}
+
+/** Keeps task dialogs mounted while giving each photo sheet its own saved state and ViewModels. */
+@Composable
+internal fun WorkerGalleryOverlay(
+    backStack: MutableList<NavKey>,
+    content: @Composable (CameraRoute, onDismiss: () -> Unit) -> Unit,
+) {
+    if (backStack.isEmpty()) return
+    NavDisplay(
+        backStack = backStack,
+        onBack = { backStack.removeLastOrNull() },
+        entryDecorators = listOf(
+            rememberSaveableStateHolderNavEntryDecorator(),
+            rememberViewModelStoreNavEntryDecorator(),
+        ),
+        entryProvider = entryProvider {
+            entry<CameraRoute> { request ->
+                content(request) { closeCameraRoute(backStack, request) }
+            }
+        },
+    )
 }
 
 /** Hosts the single ordinary task or the temporary slinger interruption in one stable route. */

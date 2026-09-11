@@ -46,6 +46,9 @@ class WorkerGatewayClient @Inject constructor(
     suspend fun reserveEvidence(entryId: String, request: EvidenceReservationRequestDto): TaskEvidenceDto =
         api.reserveEvidence(entryId, request.operationId, request).bodyOrProblem(json)
 
+    suspend fun restoreRequirement(entryId: String, itemId: String, request: WorkerRequirementRestoreRequestDto): WorkerActionResultDto =
+        api.restoreRequirement(entryId, itemId, request.operationId, request).bodyOrProblem(json)
+
     suspend fun createProblemReport(
         entryId: String,
         request: WorkerProblemReportRequestDto,

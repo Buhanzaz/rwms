@@ -273,8 +273,9 @@ paths:
         Exact task-board-service boundary requiring principal_type=SERVICE,
         sub=client_id=task-board-service, audience rwms-services and exactly
         maintenance.task-requirements. Resolves only frozen repair-stage line snapshots;
-        linked item IDs are the transitive undirected DEPENDENCY/FOLLOW_UP closure within
-        each frozen catalog version and never infer category siblings.
+        linked item IDs are the transitive undirected DEPENDENCY closure within
+        each frozen catalog version and never infer category siblings. FOLLOW_UP paths
+        describe catalog navigation and do not couple work/material availability.
       parameters:
         - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }

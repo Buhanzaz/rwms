@@ -16,6 +16,49 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class PendingActionGuardRobolectricTest {
     @Test
+    fun `restoration retains item version and lease and blocks duplicate commands`() = runTest {
+        val database = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), WorkerDatabase::class.java,
+        ).allowMainThreadQueries().build()
+        try {
+            val now = System.currentTimeMillis()
+            database.sessionDao().upsert(session(now))
+            database.taskDao().upsertAll(listOf(task(now).copy(status = "IN_PROGRESS")))
+            val store = WorkerLocalStore(database, testPendingPayloadCipher(), Json)
+            store.enqueueRequirementRestore(USER_ID, ENTRY_ID, 5, "hanger")
+            val operation = database.outboxDao().pending(USER_ID).single()
+            val pending = Json.decodeFromString<PendingWorkerAction>(store.decryptOutboxPayload(operation))
+            assertThat(pending.action).isEqualTo("RESTORE_ITEM")
+            assertThat(pending.itemId).isEqualTo("hanger")
+            assertThat(pending.expectedVersion).isEqualTo(5)
+            assertThat(pending.offlineLeaseId).isEqualTo("lease")
+            assertThat(pending.operationId).isEqualTo(operation.operationId)
+            assertThat(database.taskDao().task(USER_ID, ENTRY_ID)?.status).isEqualTo("IN_PROGRESS")
+            assertThat(runCatching { store.enqueueRequirementRestore(USER_ID, ENTRY_ID, 5, "hanger") }.isFailure).isTrue()
+            assertThat(database.outboxDao().pending(USER_ID)).containsExactly(operation)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun `stale restoration cannot enter the outbox`() = runTest {
+        val database = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), WorkerDatabase::class.java,
+        ).allowMainThreadQueries().build()
+        try {
+            val now = System.currentTimeMillis()
+            database.sessionDao().upsert(session(now))
+            database.taskDao().upsertAll(listOf(task(now)))
+            val store = WorkerLocalStore(database, testPendingPayloadCipher(), Json)
+            assertThat(runCatching { store.enqueueRequirementRestore(USER_ID, ENTRY_ID, 4, "hanger") }.isFailure).isTrue()
+            assertThat(database.outboxDao().pending(USER_ID)).isEmpty()
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `missing requirement retains one fenced report identity and rejects a second stale tap`() = runTest {
         val database = Room.inMemoryDatabaseBuilder(
             RuntimeEnvironment.getApplication(),

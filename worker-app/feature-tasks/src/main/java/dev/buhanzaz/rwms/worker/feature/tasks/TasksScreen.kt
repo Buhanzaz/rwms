@@ -185,13 +185,9 @@ internal fun SingleTaskCard(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (task.hasProblem) {
+            if (task.hasProblem && task.incomplete) {
                 Text(
-                    text = if (task.incomplete) {
-                        "Незавершено: ${task.completedWorkPercent}% работ выполнено"
-                    } else {
-                        "В задании отмечена проблема"
-                    },
+                    text = "Незавершено: ${task.completedWorkPercent}% работ выполнено",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("task-problem-${task.entryId}"),

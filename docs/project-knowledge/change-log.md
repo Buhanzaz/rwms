@@ -373,11 +373,13 @@ work. Newest entries go first; never rewrite the meaning of an older row.
 
 | 2026-09-11 | Dossier recovery boundary | V6 repairs a missing active pointer or an empty generation registry without fabricating history. Inventory publication schema and dossier validation now accept the current final-plan maintenance receipt with strict nested fields. | [V6](../../services/dossier-service/src/main/resources/db/migration/V6__restore_missing_active_generation.sql), [inventory event schema](../../contracts/events/inventory/inventory-events-v1.schema.json) | 65 dossier migration, validator, contract and runtime integration cases plus 15 inventory contract cases passed. |
 
+| 2026-09-11 | Worker requirement availability | Catalog `DEPENDENCY` links propagate missing work/material state; `FOLLOW_UP` paths do not. An active assigned worker can restore one linked group with a fenced, idempotent command. WorkerApp keeps the command in its encrypted outbox and colors requirement rows individually. | [Worker contract](../../contracts/openapi/task-board-service.yaml), [requirements resolver](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceTaskRequirementsResolver.java) | Task-board HTTP, contract and stale-link tests plus maintenance resolver tests passed. |
+
 ## Entry Template
+
+| 2026-09-11 | Workforce directory deletion | Workers and groups can be removed while retaining completed assignments, time events and KPI history. Auth deletion remains coordinated; unfinished assignments block removal. Archived group names can be reused. | [V57](../../services/task-board-service/src/main/resources/db/migration/V57__archive_deleted_workforce_profiles.sql), [deletion tests](../../services/task-board-service/src/test/java/dev/buhanzaz/rwms/taskboard/WorkforceDeletionIntegrationTest.java) | 4 PostgreSQL deletion/upgrade cases, 6 current-group cases, auth deletion failure/retry case and 15 settings UI tests passed. |
 
 
 | Date       | Area             | Durable change                                                  | Evidence                              | Verification     |
-| 2026-09-11 | Workforce directory deletion | Workers and groups can be removed while retaining completed assignments, time events and KPI history. Auth deletion remains coordinated; unfinished assignments block removal. Archived group names can be reused. | [V57](../../services/task-board-service/src/main/resources/db/migration/V57__archive_deleted_workforce_profiles.sql), [deletion tests](../../services/task-board-service/src/test/java/dev/buhanzaz/rwms/taskboard/WorkforceDeletionIntegrationTest.java) | 4 PostgreSQL deletion/upgrade cases, 6 current-group cases, auth deletion failure/retry case and 15 settings UI tests passed. |
-
 | ---------- | ---------------- | --------------------------------------------------------------- | ------------------------------------- | ---------------- |
 | YYYY-MM-DD | Domain/component | What ownership, invariant, boundary or contract meaning changed | Links to contract/code/migration/test | Exact checks run |

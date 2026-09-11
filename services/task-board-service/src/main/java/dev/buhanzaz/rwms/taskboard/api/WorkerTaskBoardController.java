@@ -184,6 +184,19 @@ public class WorkerTaskBoardController {
         .body(result.report());
   }
 
+  /** Restores the selected missing requirement and its linked rows for an active participant. */
+  @PostMapping("/entries/{entryId}/requirements/{itemId}/restore")
+  public WorkerActionAppliedResult restoreRequirement(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID entryId,
+      @PathVariable UUID itemId,
+      @RequestHeader("Idempotency-Key") String idempotencyKey,
+      @Valid @RequestBody WorkerRequirementRestoreRequest request) {
+    WorkerPrincipal principal = principal(jwt, true);
+    return service.restoreRequirement(
+        principal.workerId(), principal.warehouseId(), entryId, itemId, idempotencyKey, request);
+  }
+
   /** Refreshes an author-owned report's asynchronously finalized photo states after task closure. */
   @GetMapping("/problem-reports/{reportId}")
   public WorkerProblemReport problemReport(

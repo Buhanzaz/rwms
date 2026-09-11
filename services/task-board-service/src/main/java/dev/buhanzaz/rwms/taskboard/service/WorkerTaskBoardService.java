@@ -627,6 +627,34 @@ public class WorkerTaskBoardService {
   }
 
   /**
+   * Restores one dependency group under the native receipt and entry fences.
+   * Existing immutable reports remain history; only execution availability changes.
+   */
+  @Transactional
+  public WorkerActionAppliedResult restoreRequirement(
+      UUID workerId, UUID homeWarehouseId, UUID entryId, UUID itemId,
+      String idempotencyKey, WorkerRequirementRestoreRequest request) {
+    requireIdempotencyKey(idempotencyKey, request.operationId());
+    requireProblemReportAuthorHome(workerId, homeWarehouseId);
+    var replay = actionReceipts.lockAndReplayRestore(
+        workerId, homeWarehouseId, entryId, itemId, request);
+    if (replay.isPresent()) return replay.get();
+    requirements.lockEntryMutation(entryId);
+    ProblemReportTarget target = prepareProblemReportTarget(
+        workerId, homeWarehouseId, entryId, request.occurredAt(), request.offlineLeaseId());
+    requirements.restoreActive(target.warehouseId(), target.taskId(), entryId,
+        request.expectedVersion(), itemId);
+    WorkerTaskDetail changed = detail(MobileTaskSurface.WORKER, workerId, homeWarehouseId, entryId);
+    long changedRevision = revision(homeWarehouseId);
+    WorkerActionAppliedResult response = actionReceipts.saveRestore(
+        workerId, homeWarehouseId, entryId, itemId, request,
+        new WorkerActionAppliedResult("APPLIED", changed.version(), changed));
+    afterCommit(() -> invalidations.actionApplied(
+        homeWarehouseId, MobileTaskSurface.WORKER, workerId, entryId, changedRevision));
+    return response;
+  }
+
+  /**
    * Reserves a photo already atomically bound to a newly created worker problem report.
    *
    * <p>The caller owns and has locked the report. This method intentionally has no report-service

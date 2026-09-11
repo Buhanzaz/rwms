@@ -18,6 +18,7 @@ import dev.buhanzaz.rwms.worker.core.network.EvidenceReservationRequestDto
 import dev.buhanzaz.rwms.worker.core.network.GatewayFailureDisposition
 import dev.buhanzaz.rwms.worker.core.network.GatewayProblemException
 import dev.buhanzaz.rwms.worker.core.network.WorkerActionRequestDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerRequirementRestoreRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerCategoryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerContextDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedCategoryDto
@@ -314,7 +315,16 @@ class WorkerSyncCoordinator @Inject constructor(
     private suspend fun applyAction(userId: String, operation: WorkerOutboxEntity): EntryOperationResult {
         val pending = actionPayload(operation)
         try {
-            val result = gateway.action(
+            val result = if (pending.action == "RESTORE_ITEM") gateway.restoreRequirement(
+                operation.entryId,
+                requireNotNull(pending.itemId) { "Не указана восстанавливаемая позиция" },
+                WorkerRequirementRestoreRequestDto(
+                    operationId = pending.operationId,
+                    expectedVersion = pending.expectedVersion,
+                    occurredAt = pending.occurredAt,
+                    offlineLeaseId = pending.offlineLeaseId,
+                ),
+            ) else gateway.action(
                 operation.entryId,
                 WorkerActionRequestDto(
                     operationId = pending.operationId,

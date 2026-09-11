@@ -1680,6 +1680,41 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /worker/v1/entries/{entryId}/requirements/{itemId}/restore:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+      - name: itemId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: restoreWorkerTaskRequirement
+      description: >-
+        Restores the selected missing work/material and its frozen catalog DEPENDENCY group.
+        FOLLOW_UP navigation paths do not link availability. Only MISSING rows become RESTORED;
+        unrelated and completed rows, assignments and immutable problem reports are retained.
+        First execution requires an active participant of an IN_PROGRESS entry, its observed
+        expectedVersion and the worker-owned offline lease. Idempotency-Key must equal operationId.
+        Exact retries return the frozen original response even after subsequent task changes;
+        changed request, item, author or entry with the same operationId conflicts.
+      parameters:
+        - $ref: '#/components/parameters/WorkerIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerRequirementRestoreRequest' }
+      responses:
+        '200':
+          description: Applied restoration or its exact durable replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerActionAppliedResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /worker/v1/problem-reports/{reportId}:
     parameters:
       - name: reportId
@@ -2254,6 +2289,9 @@ paths:
         '502': { $ref: '#/components/responses/BadGateway' }
     delete:
       operationId: deleteWorker
+      description: >-
+        Removes the worker from the directory after auth account deletion. Completed work and
+        group interval history are retained. Active or paused assignments block deletion with 409.
       parameters:
         - $ref: '#/components/parameters/ExpectedVersion'
       responses:
@@ -2289,9 +2327,6 @@ paths:
       operationId: resetWorkerCredentials
       requestBody:
         required: true
-      description: >-
-        Removes the worker from the directory after auth account deletion. Completed work and
-        group interval history are retained. Active or paused assignments block deletion with 409.
         content:
           application/json:
             schema: { $ref: '#/components/schemas/CredentialPasswordRequest' }
@@ -2602,6 +2637,9 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: deleteWorkerGroup
+      description: >-
+        Removes the group from the directory, detaches its current members and retains completed
+        work and interval history. Active or paused assignments block deletion with 409.
       parameters:
         - $ref: '#/components/parameters/ExpectedVersion'
       responses:
@@ -2637,9 +2675,6 @@ paths:
       requestBody:
         required: true
         content:
-      description: >-
-        Removes the group from the directory, detaches its current members and retains completed
-        work and interval history. Active or paused assignments block deletion with 409.
           application/json:
             schema: { $ref: '#/components/schemas/GroupAvailabilityRequest' }
       responses:
@@ -5258,6 +5293,15 @@ components:
         occurredAt: { type: string, format: date-time }
         offlineLeaseId: { type: string, format: uuid }
         evidenceId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
+    WorkerRequirementRestoreRequest:
+      type: object
+      required: [operationId, expectedVersion, occurredAt, offlineLeaseId]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        occurredAt: { type: string, format: date-time }
+        offlineLeaseId: { type: string, format: uuid }
       additionalProperties: false
     WorkerActionAppliedResult:
       type: object

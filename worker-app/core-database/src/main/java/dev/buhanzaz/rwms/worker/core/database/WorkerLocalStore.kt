@@ -23,6 +23,7 @@ data class PendingWorkerAction(
     val evidenceId: String? = null,
     val occurredAt: String,
     val offlineLeaseId: String,
+    val itemId: String? = null,
 )
 
 /**
@@ -132,6 +133,9 @@ class WorkerLocalStore @Inject constructor(
         )
         val now = System.currentTimeMillis()
         database.withTransaction {
+            check(database.outboxDao().pendingActionCount(userId, entryId) == 0) {
+                "Действие по этому заданию уже ожидает синхронизации"
+            }
             check(database.outboxDao().pendingProblemReportCount(userId, entryId) == 0) {
                 "Сообщение об отсутствии уже ожидает синхронизации"
             }
@@ -148,6 +152,38 @@ class WorkerLocalStore @Inject constructor(
                     createdAtEpochMillis = now,
                     updatedAtEpochMillis = now,
                     lastError = null,
+                ),
+            )
+        }
+    }
+
+    /** Queues restoration without changing authoritative row states before the server accepts it. */
+    suspend fun enqueueRequirementRestore(userId: String, entryId: String, expectedVersion: Long, itemId: String) {
+        val lease = requireNotNull(leaseFor(userId)) { "Офлайн-доступ ещё не подготовлен" }
+        require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
+        val payload = PendingWorkerAction(
+            operationId = UUID.randomUUID().toString(),
+            action = "RESTORE_ITEM",
+            expectedVersion = expectedVersion,
+            workerGroupId = null,
+            occurredAt = Instant.ofEpochMilli(lease.estimatedServerNow(SystemClock.elapsedRealtime())).toString(),
+            offlineLeaseId = requireNotNull(currentLeaseId(userId)),
+            itemId = itemId,
+        )
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            check(database.outboxDao().pendingActionCount(userId, entryId) == 0 &&
+                database.outboxDao().pendingProblemReportCount(userId, entryId) == 0) {
+                "Действие по этому заданию уже ожидает синхронизации"
+            }
+            val task = requireNotNull(database.taskDao().task(userId, entryId))
+            require(task.version == expectedVersion && !task.locallyPending) { "Задание изменилось. Обновите карточку" }
+            database.outboxDao().insert(
+                WorkerOutboxEntity(
+                    operationId = payload.operationId, userId = userId, entryId = entryId,
+                    kind = OUTBOX_ACTION, encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload)),
+                    expectedVersion = expectedVersion, state = OUTBOX_PENDING, retryCount = 0,
+                    createdAtEpochMillis = now, updatedAtEpochMillis = now, lastError = null,
                 ),
             )
         }

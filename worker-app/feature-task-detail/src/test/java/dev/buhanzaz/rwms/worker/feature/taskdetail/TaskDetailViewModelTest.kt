@@ -14,6 +14,9 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerDatabase
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerSessionEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
+import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayApi
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.sync.WorkerProjectionWriter
@@ -142,6 +145,52 @@ class TaskDetailViewModelTest {
         assertThat(action.action).isEqualTo("COMPLETE")
         assertThat(action.evidenceId).isEqualTo("ready-evidence")
         assertThat(fixture.syncRequests).containsExactly(USER)
+    }
+
+    @Test
+    fun `second tap on missing material queues restoration instead of another report`() = runTest(dispatcher) {
+        val fixture = fixture(status = "IN_PROGRESS", assigned = true)
+        fixture.loadRequirements()
+
+        fixture.viewModel.reportMissingItem("hanger", "MATERIAL", "Вешалка")
+        val action = fixture.awaitAction()
+
+        assertThat(action.action).isEqualTo("RESTORE_ITEM")
+        assertThat(action.itemId).isEqualTo("hanger")
+        assertThat(action.expectedVersion).isEqualTo(VERSION)
+        assertThat(fixture.syncRequests).containsExactly(USER)
+    }
+
+    @Test
+    fun `second tap on missing work restores its exact identity`() = runTest(dispatcher) {
+        val fixture = fixture(status = "IN_PROGRESS", assigned = true)
+        fixture.loadRequirements()
+
+        fixture.viewModel.reportMissingItem("installation", "WORK", "Установка вешалки")
+        val action = fixture.awaitAction()
+
+        assertThat(action.action).isEqualTo("RESTORE_ITEM")
+        assertThat(action.itemId).isEqualTo("installation")
+        assertThat(fixture.syncRequests).containsExactly(USER)
+    }
+
+    private suspend fun Fixture.loadRequirements() {
+        WorkerProjectionWriter(database, json).applyDetail(USER, WorkerTaskDetailDto(
+            entryId = ENTRY, version = VERSION, taskId = "task", routeIndex = 0,
+            routeStepIndex = 0, routeStepCount = 1, title = "Task", description = null,
+            taskObject = null, taskText = null, scheduledDate = "2026-09-06", deadlineAt = null,
+            priority = 1, queuePosition = 1, status = "IN_PROGRESS", availabilityMode = "AVAILABLE",
+            plannedDurationMinutes = null, activeStartedAt = null, activeWorkSeconds = 0,
+            audienceSelectors = emptyList(), assignments = emptyList(),
+            materials = listOf(WorkerMaterialDto("hanger", "Вешалка", 1.0, "шт", "MISSING")),
+            works = listOf(WorkerWorkDto("installation", "Установка вешалки", 1.0, "шт", 10, null,
+                availabilityState = "MISSING")),
+            comments = emptyList(), sourceMedia = emptyList(), evidence = emptyList(), relatedSteps = emptyList(),
+            resultPhotoMinCount = 0, completionAllowed = true,
+        ))
+        withContext(Dispatchers.IO) {
+            withTimeout(5_000) { viewModel.uiState.first { it.detail?.materials?.isNotEmpty() == true } }
+        }
     }
 
     private suspend fun TestScope.fixture(

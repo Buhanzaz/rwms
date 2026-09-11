@@ -367,6 +367,7 @@ function TaskBoardWarehousePage() {
     queryKey: taskBoardQueryKey(warehouseId ?? "none"),
     queryFn: () => getTaskBoard(accessToken!, warehouseId!),
     enabled: Boolean(accessToken && warehouseId),
+    refetchInterval: 15_000,
   })
   const requirementEntry = restoreEntry ?? requirementsEntry
   const requirementsQuery = useQuery({
@@ -377,6 +378,7 @@ function TaskBoardWarehousePage() {
     queryFn: () =>
       getTaskRequirements(accessToken!, warehouseId!, requirementEntry!.taskId),
     enabled: Boolean(accessToken && warehouseId && requirementEntry),
+    refetchInterval: 15_000,
   })
   const highlightedTaskId = useMemo(() => {
     if (
@@ -1351,7 +1353,8 @@ function TaskBoardWarehousePage() {
           ) : requirementsQuery.data ? (
             <div className="flex flex-col gap-2">
               {requirementsQuery.data.items.map((item) => {
-                const selected = availableItemIds.has(item.itemId)
+                const selected =
+                  item.state === "MISSING" && availableItemIds.has(item.itemId)
                 const linked = missingRequirementGroup(
                   requirementsQuery.data.items,
                   item.itemId
@@ -1437,7 +1440,13 @@ function TaskBoardWarehousePage() {
                     kind: "restore",
                     entry: restoreEntry,
                     expectedTaskVersion: requirementsQuery.data.taskVersion,
-                    availableItemIds: [...availableItemIds],
+                    availableItemIds: requirementsQuery.data.items
+                      .filter(
+                        (item) =>
+                          item.state === "MISSING" &&
+                          availableItemIds.has(item.itemId)
+                      )
+                      .map((item) => item.itemId),
                   })
               }}
             >

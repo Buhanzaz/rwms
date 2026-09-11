@@ -162,7 +162,10 @@ class TaskDetailViewModel internal constructor(
                     evidence = evidence,
                     retryableEvidenceIds = retryable,
                     hasPendingMissingItemReport = outbox.any {
-                        it.kind == WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT && it.expectedVersion != null
+                        it.entryId == requested.entryId && (
+                            it.kind == WorkerLocalStore.OUTBOX_ACTION ||
+                                (it.kind == WorkerProblemReportStore.OUTBOX_PROBLEM_REPORT && it.expectedVersion != null)
+                            )
                     },
                     assignments = assignments,
                     session = session,
@@ -268,16 +271,23 @@ class TaskDetailViewModel internal constructor(
         errors.value = null
     }
 
-    /** Enqueues a fenced server command; the synchronized detail/feed remains authoritative. */
+    /** Toggles the selected requirement through fenced commands; linked states come from the server. */
     fun reportMissingItem(itemId: String, itemKind: String, itemName: String) {
         val current = key.value ?: return
         val state = uiState.value
         val detail = state.detail ?: return
         val task = state.task ?: return
-        if (itemKind !in setOf("WORK", "MATERIAL") || task.locallyPending) return
+        if (itemKind !in setOf("WORK", "MATERIAL") || task.locallyPending || state.hasPendingMissingItemReport) return
+        val availability = when (itemKind) {
+            "WORK" -> detail.works.firstOrNull { it.id == itemId }?.availabilityState
+            else -> detail.materials.firstOrNull { it.id == itemId }?.availabilityState
+        } ?: return
+        if (availability == "COMPLETED") return
         viewModelScope.launch {
             try {
-                localStore.enqueueMissingItem(
+                if (availability == "MISSING") {
+                    localStore.enqueueRequirementRestore(current.userId, current.entryId, detail.version, itemId)
+                } else localStore.enqueueMissingItem(
                     userId = current.userId,
                     entryId = current.entryId,
                     routeIndex = detail.routeIndex,
@@ -292,7 +302,7 @@ class TaskDetailViewModel internal constructor(
                 throw exception
             } catch (exception: Exception) {
                 errors.value = exception.safeWorkerUserMessage(
-                    "Не удалось сообщить об отсутствии. Обновите задание и повторите.",
+                    "Не удалось изменить отметку. Обновите задание и повторите.",
                 )
             }
         }

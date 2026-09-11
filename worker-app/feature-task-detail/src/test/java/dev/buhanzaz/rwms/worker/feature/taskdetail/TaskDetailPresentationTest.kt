@@ -1,7 +1,6 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
-import androidx.compose.ui.graphics.Color
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.network.TaskSourceReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto
@@ -34,18 +33,18 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `missing and restored requirements have explicit card tones`() {
+    fun `restored requirements return to the default card tone`() {
         assertThat(requirementAvailabilityTone("MISSING")).isEqualTo(RequirementAvailabilityTone.MISSING)
-        assertThat(requirementAvailabilityTone("RESTORED")).isEqualTo(RequirementAvailabilityTone.RESTORED)
+        assertThat(requirementAvailabilityTone("RESTORED")).isEqualTo(RequirementAvailabilityTone.DEFAULT)
         assertThat(requirementAvailabilityTone("AVAILABLE")).isEqualTo(RequirementAvailabilityTone.DEFAULT)
-        assertThat(restoredRequirementColor).isEqualTo(Color(0xFF238636))
     }
 
     @Test
     fun `missing action requires active eligibility and has no pending report`() {
         assertThat(canReportMissingRequirement("AVAILABLE", canReportMissing = true)).isTrue()
         assertThat(canReportMissingRequirement("RESTORED", canReportMissing = true)).isTrue()
-        assertThat(canReportMissingRequirement("MISSING", canReportMissing = true)).isFalse()
+        assertThat(canReportMissingRequirement("MISSING", canReportMissing = true)).isTrue()
+        assertThat(canReportMissingRequirement("COMPLETED", canReportMissing = true)).isFalse()
         assertThat(canReportMissingRequirement("AVAILABLE", canReportMissing = false)).isFalse()
     }
 

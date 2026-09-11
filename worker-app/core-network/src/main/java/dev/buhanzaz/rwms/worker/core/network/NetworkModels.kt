@@ -225,6 +225,15 @@ data class WorkerMaterialDto(
     val availabilityState: String = "AVAILABLE",
 )
 
+/** Explicit, version-fenced restoration of one server-owned linked requirement group. */
+@Serializable
+data class WorkerRequirementRestoreRequestDto(
+    val operationId: String,
+    val expectedVersion: Long,
+    val occurredAt: String,
+    val offlineLeaseId: String,
+)
+
 /**
  * A planned maintenance/estimate work item. Costs intentionally do not cross
  * the worker boundary: a worker only needs the quantity, unit and planned

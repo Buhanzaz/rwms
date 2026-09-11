@@ -71,6 +71,7 @@ public class MaintenanceTaskRequirementsResolver {
     for (Map.Entry<UUID, List<Item>> group : byVersion.entrySet()) {
       Map<UUID, Set<UUID>> adjacency = new HashMap<>();
       for (CatalogLink link : links.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(group.getKey())) {
+        if (!"DEPENDENCY".equals(link.getLinkType())) continue;
         adjacency.computeIfAbsent(link.getSourceNodeId(), ignored -> new HashSet<>()).add(link.getTargetNodeId());
         adjacency.computeIfAbsent(link.getTargetNodeId(), ignored -> new HashSet<>()).add(link.getSourceNodeId());
       }

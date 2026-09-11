@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.taskboard.api.ContractorTaskExecutionApiModels.Contract
 import dev.buhanzaz.rwms.taskboard.api.ContractorTaskExecutionApiModels.ContractorTaskActionResult;
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerActionAppliedResult;
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerActionRequest;
+import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerRequirementRestoreRequest;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventStore;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -72,6 +73,42 @@ public class WorkerActionReceiptStore {
         contractorRequestBody(workerId, warehouseId, externalTaskId, entryId, request);
     return lockAndReplay(
         request.operationId(), requestBody, ContractorTaskActionResult.class);
+  }
+
+  /** Uses the native operation fence for an exact requirement restoration replay. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<WorkerActionAppliedResult> lockAndReplayRestore(
+      UUID workerId, UUID warehouseId, UUID entryId, UUID itemId,
+      WorkerRequirementRestoreRequest request) {
+    return lockAndReplay(request.operationId(),
+        restoreRequestBody(workerId, warehouseId, entryId, itemId, request),
+        WorkerActionAppliedResult.class);
+  }
+
+  /** Stores the full selected identity and original response without changing problem history. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public WorkerActionAppliedResult saveRestore(
+      UUID workerId, UUID warehouseId, UUID entryId, UUID itemId,
+      WorkerRequirementRestoreRequest request, WorkerActionAppliedResult response) {
+    String requestBody = restoreRequestBody(workerId, warehouseId, entryId, itemId, request);
+    String responseBody = canonicalJson(write(response));
+    jdbc.update(
+        """
+        insert into worker_action_receipt(
+            operation_id,app_surface,worker_id,warehouse_id,entry_id,action,
+            request_body,request_sha256,response_body,response_sha256,created_at)
+        values (?,'WORKER',?,?,?,'RESTORE_ITEM',?,?,?,?,clock_timestamp())
+        """,
+        request.operationId(), workerId, warehouseId, entryId,
+        requestBody, sha256(requestBody), responseBody, sha256(responseBody));
+    return readResponse(responseBody);
+  }
+
+  private String restoreRequestBody(UUID workerId, UUID warehouseId, UUID entryId, UUID itemId,
+      WorkerRequirementRestoreRequest request) {
+    return canonicalJson(write(Map.of("surface", "WORKER", "action", "RESTORE_ITEM",
+        "workerId", workerId, "warehouseId", warehouseId, "entryId", entryId,
+        "itemId", itemId, "request", request)));
   }
 
   private <T> Optional<T> lockAndReplay(

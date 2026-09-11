@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,9 +10,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,10 +25,12 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.ReportProblem
-import androidx.compose.material.icons.filled.Recycling
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -49,10 +53,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
@@ -118,7 +126,7 @@ fun TaskDetailScreen(
         addAll(state.evidence.filter { it.state == "READY" }.map { it.evidenceId })
     }
     val readyEvidenceCount = readyEvidenceIds.size
-    var showCompletionDialog by remember(entryId) { mutableStateOf(false) }
+    var showCompletionDialog by rememberSaveable(entryId) { mutableStateOf(false) }
     var showProblemReport by rememberSaveable(entryId) { mutableStateOf(false) }
     val localEvidenceWithoutServerPhoto = state.evidence
         .filterNot { local -> local.state == "READY" }
@@ -183,10 +191,6 @@ fun TaskDetailScreen(
         hasCurrentGroup = session?.currentGroupId != null,
         operationalAvailability = session?.operationalAvailability ?: "DISABLED",
     )
-    val hasProblem = detail?.hasProblem ?: task?.hasProblem ?: false
-    val incomplete = detail?.incomplete ?: task?.incomplete ?: false
-    val completedWorkPercent = detail?.completedWorkPercent ?: task?.completedWorkPercent ?: 0.0
-    val problemColor = workerProblemColor(state.kpiPalette?.problemColor)
     val canReportProblem = WorkerTaskAction.COMPLETE in actionPresentation.actions &&
         actionPresentation.actionsEnabled &&
         photoCapture.enabled
@@ -232,6 +236,11 @@ fun TaskDetailScreen(
     LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
     val mediaTitle = cabinNumber ?: "Задание"
     LaunchedEffect(detail?.status, task?.locallyPending) {
+        if (task?.locallyPending == true && task.status == "DONE") {
+            // A successful gallery import completed the local capture flow. Keep the dialog for
+            // picker cancellation, but close it once the local task is queued as done.
+            showCompletionDialog = false
+        }
         if (shouldCloseAfterAuthoritativeCompletion(detail?.status, task?.locallyPending == true)) {
             onCompletionQueued()
         }
@@ -253,29 +262,21 @@ fun TaskDetailScreen(
             }
         },
     ) { padding ->
+        val layoutDirection = LocalLayoutDirection.current
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding)
-                .background(if (hasProblem) problemColor.copy(alpha = 0.28f) else Color.Transparent),
+            // Let the list viewport reach beneath the shell surfaces. Applying Scaffold's
+            // padding to the modifier shrinks the viewport and leaves the scroll content ending
+            // in mid-air; contentPadding keeps the first/last rows safe while preserving clipping.
+            modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(
+                start = padding.calculateStartPadding(layoutDirection),
+                top = padding.calculateTopPadding() + 12.dp,
+                end = padding.calculateEndPadding(layoutDirection),
+                bottom = padding.calculateBottomPadding() + 28.dp,
+            ),
         ) {
             item {
-                if (hasProblem) {
-                    Surface(
-                        color = problemColor,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    ) {
-                        Text(
-                            if (incomplete) {
-                                "Задание незавершено: ${completedWorkPercent}% работ выполнено"
-                            } else {
-                                "В задании отмечена проблема"
-                            },
-                            color = Color.White,
-                            modifier = Modifier.padding(14.dp),
-                        )
-                    }
-                }
                 TaskMediaPager(
                     thumbnailPaths = generalSourceMedia.map { it.thumbnailPath ?: it.readPath },
                     contentDescription = "Фото задания",
@@ -445,44 +446,87 @@ fun TaskDetailScreen(
     }
 
     if (showCompletionDialog) {
-        Dialog(
+        TaskCompletionDialog(
+            isTransfer = transfer != null,
             onDismissRequest = { showCompletionDialog = false },
+            onCamera = {
+                showCompletionDialog = false
+                onCamera(requireNotNull(detail).routeIndex, true)
+            },
+            // Keep this dialog mounted while the picker is open. Gallery cancellation can then
+            // return to the exact completion choice surface instead of an empty intermediate page.
+            onGallery = { onGallery(requireNotNull(detail).routeIndex) },
+        )
+    }
+}
+
+/** Opaque completion choice surface shared by ordinary and inter-warehouse tasks. */
+@Composable
+internal fun TaskCompletionDialog(
+    isTransfer: Boolean,
+    onDismissRequest: () -> Unit,
+    onCamera: () -> Unit,
+    onGallery: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .testTag("task-completion-dialog"),
+            colors = CardDefaults.cardColors(
+                // Dialog content must remain readable over the water background and match the
+                // opaque problem-report sheet surface.
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
+            ),
         ) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    if (isTransfer) "Подтвердить выгрузку" else "Завершить задание",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    if (isTransfer) {
+                        "Добавьте фотографии выгруженного груза. После сохранения межскладской рейс закроется через обычную синхронизацию."
+                    } else {
+                        "Добавьте фотографии результата. После сохранения задание закроется автоматически."
+                    },
+                )
+                Button(
+                    onClick = onCamera,
+                    modifier = Modifier.fillMaxWidth().testTag("task-completion-camera"),
                 ) {
+                    Icon(Icons.Filled.AddAPhoto, contentDescription = null)
                     Text(
-                        if (transfer == null) "Завершить задание" else "Подтвердить выгрузку",
-                        style = MaterialTheme.typography.headlineSmall,
+                        if (isTransfer) "Сделать фото выгрузки" else "Сделать фото",
+                        modifier = Modifier.padding(start = 8.dp),
                     )
-                    Text(
-                        if (transfer == null) {
-                            "Добавьте фотографии результата. После сохранения задание закроется автоматически."
-                        } else {
-                            "Добавьте фотографии выгруженного груза. После сохранения межскладской рейс закроется через обычную синхронизацию."
-                        },
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            showCompletionDialog = false
-                            onCamera(requireNotNull(detail).routeIndex, true)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (transfer == null) "Сделать фото" else "Сделать фото выгрузки") }
-                    OutlinedButton(
-                        onClick = {
-                            showCompletionDialog = false
-                            onGallery(requireNotNull(detail).routeIndex)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Из галереи") }
-                    OutlinedButton(
-                        onClick = { showCompletionDialog = false },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Отмена") }
                 }
+                Button(
+                    onClick = onGallery,
+                    modifier = Modifier.fillMaxWidth().testTag("task-completion-gallery"),
+                ) {
+                    Icon(Icons.Filled.Image, contentDescription = null)
+                    Text("Из галереи", modifier = Modifier.padding(start = 8.dp))
+                }
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    border = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .border(
+                            BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
+                            RoundedCornerShape(16.dp),
+                        )
+                        .testTag("task-completion-cancel"),
+                ) { Text("Отмена") }
             }
         }
     }
@@ -842,7 +886,7 @@ private fun TimerMetric(
 
 /** Keeps each source photo inside the card of the work identified by its server media IDs. */
 @Composable
-private fun WorkRow(
+internal fun WorkRow(
     work: WorkerWorkDto,
     sourceMedia: List<WorkerMediaReferenceDto>,
     onMedia: (index: Int) -> Unit,
@@ -863,13 +907,12 @@ private fun WorkRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    work.name,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(work.name, style = MaterialTheme.typography.bodyLarge)
+                    RequirementStatus(work.availabilityState, isMaterial = false)
+                }
                 Text(presentation.quantity, fontWeight = FontWeight.Bold)
-                MissingRequirementButton(work.availabilityState, canReportMissing, onReportMissing)
+                MissingRequirementButton(work.availabilityState, canReportMissing, onReportMissing, work.name, isMaterial = false)
             }
             if (sourceMedia.isNotEmpty()) {
                 Text(
@@ -890,7 +933,7 @@ private fun WorkRow(
 }
 
 @Composable
-private fun RequirementCard(
+internal fun RequirementCard(
     name: String,
     quantity: String,
     availabilityState: String,
@@ -906,9 +949,12 @@ private fun RequirementCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.bodyLarge)
+                RequirementStatus(availabilityState, isMaterial = true)
+            }
             Text(quantity, fontWeight = FontWeight.Bold)
-            MissingRequirementButton(availabilityState, canReportMissing, onReportMissing)
+            MissingRequirementButton(availabilityState, canReportMissing, onReportMissing, name, isMaterial = true)
         }
     }
 }
@@ -918,43 +964,55 @@ private fun MissingRequirementButton(
     availabilityState: String,
     canReportMissing: Boolean,
     onClick: () -> Unit,
+    name: String,
+    isMaterial: Boolean,
 ) {
+    val missing = availabilityState == "MISSING"
     IconButton(
         onClick = onClick,
         enabled = canReportMissingRequirement(availabilityState, canReportMissing),
-    ) { Icon(Icons.Filled.Recycling, contentDescription = "Сообщить об отсутствии") }
+        modifier = Modifier.semantics { selected = missing },
+    ) {
+        Icon(
+            if (missing) Icons.Filled.Undo else Icons.Filled.ReportProblem,
+            contentDescription = when {
+                missing -> "Отменить отметку: $name"
+                isMaterial -> "Нет на складе: $name"
+                else -> "Не выполнена: $name"
+            },
+        )
+    }
 }
 
-internal enum class RequirementAvailabilityTone { DEFAULT, MISSING, RESTORED }
+@Composable
+private fun RequirementStatus(availabilityState: String, isMaterial: Boolean) {
+    val label = when (availabilityState) {
+        "MISSING" -> if (isMaterial) "Нет на складе" else "Не выполнена"
+        "RESTORED" -> if (isMaterial) "Есть на складе" else "Можно выполнить"
+        "COMPLETED" -> "Выполнено"
+        else -> return
+    }
+    Text(label, style = MaterialTheme.typography.labelMedium)
+}
 
-internal val restoredRequirementColor = Color(0xFF238636)
+internal enum class RequirementAvailabilityTone { DEFAULT, MISSING }
 
 internal fun requirementAvailabilityTone(availabilityState: String): RequirementAvailabilityTone = when (availabilityState) {
     "MISSING" -> RequirementAvailabilityTone.MISSING
-    "RESTORED" -> RequirementAvailabilityTone.RESTORED
     else -> RequirementAvailabilityTone.DEFAULT
 }
 
 internal fun canReportMissingRequirement(availabilityState: String, canReportMissing: Boolean): Boolean =
-    canReportMissing && availabilityState != "MISSING" && availabilityState != "COMPLETED"
+    canReportMissing && availabilityState != "COMPLETED"
 
 @Composable
-private fun requirementCardColors(availabilityState: String) = CardDefaults.cardColors(
+internal fun requirementCardColors(availabilityState: String) = CardDefaults.cardColors(
     containerColor = when (requirementAvailabilityTone(availabilityState)) {
         RequirementAvailabilityTone.MISSING -> MaterialTheme.colorScheme.errorContainer
-        RequirementAvailabilityTone.RESTORED -> restoredRequirementColor
         RequirementAvailabilityTone.DEFAULT -> MaterialTheme.colorScheme.surface
     },
-    contentColor = if (requirementAvailabilityTone(availabilityState) == RequirementAvailabilityTone.RESTORED) {
-        Color.White
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    },
+    contentColor = MaterialTheme.colorScheme.onSurface,
 )
-
-private fun workerProblemColor(value: String?): Color = runCatching {
-    Color(android.graphics.Color.parseColor(value ?: "#FF3B30"))
-}.getOrDefault(Color(0xFFFF3B30))
 
 @Composable
 private fun RemoteMediaThumbnail(

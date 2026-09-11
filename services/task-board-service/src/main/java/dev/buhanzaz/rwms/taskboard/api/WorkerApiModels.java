@@ -382,6 +382,13 @@ public final class WorkerApiModels {
     }
   }
 
+  /** Version-fenced restoration of one selected requirement and its frozen dependency group. */
+  public record WorkerRequirementRestoreRequest(
+      @NotNull UUID operationId,
+      @Min(0) long expectedVersion,
+      @NotNull OffsetDateTime occurredAt,
+      @NotNull UUID offlineLeaseId) {}
+
   public enum WorkerAction {
     TAKE,
     JOIN,

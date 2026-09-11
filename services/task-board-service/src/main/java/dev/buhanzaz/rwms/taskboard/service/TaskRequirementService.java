@@ -92,6 +92,34 @@ public class TaskRequirementService {
         .map(item -> new MissingItem(item.itemId(), item.kind(), item.name())).toList();
   }
 
+  /** Restores only the selected linked missing group while retaining active work and reports. */
+  public void restoreActive(UUID warehouseId, UUID taskId, UUID entryId,
+      long expectedVersion, UUID itemId) {
+    positions.lockQueueMutation(warehouseId);
+    BoardTask task = requireTask(warehouseId, taskId);
+    QueueEntry entry = entries.findById(entryId).orElseThrow();
+    if (task.getStatus() != TaskStatus.ACTIVE || task.isSuspended()
+        || entry.getStatus() != EntryStatus.IN_PROGRESS) {
+      throw new ConflictException("Изменить отметку можно только в активном задании");
+    }
+    RegistryService.checkVersion(entry.getVersion(), expectedVersion, "Этап");
+    List<TaskRequirement> items = resolve(task);
+    TaskRequirement selected = item(items, itemId);
+    List<QueueEntry> route = entries.findAllByTaskIdOrderByRouteIndexAsc(taskId);
+    Set<UUID> visible = visiblePackageEntryIds(entry, route);
+    if (!"MISSING".equals(selected.state())
+        || selected.entryIds().stream().noneMatch(visible::contains)) {
+      throw new ConflictException("Отменить можно только отметку отсутствующей позиции текущей работы");
+    }
+    Set<UUID> group = closure(items, Set.of(itemId));
+    long version = events.lock(TaskBoardAggregateType.BOARD_TASK, taskId);
+    saveItems(task, items.stream().map(item -> group.contains(item.itemId())
+        && "MISSING".equals(item.state()) ? item.withState("RESTORED") : item).toList());
+    writer.saveAndFlush(tasks, task);
+    events.taskChanged(task, version, TaskBoardEventTypes.BOARD_TASK_CHANGED);
+    touchEntries(route);
+  }
+
   /** Applies a report's exact catalog resource identities to active tasks in one locked warehouse. */
   public List<UUID> applyToAll(UUID warehouseId, UUID sourceTaskId, List<UUID> reportedItemIds) {
     positions.lockQueueMutation(warehouseId);
@@ -121,7 +149,7 @@ public class TaskRequirementService {
 
   /** Restores only explicitly confirmed complete linked groups; missing groups remain blocked. */
   public void restore(BoardTask task, List<UUID> availableIds) {
-    List<TaskRequirement> items = stored(task);
+    List<TaskRequirement> items = resolve(task);
     if (items.isEmpty()) {
       if (!availableIds.isEmpty()) throw new IllegalArgumentException("В задании нет этих позиций");
       task.restoreRequirements(false);
@@ -238,17 +266,27 @@ public class TaskRequirementService {
 
   private List<TaskRequirement> resolve(BoardTask task) {
     List<TaskRequirement> persisted = stored(task);
-    if (!persisted.isEmpty()) return persisted;
     var source = sources.findById(task.getId()).orElse(null);
     if (source != null && source.getSourceType() == TaskSourceType.MAINTENANCE_REPAIR) {
       Set<UUID> doneEntries = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
           .filter(entry -> entry.getStatus() == EntryStatus.DONE).map(QueueEntry::getId).collect(Collectors.toSet());
-      return maintenance.read(task.getWarehouseId(), source.getSourceId()).items().stream()
+      var sourceItems = maintenance.read(task.getWarehouseId(), source.getSourceId()).items();
+      if (!persisted.isEmpty()) {
+        // Recompute only dependency links in the frozen source version; retain execution history.
+        Map<UUID, List<UUID>> links = sourceItems.stream().collect(Collectors.toMap(
+            MaintenanceTaskRequirementsGateway.Requirement::itemId,
+            MaintenanceTaskRequirementsGateway.Requirement::linkedItemIds));
+        return persisted.stream().map(item -> new TaskRequirement(item.itemId(), item.kind(),
+            item.name(), item.catalogVersionId(), item.catalogNodeId(), item.plannedWorkSeconds(),
+            links.getOrDefault(item.itemId(), item.linkedItemIds()), item.entryIds(), item.state())).toList();
+      }
+      return sourceItems.stream()
           .map(item -> new TaskRequirement(item.itemId(), item.kind(), item.name(),
               item.catalogVersionId(), item.catalogNodeId(), item.plannedWorkSeconds(),
               item.linkedItemIds(), item.entryIds(), !item.entryIds().isEmpty()
                   && doneEntries.containsAll(item.entryIds()) ? "COMPLETED" : "AVAILABLE")).toList();
     }
+    if (!persisted.isEmpty()) return persisted;
     Map<UUID, TaskRequirement> items = new LinkedHashMap<>();
     for (QueueEntry entry : entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId())) {
       List<TaskWorkSnapshotRequest> works = read(entry.getWorkerWorks(), new TypeReference<>() {});

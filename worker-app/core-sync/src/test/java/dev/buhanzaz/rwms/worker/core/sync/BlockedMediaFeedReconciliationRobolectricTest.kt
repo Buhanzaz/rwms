@@ -629,6 +629,13 @@ class BlockedMediaFeedReconciliationRobolectricTest {
     }
 
     private open class FreshEmptyFeedApi : WorkerGatewayApi {
+        override suspend fun restoreRequirement(
+            entryId: String,
+            itemId: String,
+            idempotencyKey: String,
+            request: dev.buhanzaz.rwms.worker.core.network.WorkerRequirementRestoreRequestDto,
+        ): Response<WorkerActionResultDto> = error("Unexpected requirement restore")
+
         val feedCalls = AtomicInteger()
 
         override suspend fun workerContext(): Response<WorkerContextDto> = Response.success(

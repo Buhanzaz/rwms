@@ -2231,13 +2231,22 @@ facts while retaining media inbox processing and owner-proof recovery.
 
 A report also marks the owning board task as problematic independently of read
 receipts. Resource reports carry exact work/material line IDs and the current
-entry version. Task-board resolves their undirected, transitive dependency and
-follow-up groups against the repair's frozen catalog versions through the private
+entry version. Task-board resolves their undirected, transitive `DEPENDENCY`
+groups against the repair's frozen catalog versions through the private
 maintenance `task-requirements` read. Only saved repair lines become requirements;
-intermediate catalog locations/options connect groups but are not invented work.
+intermediate catalog locations/options connect dependency groups but are not invented work.
+`FOLLOW_UP` (the canvas “Path”) orders catalog navigation and does not propagate absence.
 The machine client requests the separate `maintenance.task-requirements` scope.
 The task-board palette has a separate configurable problem color (default
 `#FF3B30`); both clients show `MISSING` rows red and `RESTORED` rows green.
+
+An active assigned worker can undo a missing row through the fenced, idempotent
+`POST /worker/v1/entries/{entryId}/requirements/{itemId}/restore`. Task-board restores
+its exact linked missing group without reopening completed work. WorkerApp persists this
+as `RESTORE_ITEM` in its encrypted action outbox, retaining the operation identity on
+retry and applying only the returned server detail. Its task detail tints individual
+missing rows and shows explicit work/material statuses, rather than tinting the entire
+screen from the historical problem-report flag.
 
 COMPLETE with missing requirements credits only the newly completed normative
 work share to the existing KPI formula, records those lines as `COMPLETED`, and

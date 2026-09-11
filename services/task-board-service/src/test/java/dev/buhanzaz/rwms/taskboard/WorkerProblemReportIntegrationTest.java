@@ -367,6 +367,105 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
   }
 
   @Test
+  void workerRestoresOnlySelectedGroupAndExactReplayCannotUndoLaterMissingReport() throws Exception {
+    Fixture fixture = fixture();
+    UUID work = UUID.randomUUID(), material = UUID.randomUUID(), unrelated = UUID.randomUUID();
+    UUID entryId = fixture.entry().id();
+    var items = List.of(
+        new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(work, "WORK", "Установка вешалки",
+            null, null, 120, List.of(material), List.of(entryId), "MISSING"),
+        new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(material, "MATERIAL", "Вешалка",
+            null, null, 0, List.of(work), List.of(entryId), "MISSING"),
+        new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(unrelated, "WORK", "Другая работа",
+            null, null, 60, List.of(), List.of(entryId), "MISSING"));
+    jdbc.update("update board_task set requirements=?::jsonb where id=?", json.writeValueAsString(items), fixture.entry().taskId());
+    jdbc.update("update queue_entry set worker_works=?::jsonb,worker_materials=?::jsonb where id=?",
+        json.writeValueAsString(List.of(new TaskWorkSnapshotRequest(work, "Установка вешалки", 1, "шт", 2, null),
+            new TaskWorkSnapshotRequest(unrelated, "Другая работа", 1, "шт", 1, null))),
+        json.writeValueAsString(List.of(new TaskMaterialSnapshotRequest(material, "Вешалка", 1, "шт"))), entryId);
+    var request = restoreRequest(fixture);
+    String response = restore(fixture, material, request).andExpect(status().isOk())
+        .andExpect(jsonPath("$.entry.materials[0].availabilityState").value("RESTORED"))
+        .andExpect(jsonPath("$.entry.works[0].availabilityState").value("RESTORED"))
+        .andExpect(jsonPath("$.entry.works[1].availabilityState").value("MISSING"))
+        .andReturn().getResponse().getContentAsString();
+    assertSchema("WorkerRequirementRestoreRequest", json.writeValueAsString(request));
+    assertSchema("WorkerActionAppliedResult", response);
+    assertThat(requirements.get(WAREHOUSE, fixture.entry().taskId()).items())
+        .filteredOn(item -> item.itemId().equals(work) || item.itemId().equals(material))
+        .allSatisfy(item -> assertThat(item.state()).isEqualTo("RESTORED"));
+    assertThat(requirements.state(fixture.entry().taskId(), unrelated)).isEqualTo("MISSING");
+    var report = new LinkedHashMap<>(request(fixture, List.of()));
+    report.put("expectedVersion", workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId).version());
+    report.put("missingItemIds", List.of(material));
+    create(fixture, report).andExpect(status().isCreated());
+    assertThat(restore(fixture, material, request).andExpect(status().isOk())
+        .andReturn().getResponse().getContentAsString()).isEqualTo(response);
+    assertThat(requirements.state(fixture.entry().taskId(), material)).isEqualTo("MISSING");
+    restore(fixture, work, request).andExpect(status().isConflict());
+    var stale = new LinkedHashMap<>(request);
+    stale.put("operationId", UUID.randomUUID());
+    restore(fixture, material, stale).andExpect(status().isConflict());
+    assertThat(jdbc.queryForObject("select count(*) from worker_action_receipt where action='RESTORE_ITEM'",
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject("select count(*) from task_problem_report", Integer.class)).isOne();
+  }
+
+  @Test
+  void restorationRequiresWorkerScopeAssignmentAndCurrentMissingPosition() throws Exception {
+    Fixture fixture = fixture();
+    UUID item = UUID.randomUUID();
+    var request = restoreRequest(fixture);
+    String path = "/api/worker/v1/entries/" + fixture.entry().id() + "/requirements/" + item + "/restore";
+    mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON)
+            .header("Idempotency-Key", request.get("operationId"))
+            .content(json.writeValueAsString(request)))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(post(path).with(managerJwt(MANAGER, WAREHOUSE, "rwms.write"))
+            .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", request.get("operationId"))
+            .content(json.writeValueAsString(request)))
+        .andExpect(status().isForbidden());
+    mvc.perform(post(path).with(workerJwt(fixture.workerId(), WAREHOUSE, "worker.tasks.read"))
+            .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", request.get("operationId"))
+            .content(json.writeValueAsString(request)))
+        .andExpect(status().isForbidden());
+    UUID workerClassId = jdbc.queryForObject("select worker_class_id from worker_class_assignment where worker_id=?",
+        UUID.class, fixture.workerId());
+    var other = workforce.createWorker(WAREHOUSE,
+        new WorkerRequest(0L, "Неназначенный рабочий", null, null, null, true, null, null, null,
+            List.of(new QualificationRequest(workerClassId, true, null))));
+    var otherRequest = new LinkedHashMap<>(request);
+    otherRequest.put("offlineLeaseId", leases.issue(other.id(), WAREHOUSE,
+        workerBoard.revision(WAREHOUSE), fixture.occurredAt().minusSeconds(1)).id());
+    mvc.perform(post(path).with(workerJwt(other.id(), WAREHOUSE, "worker.tasks"))
+            .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", request.get("operationId"))
+            .content(json.writeValueAsString(otherRequest)))
+        .andExpect(status().isConflict());
+    restore(fixture, item, request).andExpect(status().isBadRequest());
+    var wrongLease = new LinkedHashMap<>(request);
+    wrongLease.put("offlineLeaseId", UUID.randomUUID());
+    restore(fixture, item, wrongLease).andExpect(status().isConflict());
+    board.complete(WAREHOUSE, fixture.entry().id(),
+        new VersionCommand(workerBoard.detail(fixture.workerId(), WAREHOUSE, fixture.entry().id()).version()),
+        fixture.workerId());
+    restore(fixture, item, request).andExpect(status().isConflict());
+  }
+
+  private Map<String, Object> restoreRequest(Fixture fixture) {
+    return Map.of("operationId", UUID.randomUUID(),
+        "expectedVersion", workerBoard.detail(fixture.workerId(), WAREHOUSE, fixture.entry().id()).version(),
+        "occurredAt", fixture.occurredAt(), "offlineLeaseId", fixture.leaseId());
+  }
+
+  private ResultActions restore(Fixture fixture, UUID itemId, Map<String, Object> request) throws Exception {
+    return mvc.perform(post("/api/worker/v1/entries/" + fixture.entry().id()
+            + "/requirements/" + itemId + "/restore")
+        .with(workerJwt(fixture.workerId(), WAREHOUSE, "worker.tasks"))
+        .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", request.get("operationId"))
+        .content(json.writeValueAsString(request)));
+  }
+
+  @Test
   void bulkApplicationIsWarehouseAuthorizedAndReplaysOriginalAffectedTasks() throws Exception {
     Fixture fixture = fixture();
     UUID node = UUID.randomUUID();
