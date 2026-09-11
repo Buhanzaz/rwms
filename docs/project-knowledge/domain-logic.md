@@ -8,6 +8,11 @@ tests.
 
 ### Identity And Access
 
+Worker authorization projections cannot commit without a matching event stream,
+last event and live checkpoint. Auth Flyway V13 recovers only missing worker
+streams from complete current private state; it preserves passwords and versions
+and does not invent past events or publish recovery baselines.
+
 `auth-service` owns interactive and service identities, OAuth/OIDC clients,
 roles and warehouse-access grants. Other services validate issued Bearer JWTs
 and enforce their own domain authorization; they do not store passwords or mint

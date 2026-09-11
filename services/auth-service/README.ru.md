@@ -328,6 +328,14 @@ Adapter не следует redirects и не кэширует токены. П�
 
 ## Eventing и восстановление
 
+Flyway V13 восстанавливает baseline текущего состояния только для рабочих без
+потока событий, с полными и согласованными записями идентичности и credentials.
+Пароли, права и версии рабочих не меняются; baseline не получает вымышленное
+историческое время и не публикуется как новое бизнес-событие. Неоднозначное
+частичное состояние останавливает миграцию, а не перезаписывается. Отложенное
+ограничение базы требует при commit каждого insert/update рабочего согласованных
+stream head, последнего события и live checkpoint, включая записи в обход сервиса.
+
 PostgreSQL authorization projections и event store — authoritative; Kafka —
 at-least-once transport. Изменения authorization и worker-access сохраняются
 вместе со stream и transactional outbox. Consumers используют

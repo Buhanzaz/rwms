@@ -331,6 +331,14 @@ explicit, bounded, and fail-closed.
 
 ## Eventing and recovery
 
+Flyway V13 restores a current-state baseline only for worker subjects with a
+missing event stream and complete, consistent identity/credential records.
+Passwords, grants and subject versions are unchanged; the baseline has no
+historical occurrence timestamp and is not published as a new business event.
+Ambiguous partial state fails migration instead of being overwritten. A deferred
+database constraint requires every worker insert/update to commit with a matching
+stream head, last event and live checkpoint, including writes outside the service.
+
 PostgreSQL authorization projections and the event store are authoritative;
 Kafka is at-least-once transport. Authorization and worker-access changes are
 recorded together with their event stream and transactional outbox. Consumers

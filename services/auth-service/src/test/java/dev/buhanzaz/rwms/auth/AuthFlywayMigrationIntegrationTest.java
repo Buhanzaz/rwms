@@ -59,7 +59,7 @@ class AuthFlywayMigrationIntegrationTest {
     void cumulativeBaselineMigratesCleanDatabaseAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(12);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -238,7 +238,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .authority(new SimpleGrantedAuthority("SCOPE_worker.tasks"))
                 .build());
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(10);
 
         assertThat(clients.findByClientId("rwms-worker")).isNull();
         assertThat(clients.findByClientId("rwms-worker-android")).isNotNull();
@@ -255,7 +255,7 @@ class AuthFlywayMigrationIntegrationTest {
                 "update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?",
                 managerId);
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(10);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(11);
 
         assertThat(jdbc.queryForMap(
                         "select version, mobile_app_access from auth_subject where id=?",
@@ -573,7 +573,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .baselineDescription("Auth post-F1C schema")
                 .load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(10);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(11);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
