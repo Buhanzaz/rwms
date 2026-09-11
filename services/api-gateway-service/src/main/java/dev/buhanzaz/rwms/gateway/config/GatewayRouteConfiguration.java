@@ -344,12 +344,35 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Gives only customer delivery searches a bounded multi-day routing deadline. */
+  @Bean
+  @Order(-77)
+  RouterFunction<ServerResponse> customerDeliverySearchRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      CustomerDeliverySearchProxyHandler handler) {
+    return route("customer-delivery-search")
+        .route(customerDeliverySearchPath(), handler)
+        .before(uri(properties.getRoutes().getLogisticsUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  private static RequestPredicate customerDeliverySearchPath() {
+    return path("/api/logistics/customer/v1/delivery-slots/search")
+        .or(path("/api/logistics/customer/v1/bookings/*/delivery-slots/search"))
+        .and(method(HttpMethod.POST))
+        .and(request -> safePath(request.path()));
+  }
+
   /** Relays public logistics APIs while keeping logistics-service private and internal paths unreachable. */
   @Bean
   RouterFunction<ServerResponse> logisticsRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
     RequestPredicate publicLogisticsPath =
         path("/api/logistics/**")
+            .and(request -> !customerDeliverySearchPath().test(request))
             .and(request -> safePath(request.path()))
             .and(
                 request -> {

@@ -751,49 +751,28 @@ private fun GeoObject.toDeliveryLocation(
     return GeocodedDeliveryLocation(address, point.latitude, point.longitude)
 }
 
-/** Builds the blue BLOCK BOX cube pin at display density for MapKit's native bitmap renderer. */
+/** Renders the imported SVG wordmark at display density with a tip anchored to the selected point. */
 private fun deliveryMarkerImage(context: Context): ImageProvider {
     val density = context.resources.displayMetrics.density
-    val width = (44f * density).roundToInt().coerceAtLeast(1)
+    val width = (104f * density).roundToInt().coerceAtLeast(1)
     val height = (56f * density).roundToInt().coerceAtLeast(1)
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap).apply { scale(density, density) }
     val pin = Path().apply {
-        moveTo(22f, 54f)
-        cubicTo(16f, 44f, 3f, 34f, 3f, 22f)
-        cubicTo(3f, -3f, 41f, -3f, 41f, 22f)
-        cubicTo(41f, 34f, 28f, 44f, 22f, 54f)
+        moveTo(44f, 43f)
+        lineTo(52f, 56f)
+        lineTo(60f, 43f)
         close()
     }
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        shader = android.graphics.LinearGradient(
-            3f, 3f, 41f, 48f,
-            0xFF549AC5.toInt(), 0xFF204B79.toInt(), android.graphics.Shader.TileMode.CLAMP,
-        )
+        color = android.graphics.Color.WHITE
     }
     canvas.drawPath(pin, paint)
-    paint.shader = null
-    paint.color = android.graphics.Color.WHITE
-    paint.style = Paint.Style.STROKE
-    paint.strokeWidth = 2f
-    paint.strokeJoin = Paint.Join.ROUND
-    canvas.drawPath(pin, paint)
-    val cube = Path().apply {
-        moveTo(22f, 11f)
-        lineTo(32f, 17f)
-        lineTo(32f, 29f)
-        lineTo(22f, 35f)
-        lineTo(12f, 29f)
-        lineTo(12f, 17f)
-        close()
-        moveTo(12f, 17f)
-        lineTo(22f, 23f)
-        lineTo(32f, 17f)
-        moveTo(22f, 23f)
-        lineTo(22f, 35f)
-    }
-    canvas.drawPath(cube, paint)
-    return ImageProvider.fromBitmap(bitmap, true, "block-box-delivery-pin-${context.resources.displayMetrics.densityDpi}")
+    canvas.drawRoundRect(0f, 0f, 104f, 46f, 8f, 8f, paint)
+    val logo = requireNotNull(ContextCompat.getDrawable(context, R.drawable.block_box_logo_svg))
+    logo.setBounds(8, 5, 96, 41)
+    logo.draw(canvas)
+    return ImageProvider.fromBitmap(bitmap, true, "block-box-svg-delivery-pin-${context.resources.displayMetrics.densityDpi}")
 }
 
 /** MapKit styling changes presentation only; roads, addresses and provider labels remain native. */

@@ -149,6 +149,10 @@ routes:
   60-second downstream read deadline. The exact command is excluded from the
   generic inventory route, while its path, authorization and idempotency
   headers are forwarded unchanged and cookies are removed.
+- Customer `POST /api/logistics/customer/v1/delivery-slots/search` and
+  `POST /api/logistics/customer/v1/bookings/*/delivery-slots/search` use a dedicated
+  55-second downstream read deadline for multi-day truck routing, below the edge's 60 seconds. Other logistics
+  calls retain the default deadline; authentication and calculation remain unchanged.
 - `/api/cad/v1/**` uses a dedicated streaming proxy with a 45-second downstream
   read deadline. It preserves the public path, Bearer and idempotency headers,
   streams supported request bodies without application aggregation, and removes

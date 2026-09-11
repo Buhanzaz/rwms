@@ -65,7 +65,7 @@ object CustomerNetworkModule {
         json: Json,
     ): CustomerApi = Retrofit.Builder()
         .baseUrl("${BuildConfig.PUBLIC_BASE_URL}/")
-        .client(client)
+        .callFactory(customerApiCallFactory(client))
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
         .create(CustomerApi::class.java)
@@ -82,6 +82,24 @@ object CustomerNetworkModule {
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
         .create(PublicCustomerCatalogApi::class.java)
+}
+
+private val CUSTOMER_DELIVERY_SEARCH_PATH = Regex(
+    "^/api/logistics/customer/v1/(?:bookings/[^/]+/)?delivery-slots/search$",
+)
+
+/** Extends only route searches so the gateway can return its bounded calculation response. */
+private fun customerApiCallFactory(client: OkHttpClient): Call.Factory {
+    val routingClient = client.newBuilder()
+        .readTimeout(70, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
+        .build()
+    return Call.Factory { request ->
+        val selected = if (request.method == "POST" && CUSTOMER_DELIVERY_SEARCH_PATH.matches(request.url.encodedPath)) {
+            routingClient
+        } else client
+        selected.newCall(request)
+    }
 }
 
 private val PUBLIC_CATALOG_PHOTO_PATH = Regex(

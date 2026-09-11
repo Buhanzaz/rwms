@@ -153,7 +153,7 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
         }
     }
     CustomerTheme(appearanceMode = appearanceMode) {
-        CustomerStoreLaunchGate {
+        CustomerStoreLaunchGate(videoBackgroundEnabled = state !is CustomerAppState.SignedOut) {
             CustomerAppContent(
                 state = state,
                 onLogin = viewModel::login,

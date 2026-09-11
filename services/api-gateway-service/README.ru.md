@@ -146,6 +146,10 @@ submission, но не является abuse throttling.
   downstream read deadline 60 секунд. Точная команда исключена из общего
   inventory-маршрута; её путь, заголовки авторизации и идемпотентности
   пересылаются без изменений, а cookies удаляются.
+- Клиентские `POST /api/logistics/customer/v1/delivery-slots/search` и
+  `POST /api/logistics/customer/v1/bookings/*/delivery-slots/search` используют отдельный
+  downstream read deadline 55 секунд для расчёта грузовых маршрутов на несколько дней (ниже 60 секунд edge).
+  Остальные запросы логистики сохраняют обычный лимит; авторизация и расчёт не меняются.
 - `/api/cad/v1/**` использует отдельный streaming proxy с downstream read
   deadline 45 секунд. Он сохраняет public path, Bearer и idempotency headers,
   передаёт поддерживаемые request bodies без application aggregation и удаляет

@@ -56,10 +56,12 @@ The SIL Open Font Licenses are packaged under
 states; secondary actions, focus borders and password visibility controls share the same type scale
 and accessible touch targets. The wordmark has a contrasting dark appearance. The adaptive launcher
 icon fills the system mask with the supplied gradient and preserves both complete glyphs from [`Logo_App.svg`](../Logo_App.svg), without an inset card around the artwork.
-The silent caustic Media3 loop fills the authentication screens, pauses outside the foreground and
-is released after leaving authentication. Its light palette is retained independently of the catalog
-appearance. A poster extracted from the same video at the supplied form reference phase supports initial drawing and
-deterministic native rendering. Catalog content and dialogs use opaque surfaces. The visual system lives in
+The silent caustic Media3 loop is the background of every application screen, pauses outside the foreground and
+is released when its screen composition leaves. The signed-out flow keeps its own full-strength loop; the
+application shell supplies the restrained loop for loading, guest and signed-in content, so no route has two
+players. Its light palette is retained independently of the catalog appearance. A poster extracted from the same
+video at the supplied form reference phase supports initial drawing and deterministic native rendering. Catalog
+content and dialogs use opaque surfaces. The visual system lives in
 [`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt) and
 [`CustomerTheme.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerTheme.kt).
 
@@ -90,6 +92,9 @@ server filters, prices, paging and photo galleries. Reads and public photos use
 inquiry, cart or holds; `Войти для заказа` opens the real login form. Leaving, changing city or
 filters, and authenticating cancel and fence pending reads. Errors remain visible; returning to the
 foreground or restoring connectivity retries reads without replaying commands or fabricating data.
+
+Delivery-slot searches use a dedicated 70-second read timeout and 90-second total call limit,
+allowing the gateway's bounded 55-second routing response to arrive. Other API calls retain their limits.
 
 ## Customer flow
 
@@ -136,7 +141,7 @@ from the warehouse service's `city` field; warehouses in the same city retain se
 show an address/name to distinguish them. The inset header centers the city between menu and
 profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
 selected warehouse's inquiry. A filter action expands an opaque, scrollable facet panel over the cabins without shifting them.
-The cabin list extends to the screen edges and uses the worker app's fading mask beneath the fixed header. Each change
+The cabin list is clipped below the fixed header, fades into that boundary and extends to the bottom screen edge. Each change
 and reset immediately requests server results; rapid changes retain the latest choice until the
 current request finishes. Each single-choice filter occupies one full row; its options open
 downward as one attached surface, push the following filters down and close after selection.
@@ -198,7 +203,7 @@ server remains responsible for hold expiry and the final bill.
 
 The map uses the stylable `MapType.VECTOR_MAP` in flat 2D mode at the logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a
 bottom-right current-location arrow. A tapped, suggested or device point is rendered immediately
-with a blue bitmap-backed cube pin. Its blue palette and night mode follow the app's explicit
+with the imported SVG company logo rendered at display density on a white pin. Its blue palette and night mode follow the app's explicit
 light/dark appearance. The shared header and glass controls use the same palette; map controls hide
 while the keyboard is open. The native map uses MapKit's movable TextureView mode so it follows
 Compose page transitions. The required Yandex attribution stays above the complete address panel at the bottom left,

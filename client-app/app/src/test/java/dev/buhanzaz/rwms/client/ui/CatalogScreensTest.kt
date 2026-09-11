@@ -411,7 +411,7 @@ class CatalogScreensTest {
 
         assertThat(stickyFilterBounds.top).isAtLeast(headerBounds.top)
         assertThat(stickyFilterBounds.bottom).isAtMost(headerBounds.bottom)
-        assertThat(catalogBounds.top).isEqualTo(0f)
+        assertThat(catalogBounds.top).isAtLeast(headerBounds.bottom)
         assertThat(catalogBounds.bottom).isEqualTo(composeRule.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
         assertThat(cardBounds.top).isWithin(1f).of(headerBounds.bottom + 16f * composeRule.density.density)
         assertThat(filterBounds.width).isLessThan(cardBounds.width)

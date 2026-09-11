@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.annotation.SuppressLint
+import android.view.LayoutInflater
 import android.graphics.Color as AndroidColor
 import androidx.annotation.RawRes
 import androidx.compose.animation.animateColorAsState
@@ -165,17 +166,30 @@ internal fun CustomerStoreLogo(
     )
 }
 
-/** Keeps a restrained trace of the supplied water artwork behind every application screen. */
+/**
+ * Keeps the supplied caustic loop behind application screens while retaining a deterministic
+ * poster for previews and the short interval before video rendering begins.
+ */
 @Composable
-internal fun CustomerStoreBackground(modifier: Modifier = Modifier) {
+internal fun CustomerStoreBackground(
+    modifier: Modifier = Modifier,
+    videoBackgroundEnabled: Boolean = false,
+) {
+    val artworkAlpha = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.2f
     Box(modifier.background(MaterialTheme.colorScheme.background)) {
         Image(
             painter = painterResource(R.drawable.background_caustic_poster),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            alpha = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.2f,
+            alpha = artworkAlpha,
             modifier = Modifier.matchParentSize(),
         )
+        if (videoBackgroundEnabled && LocalCustomerStoreVideoBackgroundEnabled.current && !LocalInspectionMode.current) {
+            CustomerVideoBackground(
+                videoRes = R.raw.background_caustic,
+                modifier = Modifier.matchParentSize().graphicsLayer { alpha = artworkAlpha },
+            )
+        }
     }
 }
 
@@ -651,7 +665,7 @@ private fun CustomerVideoBackground(
     AndroidView(
         modifier = modifier,
         factory = { viewContext ->
-            PlayerView(viewContext).apply {
+            (LayoutInflater.from(viewContext).inflate(R.layout.customer_video_background, null, false) as PlayerView).apply {
                 useController = false
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 setShutterBackgroundColor(AndroidColor.rgb(42, 138, 217))

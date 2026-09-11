@@ -61,9 +61,15 @@ import dev.buhanzaz.rwms.client.auth.registrationProfileValidationMessage
 
 /** Keeps the route background stable without delaying already available application content. */
 @Composable
-internal fun CustomerStoreLaunchGate(content: @Composable () -> Unit) {
+internal fun CustomerStoreLaunchGate(
+    videoBackgroundEnabled: Boolean = false,
+    content: @Composable () -> Unit,
+) {
     Box(Modifier.fillMaxSize()) {
-        CustomerStoreBackground(Modifier.matchParentSize().testTag("customer-store-background"))
+        CustomerStoreBackground(
+            modifier = Modifier.matchParentSize().testTag("customer-store-background"),
+            videoBackgroundEnabled = videoBackgroundEnabled,
+        )
         content()
     }
 }
