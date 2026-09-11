@@ -1,0 +1,67 @@
+{
+  "envelopeVersion": 2,
+  "eventId": "10000000-0000-0000-0000-000000000011",
+  "eventType": "inventory.publication.succeeded.v1",
+  "eventVersion": 1,
+  "occurredAt": "2026-09-11T00:00:00Z",
+  "recordedAt": "2026-09-11T00:00:00Z",
+  "producer": "inventory-service",
+  "aggregateType": "PUBLICATION",
+  "aggregateId": "10000000-0000-0000-0000-000000000012",
+  "aggregateVersion": 2,
+  "correlation": {"correlationId": "10000000-0000-0000-0000-000000000013", "causationId": null},
+  "actorRef": null,
+  "payload": {
+    "inventoryId": "20000000-0000-0000-0000-000000000011",
+    "findingId": "20000000-0000-0000-0000-000000000012",
+    "publicationIntentId": "10000000-0000-0000-0000-000000000012",
+    "warehouseId": "20000000-0000-0000-0000-000000000013",
+    "publicationRevision": 2,
+    "state": "SUCCEEDED",
+    "attemptCount": 1,
+    "finalPlanVersion": 1,
+    "finalPlanSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "targetKind": "REPAIR",
+    "targetId": "30000000-0000-0000-0000-000000000011",
+    "maintenanceEstimateId": null,
+    "maintenanceRepairId": "30000000-0000-0000-0000-000000000011",
+    "maintenanceOutcome": "CREATED",
+    "maintenanceResult": {
+      "source": {
+        "inventoryId": "20000000-0000-0000-0000-000000000011",
+        "finalPlanVersion": 1,
+        "findingId": "20000000-0000-0000-0000-000000000012",
+        "findingRevision": 1,
+        "finalPlanSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planFingerprintSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "strategy": "CREATE",
+        "selectedTargetKind": null,
+        "selectedTargetId": null,
+        "supersededTargetKind": null,
+        "supersededTargetId": null
+      },
+      "outcome": "CREATED",
+      "targetKind": "REPAIR",
+      "targetId": "30000000-0000-0000-0000-000000000011",
+      "estimateId": null,
+      "repairId": "30000000-0000-0000-0000-000000000011",
+      "successor": null,
+      "delta": {"lines": [{
+        "sourceIndex": 0,
+        "disposition": "RETAINED",
+        "lineType": "WORK",
+        "catalogNodeId": "30000000-0000-0000-0000-000000000012",
+        "requestedQuantity": "2",
+        "retainedQuantity": "2"
+      }]}
+    },
+    "failureCode": null,
+    "sourceReference": {
+      "inventoryId": "20000000-0000-0000-0000-000000000011",
+      "findingId": "20000000-0000-0000-0000-000000000012",
+      "sourceRevision": 1,
+      "finalPlanVersion": 1,
+      "requestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  }
+}

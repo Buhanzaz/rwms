@@ -703,6 +703,26 @@ class InventoryContractSchemaTest {
         .doesNotContain("INVENTORY_SESSION", "INVENTORY_FINDING", "INVENTORY_PUBLICATION");
   }
 
+  @Test
+  void finalPlanPublicationAcceptsTheCurrentReceiptButRejectsPrivateOrUnknownFields() throws Exception {
+    ObjectNode event = (ObjectNode) JSON.readTree(Files.readString(
+        contract("events/inventory/fixtures/publication-succeeded-final-plan.json")));
+    assertThat(schema().validate(event)).isEmpty();
+
+    ObjectNode payload = (ObjectNode) event.required("payload");
+    ObjectNode result = (ObjectNode) payload.required("maintenanceResult");
+    result.put("displayName", "private value");
+    assertThat(schema().validate(event)).isNotEmpty();
+    result.remove("displayName");
+    ((ObjectNode) result.required("source")).put("strategy", "UNKNOWN");
+    assertThat(schema().validate(event)).isNotEmpty();
+
+    payload.remove(List.of("finalPlanVersion", "finalPlanSha256", "targetKind", "targetId",
+        "maintenanceEstimateId", "maintenanceOutcome", "maintenanceResult"));
+    ((ObjectNode) payload.required("sourceReference")).remove("finalPlanVersion");
+    assertThat(schema().validate(event)).isEmpty();
+  }
+
   private ObjectNode validAutoPlan() throws Exception {
     return (ObjectNode)
         JSON.readTree(

@@ -347,7 +347,77 @@
         "inventoryId": {"type": "string", "format": "uuid"},
         "findingId": {"type": "string", "format": "uuid"},
         "sourceRevision": {"type": "integer", "format": "int64", "minimum": 1},
+        "finalPlanVersion": {"type": ["integer", "null"], "minimum": 1},
         "requestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "maintenancePublicationSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inventoryId", "finalPlanVersion", "findingId", "findingRevision", "finalPlanSha256", "planFingerprintSha256", "strategy", "selectedTargetKind", "selectedTargetId", "supersededTargetKind", "supersededTargetId"],
+      "properties": {
+        "inventoryId": {"type": "string", "format": "uuid"},
+        "finalPlanVersion": {"type": "integer", "minimum": 1},
+        "findingId": {"type": "string", "format": "uuid"},
+        "findingRevision": {"type": "integer", "minimum": 1},
+        "finalPlanSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "planFingerprintSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "strategy": {"enum": ["CREATE", "REPLACE", "MERGE"]},
+        "selectedTargetKind": {"enum": ["ESTIMATE", "REPAIR", null]},
+        "selectedTargetId": {"$ref": "#/$defs/nullableUuid"},
+        "supersededTargetKind": {"enum": ["ESTIMATE", "REPAIR", null]},
+        "supersededTargetId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "maintenancePublicationSuccessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predecessorRepairId", "state", "terminalFact", "terminalFactEventId", "terminalFactOccurredAt", "releasedAt"],
+      "properties": {
+        "predecessorRepairId": {"type": "string", "format": "uuid"},
+        "state": {"enum": ["WAITING_PREDECESSOR", "RELEASED"]},
+        "terminalFact": {"enum": ["TASK_BOARD_COMPLETION", "REPAIR_ACCEPTANCE", null]},
+        "terminalFactEventId": {"$ref": "#/$defs/nullableUuid"},
+        "terminalFactOccurredAt": {"type": ["string", "null"], "format": "date-time"},
+        "releasedAt": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "maintenancePublicationResult": {
+      "description": "Immutable maintenance result already emitted by final-plan publication. Identifiers, bounded domain decisions and quantities only; no service-local text or arbitrary response fields.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "outcome", "targetKind", "targetId", "estimateId", "repairId", "successor", "delta"],
+      "properties": {
+        "source": {"$ref": "#/$defs/maintenancePublicationSource"},
+        "outcome": {"enum": ["CREATED", "SUCCESSOR", "MATCHED"]},
+        "targetKind": {"enum": ["ESTIMATE", "REPAIR", null]},
+        "targetId": {"$ref": "#/$defs/nullableUuid"},
+        "estimateId": {"$ref": "#/$defs/nullableUuid"},
+        "repairId": {"$ref": "#/$defs/nullableUuid"},
+        "successor": {"oneOf": [{"$ref": "#/$defs/maintenancePublicationSuccessor"}, {"type": "null"}]},
+        "delta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lines"],
+          "properties": {
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sourceIndex", "disposition", "lineType", "catalogNodeId", "requestedQuantity", "retainedQuantity"],
+                "properties": {
+                  "sourceIndex": {"type": "integer", "minimum": 0},
+                  "disposition": {"enum": ["RETAINED", "RETAINED_AFTER_DEDUCTION", "REMOVED_AS_ALREADY_PRESENT", "RETAINED_AMBIGUOUS"]},
+                  "lineType": {"enum": ["WORK", "MATERIAL"]},
+                  "catalogNodeId": {"$ref": "#/$defs/nullableUuid"},
+                  "requestedQuantity": {"type": "string", "minLength": 1},
+                  "retainedQuantity": {"type": "string", "minLength": 1}
+                }
+              }
+            }
+          }
+        }
       }
     },
     "publicationFact": {
@@ -382,6 +452,13 @@
           ]
         },
         "attemptCount": {"type": "integer", "minimum": 0},
+        "finalPlanVersion": {"type": ["integer", "null"], "minimum": 1},
+        "finalPlanSha256": {"$ref": "#/$defs/nullableSha256"},
+        "targetKind": {"enum": ["ESTIMATE", "REPAIR", null]},
+        "targetId": {"$ref": "#/$defs/nullableUuid"},
+        "maintenanceEstimateId": {"$ref": "#/$defs/nullableUuid"},
+        "maintenanceOutcome": {"enum": ["CREATED", "SUCCESSOR", "MATCHED", null]},
+        "maintenanceResult": {"oneOf": [{"$ref": "#/$defs/maintenancePublicationResult"}, {"type": "null"}]},
         "maintenanceRepairId": {"$ref": "#/$defs/nullableUuid"},
         "failureCode": {
           "oneOf": [

@@ -371,7 +371,10 @@ work. Newest entries go first; never rewrite the meaning of an older row.
 
 | 2026-09-11 | Worker auth stream recovery | Auth V13 adds current-state baselines for workers missing their event streams without changing credentials or publishing invented historical events. A deferred constraint prevents worker projections from committing without a matching stream, event and live checkpoint. Incomplete recovery inputs fail closed. | [Auth recovery migration](../../services/auth-service/src/main/resources/db/migration/V13__restore_and_guard_worker_access_streams.sql), [recovery tests](../../services/auth-service/src/test/java/dev/buhanzaz/rwms/auth/AuthWorkerAccessRecoveryMigrationIntegrationTest.java) | 4 recovery cases, 30 install/upgrade cases and 47 auth API cases passed. |
 
+| 2026-09-11 | Dossier recovery boundary | V6 repairs a missing active pointer or an empty generation registry without fabricating history. Inventory publication schema and dossier validation now accept the current final-plan maintenance receipt with strict nested fields. | [V6](../../services/dossier-service/src/main/resources/db/migration/V6__restore_missing_active_generation.sql), [inventory event schema](../../contracts/events/inventory/inventory-events-v1.schema.json) | 65 dossier migration, validator, contract and runtime integration cases plus 15 inventory contract cases passed. |
+
 ## Entry Template
+
 
 | Date       | Area             | Durable change                                                  | Evidence                              | Verification     |
 | ---------- | ---------------- | --------------------------------------------------------------- | ------------------------------------- | ---------------- |

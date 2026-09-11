@@ -36,6 +36,13 @@ The authoritative boundaries are [dossier-service.yaml](../../contracts/openapi/
 
 The consumer begins at earliest, validates every accepted source topic and record key, deduplicates event identity, records source coordinates and quarantines version gaps instead of inventing a missing prefix. Source facts without a provable cabin subject are journaled as unlinked rather than fabricated into a cabin activity.
 
+Inventory final-plan publication receipts are validated against the producer contract,
+including their exact maintenance outcome, source identity and delta fields. Older
+publication facts remain valid; arbitrary private or unknown fields remain rejected.
+Flyway V6 restores a missing pointer to the unique active generation, or initializes
+an entirely empty generation registry. It refuses ambiguous generations and creates
+no source facts or activities: recovering the event history is a separate operation.
+
 `logistics.transfer.cancellation-started.v1` is accepted on `rwms.logistics.transfer.v1` as a
 `TRANSFER` document fact in `CANCELLING` state. Like the other document-level transfer facts, it
 advances the inbox and aggregate checkpoint and remains `SUBJECT_NOT_PROVIDED` evidence without a

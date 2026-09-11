@@ -65,7 +65,7 @@ class DossierFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndPassesJpaValidation() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -112,6 +112,53 @@ class DossierFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void restoresAnEmptyGenerationRegistryWithoutCreatingHistory() {
+    migrateThroughFive();
+    jdbc.update("delete from dossier_active_generation");
+    jdbc.update("delete from dossier_projection_generation");
+
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+    assertThat(jdbc.queryForObject("""
+        select count(*) from dossier_active_generation p
+        join dossier_projection_generation g on g.id = p.generation_id
+        where p.pointer_name = 'DOSSIER' and g.state = 'ACTIVE'
+        """, Integer.class)).isOne();
+    assertThat(jdbc.queryForObject("select count(*) from dossier_activity", Integer.class)).isZero();
+    assertThat(jdbc.queryForObject("select count(*) from dossier_source_fact", Integer.class)).isZero();
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void restoresOnlyThePointerWhenAnActiveGenerationExists() {
+    migrateThroughFive();
+    UUID generation = jdbc.queryForObject("select id from dossier_projection_generation", UUID.class);
+    jdbc.update("delete from dossier_active_generation");
+
+    flyway(MIGRATIONS).migrate();
+
+    assertThat(jdbc.queryForObject("select generation_id from dossier_active_generation", UUID.class))
+        .isEqualTo(generation);
+    assertThat(jdbc.queryForObject("select count(*) from dossier_projection_generation", Integer.class)).isOne();
+  }
+
+  @Test
+  void refusesToChooseAnUnverifiedBuildingGeneration() {
+    migrateThroughFive();
+    jdbc.update("delete from dossier_active_generation");
+    jdbc.update("update dossier_projection_generation set state = 'BUILDING', activated_at = null");
+
+    assertThatThrownBy(() -> flyway(MIGRATIONS).migrate())
+        .hasMessageContaining("Cannot recover ambiguous dossier active generation");
+    assertThat(jdbc.queryForObject("select count(*) from dossier_active_generation", Integer.class)).isZero();
+  }
+
+  private void migrateThroughFive() {
+    Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS).target("5").load().migrate();
+  }
+
+  @Test
   void v2BackfillsExistingMediaAsDistinctOnePhotoFolders() {
     Flyway beforeFolderGrouping =
         Flyway.configure()
@@ -133,7 +180,7 @@ class DossierFlywayMigrationIntegrationTest {
     insertLegacyMediaProjection(cabinId, warehouseId, firstMediaId, 0);
     insertLegacyMediaProjection(cabinId, warehouseId, secondMediaId, 1);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(5);
     assertThat(
             jdbc.queryForObject(
                 "select folder_id from dossier_media_projection where media_id=?",
@@ -200,7 +247,7 @@ class DossierFlywayMigrationIntegrationTest {
         "update dossier_sanitized_dead_letter set failure_code='INVALID_ENVELOPE' where id=?",
         validationFailureWithEventId);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(4);
 
     assertThat(
             jdbc.queryForObject(
@@ -266,7 +313,7 @@ class DossierFlywayMigrationIntegrationTest {
             .load();
     assertThat(throughV4.migrate().migrationsExecuted).isEqualTo(4);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(2);
 
     String definition =
         jdbc.queryForObject(

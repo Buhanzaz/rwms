@@ -2856,6 +2856,11 @@ and
 
 ### Dossier visibility and generation rebuild
 
+Flyway V6 can restore a missing active pointer or initialize an empty generation
+registry, but does not fabricate history. Recovery must separately verify retained
+source events. Current inventory final-plan publication receipts pass the canonical
+strict schema and dossier allowlist, including the immutable maintenance result.
+
 1. The dossier consumer validates and records the producer fact in its local
    inbox/checkpoint transaction.
 2. The coverage resolver uses only dossier-local association and source-journal

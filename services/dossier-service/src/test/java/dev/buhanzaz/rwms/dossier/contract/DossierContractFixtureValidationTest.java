@@ -11,6 +11,7 @@ import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.dossier.eventing.DossierEnvelopeValidator;
 import dev.buhanzaz.rwms.dossier.eventing.DossierProducerSchemaValidator;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
@@ -44,6 +45,16 @@ class DossierContractFixtureValidationTest {
       new DossierProducerSchemaValidator();
   private final DossierEnvelopeValidator envelopeValidator =
       new DossierEnvelopeValidator(new tools.jackson.databind.ObjectMapper(), producerSchemas);
+
+  @Test
+  void acceptsCurrentFinalPlanPublicationWithoutInventingItsCabinAssociation() throws Exception {
+    byte[] raw = Files.readAllBytes(EVENTS.resolve("inventory/fixtures/publication-succeeded-final-plan.json"));
+    var event = envelopeValidator.validate("rwms.inventory.publication.v1", 0, 15,
+        "10000000-0000-0000-0000-000000000012", raw);
+    assertThat(event.activityCode()).isEqualTo("INVENTORY_PUBLICATION_SUCCEEDED");
+    assertThat(event.secondaryId()).isEqualTo(java.util.UUID.fromString("20000000-0000-0000-0000-000000000012"));
+    assertThat(event.cabinId()).isNull();
+  }
 
   @Test
   void canonicalVisibleAndUnlinkedInputFixturesPassFullValidationForEveryAcceptedTopic() {

@@ -302,6 +302,9 @@ public final class DossierEnvelopeValidator {
       add(result, "rwms.inventory.session.v1", "SESSION", SubjectKind.NONE, session, session, "inventoryId", null, event);
     }
     Set<String> publication = Set.of("inventoryId", "findingId", "publicationIntentId", "warehouseId", "publicationRevision", "state", "attemptCount", "maintenanceRepairId", "failureCode", "sourceReference");
+    Set<String> finalPlanPublication = new HashSet<>(publication);
+    finalPlanPublication.addAll(Set.of("finalPlanVersion", "finalPlanSha256", "targetKind", "targetId",
+        "maintenanceEstimateId", "maintenanceOutcome", "maintenanceResult"));
     Map<String, String> publicationCodes = Map.ofEntries(
         Map.entry("inventory.publication.ready.v1", "INVENTORY_PUBLICATION_READY"),
         Map.entry("inventory.publication.requested.v1", "INVENTORY_PUBLICATION_REQUESTED"),
@@ -309,7 +312,7 @@ public final class DossierEnvelopeValidator {
         Map.entry("inventory.publication.transient-failed.v1", "INVENTORY_PUBLICATION_TRANSIENT_FAILED"),
         Map.entry("inventory.publication.blocked.v1", "INVENTORY_PUBLICATION_BLOCKED"),
         Map.entry("inventory.publication.closed-blocked.v1", "INVENTORY_PUBLICATION_CLOSED_BLOCKED"));
-    publicationCodes.forEach((event, code) -> add(result, "rwms.inventory.publication.v1", "PUBLICATION", SubjectKind.INVENTORY_PUBLICATION, publication, publication, "publicationIntentId", code, event));
+    publicationCodes.forEach((event, code) -> add(result, "rwms.inventory.publication.v1", "PUBLICATION", SubjectKind.INVENTORY_PUBLICATION, finalPlanPublication, publication, "publicationIntentId", code, event));
 
     Set<String> requiredMedia = Set.of("mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees");
     Set<String> media = new HashSet<>(requiredMedia);

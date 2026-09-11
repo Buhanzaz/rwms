@@ -283,6 +283,11 @@ V12 canonical UTF-8 representation.
 
 ## Persistence, events and recovery
 
+The publication event schema includes the optional final-plan identity, target,
+maintenance outcome and immutable receipt already emitted by publication. Nested
+receipt fields are explicit and reject private text or arbitrary extra properties;
+older stored publication facts without these additions remain readable.
+
 Flyway migrations under `src/main/resources/db/migration/` are the only schema authority. JPA uses
 `ddl-auto=validate`; Hibernate schema mutation and cross-service foreign keys are prohibited.
 

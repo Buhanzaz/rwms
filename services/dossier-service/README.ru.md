@@ -36,6 +36,14 @@ dossier-service — read-only cross-domain проекция активности
 
 Consumer начинает с earliest, проверяет каждый accepted source topic и record key, дедуплицирует event identity, сохраняет source coordinates и quarantines version gaps вместо выдумывания missing prefix. Source facts без доказуемого cabin subject сохраняются как unlinked, а не фабрикуются в cabin activity.
 
+Квитанции публикации итогового плана инвентаризации проверяются по контракту
+производителя, включая точные поля результата maintenance, идентичности источника
+и delta. Прежние факты публикации остаются допустимыми; произвольные приватные и
+неизвестные поля отклоняются. Flyway V6 восстанавливает отсутствующий указатель на
+единственную активную generation либо инициализирует полностью пустой реестр.
+Неоднозначность останавливает миграцию. Факты и история не создаются: их
+восстановление остаётся отдельной проверяемой операцией.
+
 `logistics.transfer.cancellation-started.v1` принимается из `rwms.logistics.transfer.v1` как факт
 документа `TRANSFER` в состоянии `CANCELLING`. Как и остальные факты документов перемещения, он
 продвигает inbox и checkpoint агрегата и остаётся evidence `SUBJECT_NOT_PROVIDED` без activity
