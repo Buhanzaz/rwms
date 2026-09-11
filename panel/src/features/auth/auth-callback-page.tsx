@@ -16,9 +16,11 @@ export function AuthCallbackPage({
   applicationBasePath?: string
 }) {
   const navigate = useNavigate()
-  const { completeLogin, beginLogin } = useAuth()
+  const { completeLogin, beginLogin, error: authError } = useAuth()
   const started = useRef(false)
   const [error, setError] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
+  const visibleError = authError ?? error
 
   useEffect(() => {
     if (started.current) {
@@ -52,20 +54,32 @@ export function AuthCallbackPage({
     <main className="flex min-h-svh items-center justify-center bg-muted p-6">
       <Card className="w-full max-w-md" size="sm">
         <CardHeader>
-          <CardTitle>{error ? "Не удалось войти" : "Завершаем вход"}</CardTitle>
+          <CardTitle>
+            {visibleError ? "Не удалось войти" : "Завершаем вход"}
+          </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm text-muted-foreground">
-          {error ? <p role="alert">{error}</p> : <p>Проверяем сессию…</p>}
-          {error ? (
+          {visibleError ? (
+            <p role="alert">{visibleError}</p>
+          ) : (
+            <p>Проверяем сессию…</p>
+          )}
+          {visibleError ? (
             <Button
               type="button"
-              onClick={() =>
-                void beginLogin(
-                  toExternalApplicationPath("/", applicationBasePath)
-                )
-              }
+              disabled={retrying}
+              onClick={async () => {
+                setRetrying(true)
+                try {
+                  await beginLogin(
+                    toExternalApplicationPath("/", applicationBasePath)
+                  )
+                } finally {
+                  setRetrying(false)
+                }
+              }}
             >
-              Войти снова
+              {retrying ? "Подключаемся…" : "Войти снова"}
             </Button>
           ) : null}
         </CardContent>

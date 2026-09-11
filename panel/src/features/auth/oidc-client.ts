@@ -39,6 +39,7 @@ export function getUserManager(config = PANEL_AUTH_CONFIG) {
       // With offline_access the OIDC client renews through the rotating refresh
       // token, without navigating the panel away from the current page.
       automaticSilentRenew: true,
+      silentRequestTimeoutInSeconds: 15,
       monitorSession: false,
       loadUserInfo: false,
       userStore: createSessionStore(`${config.sessionStoragePrefix}user:`),

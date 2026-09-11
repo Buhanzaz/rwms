@@ -1,6 +1,6 @@
-import { StrictMode } from "react"
+import { StrictMode, useState } from "react"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
-import { render, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -30,6 +30,57 @@ function renderCallback(value: AuthContextValue) {
 }
 
 describe("AuthCallbackPage", () => {
+  it("shows progress and the fresh retry error instead of keeping the old callback message", async () => {
+    const completeLogin = vi
+      .fn()
+      .mockRejectedValue(new Error("Старая ошибка callback"))
+    let finish: () => void = () => undefined
+    function RetryHarness() {
+      const [error, setError] = useState<string | null>(null)
+      return (
+        <MemoryRouter>
+          <AuthContext.Provider
+            value={{
+              status: "unauthenticated",
+              accessToken: null,
+              currentUser: null,
+              error,
+              completeLogin,
+              logout: vi.fn(),
+              beginLogin: async () => {
+                await new Promise<void>((resolve) => {
+                  finish = resolve
+                })
+                setError("Сервис входа временно недоступен")
+              },
+            }}
+          >
+            <AuthCallbackPage />
+          </AuthContext.Provider>
+        </MemoryRouter>
+      )
+    }
+    render(<RetryHarness />)
+    fireEvent.click(await screen.findByRole("button", { name: "Войти снова" }))
+    expect(
+      screen
+        .getByRole("button", { name: "Подключаемся…" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+
+    await act(async () => finish())
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Сервис входа временно недоступен"
+    )
+    expect(screen.queryByText("Старая ошибка callback")).toBeNull()
+    expect(
+      screen
+        .getByRole("button", { name: "Войти снова" })
+        .hasAttribute("disabled")
+    ).toBe(false)
+  })
+
   it("consumes the one-time OIDC callback only once under StrictMode", async () => {
     const completeLogin = vi.fn().mockResolvedValue("/")
 

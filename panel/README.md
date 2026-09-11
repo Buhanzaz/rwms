@@ -19,6 +19,10 @@ Russian version: [README.ru.md](README.ru.md).
   workspace. Its callback performs a full-page return to
   `/logistics-panel/**`; ordinary panel return paths continue through the
   panel router. Both clients use the same renewable `rwms-panel` user session.
+- All three web surfaces renew an expired renewable session through one shared
+  in-flight request before requiring sign-in again. Callback completion waits
+  for profile verification; a transient network/gateway profile-read failure
+  retries once with bounded timeouts, but authorization denials never retry.
 - `CUSTOMER` is a recognized human role only so user administration, order
   actors and dossier history can render truthful labels. It remains ineligible
   for ManagerApp and receives no panel order or warehouse command affordance;

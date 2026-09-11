@@ -110,6 +110,8 @@ function OidcAuthProvider({
   > | null>(null)
   const [error, setError] = useState<string | null>(null)
   const authenticationAttempt = useRef(0)
+  const sessionRenewal = useRef<Promise<User | null> | null>(null)
+  const verifiedUser = useRef<User | null>(null)
 
   const isCurrentAuthenticationAttempt = (attempt: number) =>
     attempt === authenticationAttempt.current
@@ -127,6 +129,7 @@ function OidcAuthProvider({
 
   const publishUnauthenticatedState = useCallback((attempt: number) => {
     if (!isCurrentAuthenticationAttempt(attempt)) return false
+    verifiedUser.current = null
     setOidcUser(null)
     setCurrentUser(null)
     setStatus("unauthenticated")
@@ -144,6 +147,7 @@ function OidcAuthProvider({
 
   const acceptUser = useCallback(
     async (user: User | null, attempt: number) => {
+      if (!isCurrentAuthenticationAttempt(attempt)) return
       if (user === null || user.expired) {
         await resetToUnauthenticated(attempt)
         return
@@ -186,6 +190,7 @@ function OidcAuthProvider({
       )
       if (!isCurrentAuthenticationAttempt(attempt)) return
       setProtectedClientSnapshot(nextSnapshot)
+      verifiedUser.current = user
       setOidcUser(user)
       setCurrentUser(profile)
       setError(null)
@@ -200,7 +205,23 @@ function OidcAuthProvider({
     async function restoreSession() {
       const attempt = ++authenticationAttempt.current
       try {
-        const user = await manager.getUser()
+        let user = await manager.getUser()
+
+        if (cancelled || !isCurrentAuthenticationAttempt(attempt)) return
+        // An already expired stored token does not trigger the library's
+        // expiring event. Recover its renewable session explicitly, sharing an
+        // in-flight refresh with expiry events from a resumed background tab.
+        if (user?.expired) {
+          if (isPanelUser(user) && hasRenewablePanelSession(user)) {
+            sessionRenewal.current ??= manager.signinSilent().finally(() => {
+              sessionRenewal.current = null
+            })
+            user = await sessionRenewal.current
+          } else {
+            await manager.removeUser()
+            user = null
+          }
+        }
 
         if (!cancelled && isCurrentAuthenticationAttempt(attempt)) {
           await acceptUser(user, attempt)
@@ -220,7 +241,9 @@ function OidcAuthProvider({
 
     const handleUserLoaded = (user: User) => {
       const attempt = ++authenticationAttempt.current
-      void acceptUser(user, attempt).catch((renewError) => {
+      // UserManager awaits this handler before completing a callback/refresh.
+      // Returning the promise prevents navigation before /me is verified.
+      return acceptUser(user, attempt).catch(async (renewError) => {
         if (!isCurrentAuthenticationAttempt(attempt)) return
         if (renewError instanceof InteractiveUserPrincipalError) {
           setError(getErrorMessage(renewError))
@@ -229,20 +252,16 @@ function OidcAuthProvider({
 
         // The token was refreshed successfully. A transient /me failure must
         // not turn it into a logout or unmount the application.
+        if (verifiedUser.current === null) {
+          await resetToUnauthenticated(attempt)
+          if (!isCurrentAuthenticationAttempt(attempt)) return
+        }
         setError(getErrorMessage(renewError))
       })
     }
 
     const handleExpired = () => {
-      const attempt = ++authenticationAttempt.current
-      void (async () => {
-        try {
-          await manager.removeUser()
-        } catch {
-          // The local boundary must still close when OIDC storage is gone.
-        }
-        await resetToUnauthenticated(attempt)
-      })()
+      void restoreSession()
     }
 
     manager.events.addAccessTokenExpired(handleExpired)

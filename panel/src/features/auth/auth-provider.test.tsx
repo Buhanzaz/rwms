@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
-import { useEffect } from "react"
+import { StrictMode, useEffect } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -7,31 +7,47 @@ import type { CurrentUser } from "@/features/auth/auth-model"
 import type { AuthContextValue } from "@/features/auth/auth-context"
 import { AuthProvider } from "@/features/auth/auth-provider"
 import { useAuth } from "@/features/auth/use-auth"
+import {
+  ADMIN_AUTH_CONFIG,
+  PANEL_AUTH_CONFIG,
+  RENTAL_MANAGER_AUTH_CONFIG,
+} from "@/features/auth/auth-config"
 
 const oidc = vi.hoisted(() => {
-  let userLoaded: ((user: TestUser) => void) | undefined
+  let userLoaded: ((user: TestUser) => void | Promise<void>) | undefined
+  let expired: (() => void) | undefined
 
   const manager = {
     getUser: vi.fn(),
     removeUser: vi.fn(),
     signinRedirect: vi.fn(),
     signinRedirectCallback: vi.fn(),
+    signinSilent: vi.fn(),
     signoutRedirect: vi.fn(),
     events: {
-      addAccessTokenExpired: vi.fn(),
-      removeAccessTokenExpired: vi.fn(),
-      addUserLoaded: vi.fn((handler: (user: TestUser) => void) => {
-        userLoaded = handler
+      addAccessTokenExpired: vi.fn((handler: () => void) => {
+        expired = handler
       }),
+      removeAccessTokenExpired: vi.fn(),
+      addUserLoaded: vi.fn(
+        (handler: (user: TestUser) => void | Promise<void>) => {
+          userLoaded = handler
+        }
+      ),
       removeUserLoaded: vi.fn(),
     },
   }
 
   return {
     manager,
-    emitUserLoaded: (user: TestUser) => userLoaded?.(user),
+    emitUserLoaded: (user: TestUser) => {
+      void userLoaded?.(user)
+    },
+    emitUserLoadedAsync: (user: TestUser) => userLoaded?.(user),
+    emitExpired: () => expired?.(),
     reset: () => {
       userLoaded = undefined
+      expired = undefined
       Object.values(manager).forEach((value) => {
         if (typeof value === "function") {
           value.mockReset()
@@ -131,11 +147,142 @@ function ProtectedQueryClientProbe({
 
 afterEach(() => {
   cleanup()
+  window.history.replaceState({}, "", "/")
   oidc.reset()
   getCurrentUser.mockReset()
 })
 
 describe("AuthProvider refresh-token renewal", () => {
+  it.each([PANEL_AUTH_CONFIG, ADMIN_AUTH_CONFIG, RENTAL_MANAGER_AUTH_CONFIG])(
+    "restores an expired renewable session in $clientId without another login",
+    async (runtime) => {
+      oidc.manager.getUser.mockResolvedValue({
+        ...user("expired-token"),
+        expired: true,
+      })
+      oidc.manager.signinSilent.mockImplementation(async () => {
+        const renewed = user("restored-token")
+        await oidc.emitUserLoadedAsync(renewed)
+        return renewed
+      })
+      getCurrentUser.mockResolvedValue(currentUser)
+
+      render(
+        <StrictMode>
+          <AuthProvider runtime={runtime}>
+            <SessionProbe onUnmount={() => undefined} />
+          </AuthProvider>
+        </StrictMode>
+      )
+
+      await screen.findByText("authenticated:restored-token:panel-user")
+      expect(oidc.manager.signinSilent).toHaveBeenCalledTimes(1)
+      expect(oidc.manager.signinRedirect).not.toHaveBeenCalled()
+      expect(oidc.manager.removeUser).not.toHaveBeenCalled()
+      expect(getCurrentUser).not.toHaveBeenCalledWith("expired-token")
+    }
+  )
+
+  it("shares an in-flight restore with an expired event after background suspension", async () => {
+    oidc.manager.getUser.mockResolvedValue({
+      ...user("expired-token"),
+      expired: true,
+    })
+    let finish: (value: TestUser) => void = () => undefined
+    oidc.manager.signinSilent.mockImplementation(
+      () =>
+        new Promise<TestUser>((resolve) => {
+          finish = resolve
+        })
+    )
+    getCurrentUser.mockResolvedValue(currentUser)
+    render(
+      <AuthProvider>
+        <SessionProbe onUnmount={() => undefined} />
+      </AuthProvider>
+    )
+
+    await waitFor(() =>
+      expect(oidc.manager.signinSilent).toHaveBeenCalledTimes(1)
+    )
+    act(() => oidc.emitExpired())
+    await act(async () => {
+      finish(user("restored-token"))
+    })
+
+    await screen.findByText("authenticated:restored-token:panel-user")
+    expect(oidc.manager.signinSilent).toHaveBeenCalledTimes(1)
+    expect(oidc.manager.removeUser).not.toHaveBeenCalled()
+  })
+
+  it("fails closed and removes the session when refresh is rejected", async () => {
+    oidc.manager.getUser.mockResolvedValue({
+      ...user("expired-token"),
+      expired: true,
+    })
+    oidc.manager.signinSilent.mockRejectedValue(new Error("invalid_grant"))
+    render(
+      <AuthProvider>
+        <SessionProbe onUnmount={() => undefined} />
+      </AuthProvider>
+    )
+
+    await screen.findByText("unauthenticated::none")
+    expect(oidc.manager.removeUser).toHaveBeenCalledTimes(1)
+    expect(getCurrentUser).not.toHaveBeenCalled()
+  })
+
+  it("waits for the real userLoaded verification before completing a callback", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/auth/callback?code=event-code&state=event-state"
+    )
+    oidc.manager.getUser.mockResolvedValue(null)
+    let finishProfile: (value: CurrentUser) => void = () => undefined
+    getCurrentUser.mockImplementation(
+      () =>
+        new Promise<CurrentUser>((resolve) => {
+          finishProfile = resolve
+        })
+    )
+    oidc.manager.signinRedirectCallback.mockImplementation(async () => {
+      const loaded = user("callback-event-token")
+      await oidc.emitUserLoadedAsync(loaded)
+      return loaded
+    })
+    const actions: { current: AuthContextValue | null } = { current: null }
+    render(
+      <AuthProvider>
+        <AuthActionsProbe
+          onActionsChanged={(next) => {
+            actions.current = next
+          }}
+        />
+      </AuthProvider>
+    )
+    await waitFor(() => expect(actions.current?.status).toBe("unauthenticated"))
+    let completed = false
+    let completion: Promise<string>
+    act(() => {
+      completion = actions.current!.completeLogin().then((path) => {
+        completed = true
+        return path
+      })
+    })
+    await waitFor(() =>
+      expect(getCurrentUser).toHaveBeenCalledWith("callback-event-token")
+    )
+    expect(completed).toBe(false)
+
+    await act(async () => {
+      finishProfile(currentUser)
+      await completion!
+    })
+    expect(actions.current?.status).toBe("authenticated")
+    expect(getCurrentUser).toHaveBeenCalledTimes(1)
+  })
+
   it("keeps protected cache state when only the bearer token rotates", async () => {
     oidc.manager.getUser.mockResolvedValue(user("old-access-token"))
     getCurrentUser.mockResolvedValue(currentUser)
