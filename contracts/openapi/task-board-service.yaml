@@ -1691,7 +1691,8 @@ paths:
       operationId: restoreWorkerTaskRequirement
       description: >-
         Restores the selected missing work/material and its frozen catalog DEPENDENCY group.
-        FOLLOW_UP navigation paths do not link availability. Only MISSING rows become RESTORED;
+        FOLLOW_UP navigation paths do not link availability. Only MISSING rows become AVAILABLE;
+        RESTORED is reserved for availability confirmed through manager task restoration.
         unrelated and completed rows, assignments and immutable problem reports are retained.
         First execution requires an active participant of an IN_PROGRESS entry, its observed
         expectedVersion and the worker-owned offline lease. Idempotency-Key must equal operationId.
@@ -1767,7 +1768,11 @@ paths:
         schema: { type: string, format: uuid }
     post:
       operationId: applyTaskProblemToAll
-      description: Requires USER rwms.write and warehouse EDIT; marks matching catalog resources on ACTIVE tasks in this warehouse. Exact operation replay returns the original affected IDs.
+      description: >-
+        Requires USER rwms.write and warehouse EDIT. Marks matching catalog resources on ACTIVE
+        tasks in this warehouse and suspends their unfinished routes, including untaken tasks.
+        Timers and assignments stop without completing work or advancing the source repair.
+        Exact operation replay returns the original affected IDs without blocking restored tasks again.
       requestBody:
         required: true
         content:
@@ -3392,9 +3397,10 @@ components:
       additionalProperties: false
     KpiPalette:
       type: object
-      required: [version, ranges, overdueColor, problemColor]
+      required: [version, ranges, overdueColor, problemColor, completedColor]
       properties:
         problemColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        completedColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
         version: { type: integer, format: int64, minimum: 0 }
         ranges:
           type: array
@@ -3514,6 +3520,7 @@ components:
       required: [expectedVersion, ranges, overdueColor]
       properties:
         problemColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        completedColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         ranges:
           type: array

@@ -307,7 +307,7 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
 
   @Test
   void missingLinkedItemsCloseOnlyAvailableWorkAndRestoreWithoutRecredit() throws Exception {
-    Fixture fixture = fixture();
+    Fixture fixture = fixture(true);
     UUID doneWork = UUID.randomUUID();
     UUID missingWork = UUID.randomUUID();
     UUID material = UUID.randomUUID();
@@ -339,6 +339,14 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
     board.complete(WAREHOUSE, entryId, new VersionCommand(detail.version()), fixture.workerId());
     var checklist = requirements.get(WAREHOUSE, taskId);
     assertThat(checklist.incomplete()).isTrue();
+    assertThat(jdbc.queryForObject("select suspended from board_task where id=?", Boolean.class, taskId)).isTrue();
+    assertThat(jdbc.queryForList("select status from queue_entry where task_id=? order by route_index",
+        String.class, taskId)).containsExactly("WAITING", "WAITING");
+    assertThat(jdbc.queryForObject("select entry_type from queue_entry where task_id=? and route_index=1",
+        String.class, taskId)).isEqualTo("SHADOW");
+    assertThatThrownBy(() -> board.take(WAREHOUSE, entryId,
+        new TakeEntryRequest(workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId).version(),
+            null, fixture.workerId()), fixture.workerId())).isInstanceOf(ConflictException.class);
     assertThat(checklist.completedWorkPercent()).isEqualTo(80);
     assertThat(jdbc.queryForObject("select current_budget_seconds from queue_entry where id=?", Long.class, entryId)).isEqualTo(1200);
     assertThat(workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId).incomplete()).isTrue();
@@ -355,6 +363,8 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
     detail = workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId);
     board.complete(WAREHOUSE, entryId, new VersionCommand(detail.version()), fixture.workerId());
     assertThat(requirements.get(WAREHOUSE, taskId).completedWorkPercent()).isEqualTo(100);
+    assertThat(jdbc.queryForObject("select entry_type from queue_entry where task_id=? and route_index=1",
+        String.class, taskId)).isEqualTo("REAL");
     var persistedFact = json.readTree(jdbc.queryForObject(
         "select payload::text from domain_event where aggregate_type='BOARD_TASK' and aggregate_id=? order by aggregate_version desc limit 1",
         String.class, taskId.toString()));
@@ -385,15 +395,15 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
         json.writeValueAsString(List.of(new TaskMaterialSnapshotRequest(material, "Вешалка", 1, "шт"))), entryId);
     var request = restoreRequest(fixture);
     String response = restore(fixture, material, request).andExpect(status().isOk())
-        .andExpect(jsonPath("$.entry.materials[0].availabilityState").value("RESTORED"))
-        .andExpect(jsonPath("$.entry.works[0].availabilityState").value("RESTORED"))
+        .andExpect(jsonPath("$.entry.materials[0].availabilityState").value("AVAILABLE"))
+        .andExpect(jsonPath("$.entry.works[0].availabilityState").value("AVAILABLE"))
         .andExpect(jsonPath("$.entry.works[1].availabilityState").value("MISSING"))
         .andReturn().getResponse().getContentAsString();
     assertSchema("WorkerRequirementRestoreRequest", json.writeValueAsString(request));
     assertSchema("WorkerActionAppliedResult", response);
     assertThat(requirements.get(WAREHOUSE, fixture.entry().taskId()).items())
         .filteredOn(item -> item.itemId().equals(work) || item.itemId().equals(material))
-        .allSatisfy(item -> assertThat(item.state()).isEqualTo("RESTORED"));
+        .allSatisfy(item -> assertThat(item.state()).isEqualTo("AVAILABLE"));
     assertThat(requirements.state(fixture.entry().taskId(), unrelated)).isEqualTo("MISSING");
     var report = new LinkedHashMap<>(request(fixture, List.of()));
     report.put("expectedVersion", workerBoard.detail(fixture.workerId(), WAREHOUSE, entryId).version());
@@ -482,7 +492,16 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
         .filter(entry -> !entry.taskId().equals(fixture.entry().taskId())).findFirst().orElseThrow();
     var secondItem = new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(UUID.randomUUID(), "MATERIAL", "Другое название",
         UUID.randomUUID(), node, 0, List.of(), List.of(second.id()), "AVAILABLE");
-    jdbc.update("update board_task set requirements=?::jsonb where id=?", json.writeValueAsString(List.of(secondItem)), second.taskId());
+    UUID secondWorkId = UUID.randomUUID();
+    var secondWork = new dev.buhanzaz.rwms.taskboard.domain.TaskRequirement(secondWorkId, "WORK", "Монтаж материала",
+        secondItem.catalogVersionId(), UUID.randomUUID(), 120, List.of(secondItem.itemId()),
+        List.of(second.id()), "AVAILABLE");
+    jdbc.update("update board_task set requirements=?::jsonb where id=?",
+        json.writeValueAsString(List.of(secondItem, secondWork)), second.taskId());
+    jdbc.update("update queue_entry set worker_works=?::jsonb,worker_materials=?::jsonb where id=?",
+        json.writeValueAsString(List.of(new TaskWorkSnapshotRequest(secondWorkId, "Монтаж материала", 1, "шт", 2, null))),
+        json.writeValueAsString(List.of(new TaskMaterialSnapshotRequest(secondItem.itemId(), "Другое название", 1, "шт"))),
+        second.id());
     var reportRequest = new LinkedHashMap<>(request(fixture, List.of()));
     reportRequest.put("missingItemIds", List.of(firstItem));
     reportRequest.put("expectedVersion", workerBoard.detail(fixture.workerId(), WAREHOUSE, fixture.entry().id()).version());
@@ -497,15 +516,45 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
         .header("Idempotency-Key", operation).contentType(MediaType.APPLICATION_JSON).content(body))
         .andExpect(status().isOk()).andExpect(jsonPath("$.affectedTaskIds.length()").value(2))
         .andReturn().getResponse().getContentAsString();
+    for (UUID taskId : List.of(fixture.entry().taskId(), second.taskId())) {
+      assertThat(jdbc.queryForObject("select suspended from board_task where id=?", Boolean.class, taskId)).isTrue();
+      assertThat(jdbc.queryForList("select status from queue_entry where task_id=?", String.class, taskId))
+          .containsOnly("WAITING");
+    }
+    assertThat(jdbc.queryForObject("select count(*) from task_assignment where status in ('ACTIVE','PAUSED')",
+        Integer.class)).isZero();
+    assertThat(jdbc.queryForObject("select count(*) from outbox_event where event_type=?", Integer.class,
+        TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED)).isZero();
+    assertThat(requirements.get(WAREHOUSE, second.taskId()).items()).hasSize(2)
+        .allSatisfy(item -> assertThat(item.state()).isEqualTo("MISSING"));
+    assertThatThrownBy(() -> board.take(WAREHOUSE, second.id(),
+        new TakeEntryRequest(jdbc.queryForObject("select version from queue_entry where id=?", Long.class, second.id()),
+            null, fixture.workerId()), fixture.workerId())).isInstanceOf(ConflictException.class);
+    var recovery = requirements.get(WAREHOUSE, second.taskId());
+    board.restoreTask(WAREHOUSE, second.taskId(),
+        new TaskSuspensionRequest(recovery.taskVersion(), List.of(secondItem.itemId(), secondWorkId)));
+    board.take(WAREHOUSE, second.id(),
+        new TakeEntryRequest(jdbc.queryForObject("select version from queue_entry where id=?", Long.class, second.id()),
+            null, fixture.workerId()), fixture.workerId());
+    var restoredDetail = workerBoard.detail(fixture.workerId(), WAREHOUSE, second.id());
+    assertThat(restoredDetail.materials()).singleElement()
+        .satisfies(item -> assertThat(item.availabilityState()).isEqualTo("RESTORED"));
+    assertThat(restoredDetail.works()).singleElement()
+        .satisfies(item -> assertThat(item.availabilityState()).isEqualTo("RESTORED"));
     String repeated = mvc.perform(post(url).with(managerJwt(MANAGER, WAREHOUSE, "rwms.write"))
         .header("Idempotency-Key", operation).contentType(MediaType.APPLICATION_JSON).content(body))
         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
     assertThat(repeated).isEqualTo(first);
-    assertThat(requirements.get(WAREHOUSE, second.taskId()).items()).singleElement()
-        .satisfies(item -> assertThat(item.state()).isEqualTo("MISSING"));
+    assertThat(jdbc.queryForObject("select suspended from board_task where id=?", Boolean.class, second.taskId())).isFalse();
+    assertThat(requirements.get(WAREHOUSE, second.taskId()).items())
+        .allSatisfy(item -> assertThat(item.state()).isEqualTo("RESTORED"));
   }
 
   private Fixture fixture() {
+    return fixture(false);
+  }
+
+  private Fixture fixture(boolean nextStage) {
     var workerClass = registry.createClass(new WorkerClassRequest(0L, "Проблемы", null, null, 10, true));
     var definition = registry.createQueueDefinition(
         QueueRegistryTestFixtures.globalDefinition(0L, "Работа", null, QueueType.REPAIR));
@@ -521,10 +570,21 @@ class WorkerProblemReportIntegrationTest extends PostgresIntegrationTestSupport 
         new WorkerGroupRequest(0L, workerClass.id(), "Бригада", null, true,
             List.of(new GroupMemberRequest(worker.id(), true))));
     workforce.setCurrentGroup(WAREHOUSE, worker.id(), new SetCurrentGroupRequest(worker.version(), group.id()));
+    List<RouteStepRequest> route = new java.util.ArrayList<>();
+    route.add(new RouteStepRequest(definition.id(), "Выполнить работу", null));
+    if (nextStage) {
+      var following = registry.createQueueDefinition(
+          QueueRegistryTestFixtures.globalDefinition(0L, "Следующий этап", null, QueueType.REPAIR));
+      QueueRegistryTestFixtures.create(registry, jdbc, WAREHOUSE,
+          new QueueFixtureRequest(0L, following.id(), true, false, false, null, null, false, null,
+              List.of(new QueueBindingRequest(workerClass.id(), false))));
+      route.add(new RouteStepRequest(following.id(), "Следующая работа", null));
+    }
     var created = board.createTask(WAREHOUSE,
         new CreateBoardTaskRequest(null, "Ремонт бытовки", "БТ-91", null, null, null,
-            List.of(new RouteStepRequest(definition.id(), "Выполнить работу", null))));
-    var entry = created.columns().stream().flatMap(column -> column.entries().stream()).findFirst().orElseThrow();
+            route));
+    var entry = created.columns().stream().flatMap(column -> column.entries().stream())
+        .filter(value -> value.routeIndex() == 0).findFirst().orElseThrow();
     board.take(WAREHOUSE, entry.id(), new TakeEntryRequest(entry.version(), null, worker.id()), worker.id());
     OffsetDateTime occurredAt = OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1);
     UUID leaseId = leases.issue(worker.id(), WAREHOUSE, workerBoard.revision(WAREHOUSE), occurredAt.minusSeconds(1)).id();

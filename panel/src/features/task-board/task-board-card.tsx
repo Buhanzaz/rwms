@@ -52,7 +52,6 @@ const statusLabels: Record<TaskBoardEntryStatus, string> = {
   DONE: "Завершено",
   CANCELLED: "Отменено",
 }
-const DEFAULT_PROBLEM_COLOR = "#FF3B30"
 
 function formatElapsed(seconds: number) {
   const hours = Math.floor(seconds / 3_600)
@@ -91,21 +90,7 @@ function kpiCardAppearance(
   now: number,
   palette: KpiPalette | null
 ) {
-  if (entry.hasProblem) {
-    const color = /^#[0-9A-F]{6}$/i.test(palette?.problemColor ?? "")
-      ? palette!.problemColor!
-      : DEFAULT_PROBLEM_COLOR
-    return {
-      color,
-      style: {
-        backgroundColor: `color-mix(in srgb, ${color} 22%, var(--card))`,
-        borderColor: color,
-        borderLeftWidth: "4px",
-      } satisfies CSSProperties,
-    }
-  }
-
-  if (entry.entryType === "SHADOW" || entry.suspended) {
+  if (entry.entryType === "SHADOW" || entry.suspended || entry.incomplete) {
     return { color: null, style: undefined }
   }
 
@@ -409,7 +394,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
       className={cn(
         "w-full data-[size=sm]:[--card-spacing:--spacing(3)]",
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
-        entry.suspended && "border-muted bg-muted",
+        (entry.suspended || entry.incomplete) && "border-muted bg-muted",
         routeHighlighted && "ring-2 ring-primary"
       )}
       data-kpi-color={appearance.color ?? undefined}
@@ -644,7 +629,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
           !appearance.color &&
           entry.status === "IN_PROGRESS" &&
           "border-primary",
-        entry.suspended && "border-muted bg-muted",
+        (entry.suspended || entry.incomplete) && "border-muted bg-muted",
         (entry.status === "DONE" || entry.status === "CANCELLED") &&
           "opacity-65",
         routeHighlighted && "ring-2 ring-primary"

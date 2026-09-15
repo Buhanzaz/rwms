@@ -412,7 +412,8 @@ idempotent per-user receipt; it does not mutate the report or task and later pho
 readiness does not reopen it. The panel uses the public gateway for both routes.
 
 Reports mark the task as problematic; the installation-wide palette exposes
-`problemColor` (initially `#FF3B30`). A nonempty `missingItemIds` also requires the
+`problemColor` for missing work/material rows (initially `#FF3B30`) and `completedColor`
+for completed and manager-restored rows (initially `#238636`). A nonempty `missingItemIds` also requires the
 observed entry `expectedVersion` and immediately marks the selected work/material
 and its frozen catalog-linked component `MISSING`. Maintenance owns requirement
 identities, normative seconds and deep links, exposed through its private
@@ -425,7 +426,8 @@ explicitly. The `dev` default is `http://127.0.0.1:8087`.
 Workers can undo a missing mark through
 `POST /worker/v1/entries/{entryId}/requirements/{itemId}/restore`. The active participant supplies
 `expectedVersion`, an owned offline lease and an `operationId` matching `Idempotency-Key`.
-Only missing members of the selected dependency group become `RESTORED`; unrelated and completed
+Only missing members of the selected dependency group become `AVAILABLE`; `RESTORED` identifies
+availability confirmed by a manager through task restoration. Unrelated and completed
 rows and immutable reports remain unchanged. V56 admits `RESTORE_ITEM` in the native durable receipt
 store so exact retries cannot undo a later missing mark. Catalog `FOLLOW_UP` paths never couple
 availability. Refreshing frozen links preserves all recorded states and work accounting.
@@ -444,6 +446,12 @@ other missing groups remain blocked. A manager with warehouse `EDIT` can apply a
 report to all active tasks in that warehouse using `reportId/apply-to-all` and an
 idempotent operation UUID. Matching uses stable catalog node identities, never
 names; custom positions without catalog identities cannot be applied globally.
+Bulk application also suspends every matched task, including waiting tasks, and
+ends active assignments and timers through the ordinary suspension transition.
+It neither credits unfinished work nor advances a repair stage. Restoring a task
+retains the red unconfirmed rows and makes confirmed rows green in the panel;
+blocked cards are grey regardless of historical problem reports. Replaying the
+bulk operation returns its original result without blocking restored tasks again.
 
 ## HTTP boundaries
 

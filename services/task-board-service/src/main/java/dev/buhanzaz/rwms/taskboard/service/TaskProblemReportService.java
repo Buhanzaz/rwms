@@ -44,6 +44,7 @@ public class TaskProblemReportService {
   private final WorkerTaskBoardService workerBoard;
   private final JdbcTemplate jdbc;
   private final TaskRequirementService requirements;
+  private final TaskBoardWorkerExecutionService execution;
 
   public TaskProblemReportService(
       TaskProblemReportRepository reports,
@@ -51,7 +52,9 @@ public class TaskProblemReportService {
       TaskProblemReportMapper mapper,
       WorkerTaskBoardService workerBoard,
       JdbcTemplate jdbc,
-      TaskRequirementService requirements) {
+      TaskRequirementService requirements,
+      TaskBoardWorkerExecutionService execution) {
+    this.execution = execution;
     this.requirements = requirements;
     this.reports = reports;
     this.readReceipts = readReceipts;
@@ -213,6 +216,7 @@ public class TaskProblemReportService {
     if (missing.isEmpty()) throw new ConflictException("Сообщение не содержит отсутствующих позиций");
     List<UUID> affected = requirements.applyToAll(warehouseId, report.getTaskId(),
         missing.stream().map(dev.buhanzaz.rwms.taskboard.api.TaskRequirementApiModels.MissingItem::itemId).toList());
+    affected.forEach(taskId -> execution.blockForMissingRequirements(warehouseId, taskId));
     report.appliedToAll();
     reports.saveAndFlush(report);
     jdbc.update("insert into task_problem_bulk_receipt(operation_id,report_id,warehouse_id,manager_id,affected_task_ids) values (?,?,?,?,?::jsonb)",

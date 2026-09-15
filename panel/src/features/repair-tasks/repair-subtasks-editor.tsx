@@ -1,5 +1,10 @@
 import { useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon, ArrowUp01Icon } from "@hugeicons/core-free-icons"
 
@@ -29,6 +34,23 @@ import { repairTaskSourceMediaOwner } from "@/features/repair-tasks/repair-task-
 import { repairSubtaskStatusLabel } from "@/features/repair-tasks/repair-task-status-labels"
 import { cn } from "@/lib/utils"
 
+import {
+  getKpiPalette,
+  kpiSettingsKeys,
+  type KpiPalette,
+} from "@/features/settings/kpi/api/kpi-settings-api"
+import {
+  getTaskRegistration,
+  getTaskRequirements,
+  taskRegistrationQueryKey,
+  taskRequirementsQueryKey,
+  type TaskRequirementState,
+} from "@/features/task-board/api/task-requirements-api"
+import {
+  requirementStyle,
+  requirementStateLabel,
+} from "@/features/task-board/requirement-presentation"
+
 type RepairSnapshotLine = RepairTaskSubtaskDto["workLines"][number]
 
 function RepairSnapshotLines({
@@ -38,9 +60,8 @@ function RepairSnapshotLines({
   lines,
   includeQuantity = false,
   showComments = true,
-  accessToken = null,
-  task,
-  subtask,
+  states,
+  palette,
 }: {
   title: string
   itemLabel: string
@@ -48,9 +69,8 @@ function RepairSnapshotLines({
   lines: RepairSnapshotLine[]
   includeQuantity?: boolean
   showComments?: boolean
-  accessToken?: string | null
-  task?: RepairTaskDto
-  subtask?: RepairTaskSubtaskDto
+  states: Map<string, TaskRequirementState>
+  palette?: KpiPalette | null
 }) {
   return (
     <section className="flex min-w-0 flex-col gap-2" aria-label={title}>
@@ -72,11 +92,20 @@ function RepairSnapshotLines({
               const lineName = includeQuantity
                 ? `${description} × ${line.quantity} ${line.unit}`
                 : description
-              const mediaReferences = line.maintenanceMediaReferences ?? []
+              const state = states.get(line.id)
+              const statusLabel =
+                state === "MISSING"
+                  ? includeQuantity
+                    ? "Нет материала"
+                    : "Не выполнено"
+                  : requirementStateLabel(state)
 
               return (
                 <article
                   key={line.id}
+                  aria-label={lineName}
+                  style={requirementStyle(state, palette)}
+                  data-requirement-state={state}
                   className="flex min-w-0 flex-col gap-3 rounded-md border p-3"
                 >
                   <dl
@@ -100,23 +129,8 @@ function RepairSnapshotLines({
                       </>
                     ) : null}
                   </dl>
-                  {task && subtask && mediaReferences.length > 0 ? (
-                    <ServiceOwnerPhotos
-                      accessToken={accessToken}
-                      owner={repairTaskSourceMediaOwner(
-                        task,
-                        line,
-                        subtask.taskBoardEntryId
-                      )}
-                      readOnly
-                      maxItems={100}
-                      title={`Фото работы «${description}»`}
-                      presentation="work-carousel"
-                      visibleMediaIds={mediaReferences.map(
-                        (reference) => reference.mediaId
-                      )}
-                      authoritativeReadyReferences={mediaReferences}
-                    />
+                  {statusLabel ? (
+                    <span className="text-xs font-medium">{statusLabel}</span>
                   ) : null}
                 </article>
               )
@@ -142,6 +156,56 @@ export function RepairSubtasksEditor({
   const queryClient = useQueryClient()
   const [subtasks, setSubtasks] = useState(() => structuredClone(task.subtasks))
   const [error, setError] = useState<string | null>(null)
+  const externalTaskIds = [
+    ...new Set(
+      task.subtasks.flatMap((subtask) =>
+        subtask.externalTaskId ? [subtask.externalTaskId] : []
+      )
+    ),
+  ]
+  const registrations = useQueries({
+    queries: externalTaskIds.map((externalTaskId) => ({
+      queryKey: taskRegistrationQueryKey(task.warehouseId, externalTaskId),
+      queryFn: () =>
+        getTaskRegistration(accessToken!, task.warehouseId, externalTaskId),
+      enabled: Boolean(accessToken),
+      staleTime: 60_000,
+    })),
+  })
+  const boardTaskIds = [
+    ...new Set(
+      registrations.flatMap((query) => (query.data ? [query.data.taskId] : []))
+    ),
+  ]
+  const requirements = useQueries({
+    queries: boardTaskIds.map((taskId) => ({
+      queryKey: taskRequirementsQueryKey(task.warehouseId, taskId),
+      queryFn: () =>
+        getTaskRequirements(accessToken!, task.warehouseId, taskId),
+      enabled: Boolean(accessToken),
+      refetchInterval: 15_000,
+    })),
+  })
+  const paletteQuery = useQuery({
+    queryKey: kpiSettingsKeys.palette,
+    queryFn: () => getKpiPalette(accessToken!),
+    enabled: Boolean(accessToken),
+    refetchInterval: 30_000,
+  })
+  const states = new Map<string, TaskRequirementState>(
+    requirements.flatMap(
+      (query) =>
+        query.data?.items.map((item) => [item.itemId, item.state] as const) ??
+        []
+    )
+  )
+  const stateError = [...registrations, ...requirements].some(
+    (query) => query.isError
+  )
+  const statesLoading =
+    registrations.some((query) => query.isLoading) ||
+    requirements.some((query) => query.isLoading)
+
   const orderChanged = subtasks.some(
     (subtask, index) => subtask.id !== task.subtasks[index]?.id
   )
@@ -192,6 +256,23 @@ export function RepairSubtasksEditor({
 
   return (
     <div className="flex flex-col gap-3">
+      {stateError ? (
+        <p role="alert" className="text-sm text-destructive">
+          Не удалось загрузить отметки работ и материалов. Повторите загрузку
+          задания.
+        </p>
+      ) : null}
+      {statesLoading ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Загрузка отметок работ и материалов…
+        </p>
+      ) : null}
+      {paletteQuery.isError ? (
+        <p role="alert" className="text-sm text-destructive">
+          Не удалось загрузить настройки цветов. Используются стандартные цвета
+          статусов.
+        </p>
+      ) : null}
       {subtasks.map((subtask, index) => (
         <Card key={subtask.id} size="sm">
           <CardHeader>
@@ -262,9 +343,8 @@ export function RepairSubtasksEditor({
                 itemLabel="Работа"
                 emptyLabel="Работ нет."
                 lines={subtask.workLines}
-                accessToken={accessToken}
-                task={task}
-                subtask={subtask}
+                states={states}
+                palette={paletteQuery.data?.palette}
               />
               <RepairSnapshotLines
                 title="Материалы"
@@ -273,8 +353,15 @@ export function RepairSubtasksEditor({
                 lines={subtask.materialLines}
                 includeQuantity
                 showComments={false}
+                states={states}
+                palette={paletteQuery.data?.palette}
               />
             </div>
+            <RepairSourcePhotos
+              accessToken={accessToken}
+              task={task}
+              subtask={subtask}
+            />
             <RepairTaskEvidencePhotos
               accessToken={accessToken}
               warehouseId={task.warehouseId}
@@ -330,26 +417,85 @@ function RepairTaskEvidencePhotos({
       className="flex min-w-0 flex-col gap-2"
       aria-label="Фото результата задания"
     >
-      {[...byEntry.entries()].map(([entryId, items], index) => (
-        <ServiceOwnerPhotos
-          key={entryId}
-          accessToken={accessToken}
-          owner={taskBoardEntryMediaOwner(entryId, warehouseId)}
-          readOnly
-          maxItems={100}
-          presentation="work-carousel"
-          title={
-            byEntry.size === 1
-              ? "Фото результата задания"
-              : `Фото результата задания ${index + 1}`
-          }
-          visibleMediaIds={items.map((item) => item.mediaId)}
-          authoritativeReadyReferences={items.map((item) => ({
-            mediaId: item.mediaId,
-            generation: item.mediaGeneration,
-          }))}
-        />
-      ))}
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[...byEntry.entries()].map(([entryId, items], index) => (
+          <div
+            key={entryId}
+            className="flex min-w-0 flex-col gap-2 [&>section]:max-w-none"
+          >
+            <h4 className="text-sm font-medium">
+              Фото результата задания{byEntry.size > 1 ? ` ${index + 1}` : ""}
+            </h4>
+            <ServiceOwnerPhotos
+              accessToken={accessToken}
+              owner={taskBoardEntryMediaOwner(entryId, warehouseId)}
+              readOnly
+              maxItems={100}
+              presentation="work-carousel"
+              title={
+                byEntry.size === 1
+                  ? "Фото результата задания"
+                  : `Фото результата задания ${index + 1}`
+              }
+              visibleMediaIds={items.map((item) => item.mediaId)}
+              authoritativeReadyReferences={items.map((item) => ({
+                mediaId: item.mediaId,
+                generation: item.mediaGeneration,
+              }))}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function RepairSourcePhotos({
+  accessToken,
+  task,
+  subtask,
+}: {
+  accessToken: string | null
+  task: RepairTaskDto
+  subtask: RepairTaskSubtaskDto
+}) {
+  const lines = [...subtask.workLines, ...subtask.materialLines].filter(
+    (line) => (line.maintenanceMediaReferences?.length ?? 0) > 0
+  )
+  if (lines.length === 0) return null
+  return (
+    <section
+      aria-label="Фото работ и материалов"
+      className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3"
+    >
+      {lines.map((line) => {
+        const references = line.maintenanceMediaReferences ?? []
+        return (
+          <div
+            key={line.id}
+            className="flex min-w-0 flex-col gap-2 [&>section]:max-w-none"
+          >
+            <h4 className="min-h-10 text-sm font-medium">
+              {line.lineType === "MATERIAL" ? "Материал" : "Работа"}:{" "}
+              {line.description.trim()}
+            </h4>
+            <ServiceOwnerPhotos
+              accessToken={accessToken}
+              owner={repairTaskSourceMediaOwner(
+                task,
+                line,
+                subtask.taskBoardEntryId
+              )}
+              readOnly
+              maxItems={100}
+              title={`Фото ${line.lineType === "MATERIAL" ? "материала" : "работы"} «${line.description.trim()}»`}
+              presentation="work-carousel"
+              visibleMediaIds={references.map((reference) => reference.mediaId)}
+              authoritativeReadyReferences={references}
+            />
+          </div>
+        )
+      })}
     </section>
   )
 }

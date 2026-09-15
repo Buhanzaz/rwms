@@ -16,6 +16,13 @@ class WorkerGatewayPathTest {
     }
 
     @Test
+    fun `same origin media path accepts source upload route used by profile avatars`() {
+        val path =
+            "/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/content"
+        assertThat(requireSameOriginApiPath(path)).isEqualTo(path)
+    }
+
+    @Test
     fun `source and thumbnail photos use authenticated same origin media reads`() {
         val ownerQuery =
             "ownerType=TASK_BOARD_ENTRY&ownerId=223e4567-e89b-12d3-a456-426614174000" +
@@ -51,6 +58,19 @@ class WorkerGatewayPathTest {
     @Test(expected = IllegalArgumentException::class)
     fun `same origin media path rejects encoded traversal`() {
         requireSameOriginApiPath("/api/media/v1/upload-sessions/%2e%2e/content")
+    }
+
+    @Test
+    fun `source upload route rejects query fragment origin and traversal`() {
+        val source = "/api/media/v1/upload-sessions/123e4567-e89b-12d3-a456-426614174000/content"
+        listOf(
+            "$source?next=../secret",
+            "$source#fragment",
+            "https://media.internal$source",
+            "/api/media/v1/upload-sessions/%2e%2e/content",
+        ).forEach { path ->
+            assertThat(runCatching { requireSameOriginApiPath(path) }.isFailure).isTrue()
+        }
     }
 
     @Test

@@ -753,7 +753,7 @@ describe("TaskBoardCard KPI timer presentation", () => {
     expect(card.className).toContain("bg-muted")
   })
 
-  it("uses the configured problem color before suspended and timer KPI appearance", () => {
+  it("keeps a suspended blocked card grey despite the historical problem flag", () => {
     renderCard(null, {
       palette: { ...kpiPalette, problemColor: "#FF3B30" },
       entryPatch: {
@@ -764,17 +764,45 @@ describe("TaskBoardCard KPI timer presentation", () => {
     })
 
     const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
-    expect(card.dataset.kpiColor).toBe("#FF3B30")
-    expect(card.style.borderColor).toBe("rgb(255, 59, 48)")
+    expect(card.dataset.kpiColor).toBeUndefined()
+    expect(card.style.borderColor).toBe("")
+    expect(card.className).toContain("bg-muted")
   })
 
-  it("uses the bright red problem default without a configured KPI palette", () => {
-    renderCard(null, { entryPatch: { hasProblem: true, status: "WAITING" } })
+  it("keeps an incomplete card grey instead of coloring the whole task", () => {
+    renderCard(null, {
+      palette: kpiPalette,
+      entryPatch: { hasProblem: true, incomplete: true, status: "WAITING" },
+    })
+
+    const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
+    expect(card.dataset.kpiColor).toBeUndefined()
+    expect(card.style.backgroundColor).toBe("")
+    expect(card.className).toContain("bg-muted")
+  })
+
+  it("keeps an active card on the normal KPI color despite the historical problem flag", () => {
+    renderCard(null, {
+      palette: kpiPalette,
+      entryPatch: {
+        hasProblem: true,
+        status: "IN_PROGRESS",
+        plannedDurationMinutes: 20,
+        timerSnapshot: {
+          countedActiveSeconds: 600,
+          remainingSeconds: 600,
+          remainingPercent: 50,
+          timerState: "WORKING",
+          nextTransitionAt: null,
+          serverTime: "2026-07-18T10:00:00Z",
+        },
+      },
+    })
 
     expect(
       document.querySelector<HTMLElement>('[data-slot="card"]')!.dataset
         .kpiColor
-    ).toBe("#FF3B30")
+    ).toBe("#EAB308")
   })
 
   it("keeps requirements available after a restored task is no longer problematic", async () => {

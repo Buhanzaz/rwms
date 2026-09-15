@@ -40,12 +40,13 @@ public final class KpiSettingsApiModels {
       @Min(0) long expectedVersion,
       @NotEmpty @Size(max = 6) List<@Valid KpiPaletteRangeRequest> ranges,
       @NotBlank @Pattern(regexp = "^#[0-9A-Fa-f]{6}$") String overdueColor,
-      @Pattern(regexp = "^#[0-9A-Fa-f]{6}$") String problemColor) {
+      @Pattern(regexp = "^#[0-9A-Fa-f]{6}$") String problemColor,
+      @Pattern(regexp = "^#[0-9A-Fa-f]{6}$") String completedColor) {
     public SaveKpiPaletteRequest {
       ranges = ranges == null ? List.of() : List.copyOf(ranges);
     }
     public SaveKpiPaletteRequest(long expectedVersion, List<KpiPaletteRangeRequest> ranges,
-        String overdueColor) { this(expectedVersion, ranges, overdueColor, null); }
+        String overdueColor) { this(expectedVersion, ranges, overdueColor, null, null); }
   }
 
   public record KpiWorkBreakRequest(
@@ -85,7 +86,11 @@ public final class KpiSettingsApiModels {
   public record KpiPaletteRangeDto(int fromPercent, int toPercent, String color) {}
 
   public record KpiPaletteDto(
-      long version, List<KpiPaletteRangeDto> ranges, String overdueColor, String problemColor) {}
+      long version,
+      List<KpiPaletteRangeDto> ranges,
+      String overdueColor,
+      String problemColor,
+      String completedColor) {}
 
   /**
    * Shared installation-wide palette head.

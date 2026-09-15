@@ -50,6 +50,7 @@ describe("KPI settings API", () => {
       ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
       overdueColor: "#7F1D1D",
       problemColor: "#FF3B30",
+      completedColor: "#238636",
     }
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -73,6 +74,7 @@ describe("KPI settings API", () => {
       ],
       overdueColor: "#7F1D1D",
       problemColor: "#FF3B30",
+      completedColor: "#238636",
     }
 
     await expect(getKpiPalette("access-token")).resolves.toEqual({
@@ -86,6 +88,25 @@ describe("KPI settings API", () => {
     ).toEqual(["/api/task-board/kpi-palette", "/api/task-board/kpi-palette"])
     expect(fetchMock.mock.calls[1]![1]?.method).toBe("PUT")
     expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))).toEqual(input)
+  })
+
+  it("rejects a malformed additive completed color instead of masking it with the default", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        version: 3,
+        palette: {
+          version: 1,
+          ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
+          overdueColor: "#7F1D1D",
+          problemColor: "#FF3B30",
+          completedColor: null,
+        },
+      })
+    )
+
+    await expect(getKpiPalette("access-token")).rejects.toThrow(
+      "некорректную палитру KPI"
+    )
   })
 
   it("saves, removes and activates a scheduled configuration", async () => {

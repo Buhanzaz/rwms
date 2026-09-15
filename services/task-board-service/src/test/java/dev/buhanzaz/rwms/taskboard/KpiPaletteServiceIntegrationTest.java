@@ -34,7 +34,23 @@ class KpiPaletteServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(service.get()).isEqualTo(first);
     assertThat(first.palette().overdueColor()).isEqualTo("#7F1D1D");
+    assertThat(first.palette().completedColor()).isEqualTo("#238636");
     assertThat(jdbc.queryForObject("select count(*) from kpi_settings", Integer.class)).isOne();
+  }
+
+  @Test
+  void completedColorIsVersionFencedAndReplaceable() {
+    var first = service.replace(palette(0, "#7F1D1D"));
+    var replacement =
+        service.replace(
+            new SaveKpiPaletteRequest(
+                first.version(),
+                List.of(new KpiPaletteRangeRequest(0, 100, "#16A34A")),
+                "#7F1D1D",
+                "#FF3B30",
+                "#166534"));
+
+    assertThat(replacement.palette().completedColor()).isEqualTo("#166534");
   }
 
   @Test

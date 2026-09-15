@@ -9,6 +9,8 @@ const palette = {
     version: 2,
     ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
     overdueColor: "#7F1D1D",
+    problemColor: "#FF3B30",
+    completedColor: "#238636",
   },
 }
 
@@ -101,6 +103,8 @@ describe("KpiPaletteSettingsPage", () => {
           expectedVersion: 4,
           ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
           overdueColor: "#7F1D1D",
+          problemColor: "#FF3B30",
+          completedColor: "#238636",
         }
       )
     )

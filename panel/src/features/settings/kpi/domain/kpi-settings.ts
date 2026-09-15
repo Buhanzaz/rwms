@@ -182,7 +182,9 @@ export function setPaletteRangeColor(
 
 export function validatePalette(
   ranges: EditablePaletteRange[],
-  overdueColor: string | null
+  overdueColor: string | null,
+  problemColor: string | null = "#FF3B30",
+  completedColor: string | null = "#238636"
 ): ValidationResult {
   if (ranges.length < 1 || ranges.length > 6) {
     return { valid: false, error: "Настройте от одного до шести диапазонов." }
@@ -215,6 +217,14 @@ export function validatePalette(
 
   if (normalizeRgb(overdueColor) === null) {
     return { valid: false, error: "Назначьте отдельный цвет просрочки." }
+  }
+
+  if (normalizeRgb(problemColor) === null) {
+    return { valid: false, error: "Назначьте цвет отсутствующих позиций." }
+  }
+
+  if (normalizeRgb(completedColor) === null) {
+    return { valid: false, error: "Назначьте цвет выполненных и восстановленных позиций." }
   }
 
   return { valid: true, error: null }

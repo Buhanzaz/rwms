@@ -35,6 +35,7 @@ const settings: KpiPaletteResponse = {
     ],
     overdueColor: "#7F1D1D",
     problemColor: "#FF3B30",
+    completedColor: "#238636",
   },
 }
 
@@ -106,9 +107,10 @@ describe("PaletteSettingsCard boundary editing", () => {
     )
 
     expect(screen.getByRole("button", { name: "Цвет проблемы" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Цвет выполненных и восстановленных" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Сохранить палитру" }))
     expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedVersion: 3, problemColor: "#FF3B30" })
+      expect.objectContaining({ expectedVersion: 3, problemColor: "#FF3B30", completedColor: "#238636" })
     )
   })
 

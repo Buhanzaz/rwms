@@ -92,7 +92,7 @@ public class TaskRequirementService {
         .map(item -> new MissingItem(item.itemId(), item.kind(), item.name())).toList();
   }
 
-  /** Restores only the selected linked missing group while retaining active work and reports. */
+  /** Undoes an active worker's mark; AVAILABLE differs from a manager-confirmed RESTORED row. */
   public void restoreActive(UUID warehouseId, UUID taskId, UUID entryId,
       long expectedVersion, UUID itemId) {
     positions.lockQueueMutation(warehouseId);
@@ -114,7 +114,7 @@ public class TaskRequirementService {
     Set<UUID> group = closure(items, Set.of(itemId));
     long version = events.lock(TaskBoardAggregateType.BOARD_TASK, taskId);
     saveItems(task, items.stream().map(item -> group.contains(item.itemId())
-        && "MISSING".equals(item.state()) ? item.withState("RESTORED") : item).toList());
+        && "MISSING".equals(item.state()) ? item.withState("AVAILABLE") : item).toList());
     writer.saveAndFlush(tasks, task);
     events.taskChanged(task, version, TaskBoardEventTypes.BOARD_TASK_CHANGED);
     touchEntries(route);

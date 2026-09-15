@@ -6,7 +6,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +37,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import dev.buhanzaz.rwms.worker.core.ui.WorkerButton
 import dev.buhanzaz.rwms.worker.core.ui.WorkerGlassBorder
 import dev.buhanzaz.rwms.worker.core.ui.WorkerGlassSurface
@@ -76,17 +77,10 @@ fun ProfileScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(132.dp)
-                            .clickable {
-                                avatarPicker.launch(
-                                    PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                    ),
-                                )
-                            },
+                            .size(104.dp),
                     ) {
                         Surface(
-                            modifier = Modifier.size(124.dp).align(Alignment.TopCenter),
+                            modifier = Modifier.size(96.dp).align(Alignment.TopCenter),
                             shape = CircleShape,
                             color = WorkerGlassSurface,
                             border = androidx.compose.foundation.BorderStroke(2.dp, WorkerGlassBorder),
@@ -109,14 +103,27 @@ fun ProfileScreen(
                             }
                         }
                         Surface(
-                            modifier = Modifier.size(42.dp).align(Alignment.BottomEnd),
+                            onClick = {
+                                avatarPicker.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                    ),
+                                )
+                            },
+                            enabled = !state.isAvatarUploading,
+                            modifier = Modifier.size(48.dp).align(Alignment.BottomEnd)
+                                .testTag("profile-avatar-picker"),
                             shape = CircleShape,
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.88f),
                             contentColor = Color.White,
                             border = androidx.compose.foundation.BorderStroke(2.dp, Color.White.copy(alpha = 0.88f)),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.CameraAlt, contentDescription = "Изменить фото")
+                                if (state.isAvatarUploading) {
+                                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Filled.CameraAlt, contentDescription = "Изменить фото")
+                                }
                             }
                         }
                     }

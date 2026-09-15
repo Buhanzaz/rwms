@@ -2242,7 +2242,9 @@ The task-board palette has a separate configurable problem color (default
 
 An active assigned worker can undo a missing row through the fenced, idempotent
 `POST /worker/v1/entries/{entryId}/requirements/{itemId}/restore`. Task-board restores
-its exact linked missing group without reopening completed work. WorkerApp persists this
+its exact linked missing group to `AVAILABLE` without reopening completed work. Manager task
+restoration uses `RESTORED`, distinguishing green confirmed rows from a worker's neutral undo.
+WorkerApp persists this
 as `RESTORE_ITEM` in its encrypted action outbox, retaining the operation identity on
 retry and applying only the returned server detail. Its task detail tints individual
 missing rows and shows explicit work/material statuses, rather than tinting the entire
@@ -2255,7 +2257,12 @@ The version-fenced manager restore command confirms exact complete linked groups
 unselected groups remain missing. Previously credited lines stay completed, and
 the next execution receives only its remaining budget. A warehouse EDIT manager
 may apply a resource report to all active tasks in that warehouse through one
-idempotent server command matched by stable catalog node IDs.
+idempotent server command matched by stable catalog node IDs. That command also
+suspends every matched task, including untaken routes, and releases active assignments
+and timers without crediting unfinished work or publishing a stage completion.
+Exact replay does not block a task that has since been restored. Panel renders
+suspended/incomplete cards grey; historical `hasProblem` does not tint the whole card.
+Missing rows are red and manager-confirmed restored rows are green.
 
 WorkerApp keeps the editable comment and encrypted photo bundles in a Room
 draft. Submission freezes one immutable outbox declaration and atomically
@@ -3127,6 +3134,8 @@ Evidence:
 [`LogisticsWarehouseLifecycleStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsWarehouseLifecycleStore.java),
 [`V39__warehouse_admission_evidence.sql`](../../services/logistics-service/src/main/resources/db/migration/V39__warehouse_admission_evidence.sql),
 service-local `*WarehouseLifecycle*` and `*WarehouseOperationMark*` sources.
+
+Repair detail reads the registered board task by each stage’s `externalTaskId`, then joins `/requirements` items to source line IDs. The task board remains the owner of per-item execution state. The shared admin palette controls missing (`problemColor`) and completed/restored (`completedColor`) rows in both views.
 
 ## Failure ownership
 

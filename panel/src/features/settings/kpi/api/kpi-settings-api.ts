@@ -15,6 +15,7 @@ export type KpiPalette = {
   ranges: KpiPaletteRange[]
   overdueColor: string
   problemColor?: string
+  completedColor?: string
 }
 
 export type KpiPaletteResponse = {
@@ -50,6 +51,7 @@ export type SaveKpiPaletteInput = {
   ranges: KpiPaletteRange[]
   overdueColor: string
   problemColor?: string
+  completedColor?: string
 }
 
 export type SaveWorkScheduleInput = {
@@ -144,7 +146,16 @@ function parsePalette(value: unknown): KpiPalette | null {
   if (!isString(value.problemColor)) {
     throw new Error("Сервис доски задач вернул некорректную палитру KPI.")
   }
-  return { version: value.version, ranges, overdueColor: value.overdueColor, problemColor: value.problemColor }
+  if (value.completedColor !== undefined && !isString(value.completedColor)) {
+    throw new Error("Сервис доски задач вернул некорректную палитру KPI.")
+  }
+  return {
+    version: value.version,
+    ranges,
+    overdueColor: value.overdueColor,
+    problemColor: value.problemColor,
+    completedColor: value.completedColor === undefined ? "#238636" : value.completedColor,
+  }
 }
 
 function parseSettings(value: unknown): KpiSettingsResponse {

@@ -269,14 +269,14 @@ fun TaskDetailScreen(
         },
     ) { padding ->
         val layoutDirection = LocalLayoutDirection.current
-        // The scaffold padding ends below the 8dp outer margin and 60dp header surface.
-        // Moving back 38dp places the mask transition at that surface's vertical midpoint.
-        val headerFadeEnd = (padding.calculateTopPadding() - 38.dp).coerceAtLeast(1.dp)
+        // Scaffold includes the header's 8dp bottom margin. Fade inside the visible surface,
+        // so rows cannot remain visible beside it or reappear above it while scrolling.
+        val headerBottom = (padding.calculateTopPadding() - 8.dp).coerceAtLeast(1.dp)
         LazyColumn(
             // Let the list viewport reach beneath the shell surfaces. Applying Scaffold's
             // padding to the modifier shrinks the viewport and leaves the scroll content ending
             // in mid-air; contentPadding keeps the first/last rows safe while preserving clipping.
-            modifier = Modifier.fillMaxSize().fadeIntoTaskHeader(headerFadeEnd),
+            modifier = Modifier.fillMaxSize().fadeIntoTaskHeader(headerBottom),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(
                 start = padding.calculateStartPadding(layoutDirection),
@@ -470,13 +470,13 @@ fun TaskDetailScreen(
 }
 
 /** Fades task rows only as they pass the visible header, while keeping the header untouched. */
-private fun Modifier.fadeIntoTaskHeader(fadeEnd: Dp): Modifier =
+internal fun Modifier.fadeIntoTaskHeader(headerBottom: Dp): Modifier =
     graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithCache {
             val mask = Brush.verticalGradient(
                 colors = listOf(Color.Transparent, Color.Black),
-                startY = 0f,
-                endY = fadeEnd.toPx().coerceAtLeast(1f),
+                startY = (headerBottom - 24.dp).toPx().coerceAtLeast(0f),
+                endY = headerBottom.toPx().coerceAtLeast(1f),
             )
             onDrawWithContent {
                 drawContent()
@@ -1019,10 +1019,11 @@ private fun RequirementStatus(availabilityState: String, isMaterial: Boolean) {
     Text(label, style = MaterialTheme.typography.labelMedium)
 }
 
-internal enum class RequirementAvailabilityTone { DEFAULT, MISSING }
+internal enum class RequirementAvailabilityTone { DEFAULT, MISSING, RESTORED }
 
 internal fun requirementAvailabilityTone(availabilityState: String): RequirementAvailabilityTone = when (availabilityState) {
     "MISSING" -> RequirementAvailabilityTone.MISSING
+    "RESTORED" -> RequirementAvailabilityTone.RESTORED
     else -> RequirementAvailabilityTone.DEFAULT
 }
 
@@ -1033,10 +1034,17 @@ internal fun canReportMissingRequirement(availabilityState: String, canReportMis
 internal fun requirementCardColors(availabilityState: String) = CardDefaults.cardColors(
     containerColor = when (requirementAvailabilityTone(availabilityState)) {
         RequirementAvailabilityTone.MISSING -> MaterialTheme.colorScheme.errorContainer
+        RequirementAvailabilityTone.RESTORED -> restoredRequirementColor
         RequirementAvailabilityTone.DEFAULT -> MaterialTheme.colorScheme.surface
     },
-    contentColor = MaterialTheme.colorScheme.onSurface,
+    contentColor = if (requirementAvailabilityTone(availabilityState) == RequirementAvailabilityTone.RESTORED) {
+        Color.White
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    },
 )
+
+internal val restoredRequirementColor = Color(0xFF238636)
 
 @Composable
 private fun RemoteMediaThumbnail(

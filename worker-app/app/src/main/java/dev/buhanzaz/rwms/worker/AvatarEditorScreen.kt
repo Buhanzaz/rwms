@@ -1,43 +1,49 @@
 package dev.buhanzaz.rwms.worker
 
+import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -45,27 +51,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.exifinterface.media.ExifInterface
 import dev.buhanzaz.rwms.worker.core.ui.WorkerButton
-import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
+import androidx.core.view.WindowCompat
 import java.io.IOException
-import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Telegram-like circular crop editor drawn over the application's moving water background. */
+/** Circular crop editor matching the customer photo flow on a black edge-to-edge surface. */
 @Composable
 fun AvatarEditorScreen(
     initialUri: String,
@@ -75,13 +88,41 @@ fun AvatarEditorScreen(
     onDismissError: () -> Unit,
     onSave: (Bitmap) -> Unit,
 ) {
+    BackHandler(onBack = onBack)
     var selectedUri by remember(initialUri) { mutableStateOf(Uri.parse(initialUri)) }
-    var cropRequest by remember(initialUri) { mutableStateOf<AvatarCropRequest?>(null) }
+    var crop by remember(initialUri) { mutableStateOf(WorkerAvatarCrop()) }
     var isPreparing by remember(initialUri) { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val sourceState by produceState<AvatarSourceState>(AvatarSourceState.Loading, selectedUri) {
-        value = withContext(Dispatchers.IO) {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val activity = view.context as? Activity
+        val controller = activity?.let { WindowCompat.getInsetsController(it.window, view) }
+        val previousLightStatusBars = controller?.isAppearanceLightStatusBars
+        val previousLightNavigationBars = controller?.isAppearanceLightNavigationBars
+        val previousNavigationContrast = if (Build.VERSION.SDK_INT >= 29) {
+            activity?.window?.isNavigationBarContrastEnforced
+        } else {
+            null
+        }
+        controller?.apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+        if (Build.VERSION.SDK_INT >= 29) activity?.window?.isNavigationBarContrastEnforced = false
+        onDispose {
+            controller?.apply {
+                isAppearanceLightStatusBars = previousLightStatusBars ?: true
+                isAppearanceLightNavigationBars = previousLightNavigationBars ?: true
+            }
+            if (Build.VERSION.SDK_INT >= 29 && previousNavigationContrast != null) {
+                activity?.window?.isNavigationBarContrastEnforced = previousNavigationContrast
+            }
+        }
+    }
+    var sourceState by remember(selectedUri) { mutableStateOf<AvatarSourceState>(AvatarSourceState.Loading) }
+    LaunchedEffect(selectedUri) {
+        sourceState = withContext(Dispatchers.IO) {
             runCatching { decodeAvatarBitmap(context, selectedUri) }
                 .fold(
                     onSuccess = AvatarSourceState::Ready,
@@ -92,40 +133,61 @@ fun AvatarEditorScreen(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             onDismissError()
-            cropRequest = null
+            crop = WorkerAvatarCrop()
             selectedUri = uri
         }
     }
-    WorkerScreenScaffold(title = "Фото профиля", onBack = onBack) { padding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Назад",
+                        tint = Color.White,
+                    )
+                }
+                Text(
+                    text = "Фото профиля",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            }
             Text(
-                "Разведите пальцы для масштаба и переместите фото внутри круга",
+                "Двигайте и масштабируйте изображение",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color.White.copy(alpha = 0.78f),
             )
-            Surface(
+            Box(
                 modifier = Modifier.fillMaxWidth().weight(1f),
-                shape = RoundedCornerShape(28.dp),
-                color = Color.White.copy(alpha = 0.34f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.62f)),
+                contentAlignment = Alignment.Center,
             ) {
                 when (val source = sourceState) {
-                    AvatarSourceState.Loading -> Unit
+                    AvatarSourceState.Loading -> CircularProgressIndicator(color = Color.White)
                     AvatarSourceState.Failed -> Box(
                         Modifier.fillMaxSize().padding(24.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("Не удалось открыть изображение", textAlign = TextAlign.Center)
+                        Text("Не удалось открыть изображение", color = Color.White, textAlign = TextAlign.Center)
                     }
                     is AvatarSourceState.Ready -> AvatarCropViewport(
                         bitmap = source.bitmap,
-                        enabled = !isSaving,
-                        onCropChanged = { cropRequest = it },
+                        enabled = !isSaving && !isPreparing,
+                        crop = crop,
+                        onCropChanged = { crop = it },
                     )
                 }
             }
@@ -147,26 +209,23 @@ fun AvatarEditorScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                         )
                     },
-                    enabled = !isSaving,
+                    enabled = !isSaving && !isPreparing,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Filled.PhotoLibrary, contentDescription = null)
                     Text("Другое")
                 }
                 AvatarSaveButton(
-                    enabled = sourceState is AvatarSourceState.Ready && cropRequest != null,
+                    enabled = sourceState is AvatarSourceState.Ready,
                     isSaving = isSaving || isPreparing,
                     onClick = {
-                        val request = cropRequest ?: return@AvatarSaveButton
+                        val source = (sourceState as? AvatarSourceState.Ready)?.bitmap
+                            ?: return@AvatarSaveButton
+                        val selectedCrop = crop
                         isPreparing = true
                         coroutineScope.launch {
                             val cropped = withContext(Dispatchers.Default) {
-                                cropAvatarBitmap(
-                                    request.bitmap,
-                                    request.zoom,
-                                    request.offset,
-                                    request.viewportPixels,
-                                )
+                                renderWorkerAvatar(source, selectedCrop)
                             }
                             onSave(cropped)
                             isPreparing = false
@@ -183,59 +242,64 @@ fun AvatarEditorScreen(
 private fun AvatarCropViewport(
     bitmap: Bitmap,
     enabled: Boolean,
-    onCropChanged: (AvatarCropRequest?) -> Unit,
+    crop: WorkerAvatarCrop,
+    onCropChanged: (WorkerAvatarCrop) -> Unit,
 ) {
-    var zoom by remember(bitmap) { mutableFloatStateOf(1f) }
-    var offset by remember(bitmap) { mutableStateOf(Offset.Zero) }
-    var viewportPixels by remember(bitmap) { mutableFloatStateOf(0f) }
-    val currentOnCropChanged by rememberUpdatedState(onCropChanged)
-    val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
-        val nextZoom = (zoom * zoomChange).coerceIn(1f, 5f)
-        val nextOffset = offset + panChange
-        val bounds = avatarPanBounds(ratio, viewportPixels, nextZoom)
-        zoom = nextZoom
-        offset = Offset(
-            x = nextOffset.x.coerceIn(-bounds.x, bounds.x),
-            y = nextOffset.y.coerceIn(-bounds.y, bounds.y),
-        )
-    }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val diameter = minOf(maxWidth - 32.dp, maxHeight - 32.dp, 340.dp).coerceAtLeast(80.dp)
-        val baseWidth: Dp = if (ratio >= 1f) diameter * ratio else diameter
-        val baseHeight: Dp = if (ratio >= 1f) diameter else diameter / ratio
-        Box(
-            modifier = Modifier
-                .size(diameter)
-                .onSizeChanged { viewportPixels = it.width.toFloat() }
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), CircleShape)
-                .border(3.dp, Color.White.copy(alpha = 0.94f), CircleShape)
-                .graphicsLayer { clip = true; shape = CircleShape }
-                .transformable(transformState, enabled = enabled),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "Обрезка фотографии профиля",
-                modifier = Modifier
-                    .width(baseWidth)
-                    .height(baseHeight)
-                    .graphicsLayer {
-                        scaleX = zoom
-                        scaleY = zoom
-                        translationX = offset.x
-                        translationY = offset.y
-                    },
-                contentScale = ContentScale.FillBounds,
+    val image = remember(bitmap) { bitmap.asImageBitmap() }
+    var viewport by remember(bitmap) { mutableStateOf(Size.Zero) }
+    Column(Modifier.fillMaxSize()) {
+      Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+            .onSizeChanged { viewport = Size(it.width.toFloat(), it.height.toFloat()) }
+            .pointerInput(bitmap, enabled, crop) {
+                if (enabled) detectTransformGestures { centroid, pan, zoomChange, _ ->
+                    onCropChanged(crop.transformed(bitmap.width, bitmap.height, Size(size.width.toFloat(), size.height.toFloat()), centroid, pan, zoomChange))
+                }
+            }
+            .semantics { contentDescription = "Предпросмотр аватара" }
+            .testTag("avatar-crop-preview"),
+      ) {
+        val diameter = min(size.width, size.height) * 0.9f
+        val source = crop.sourceRect(bitmap.width, bitmap.height)
+        val imageScale = diameter / source.width
+        withTransform({
+            translate(center.x, center.y)
+            scale(imageScale, imageScale, pivot = Offset.Zero)
+            translate(-source.center.x, -source.center.y)
+        }) {
+            drawRect(
+                Color.White,
+                size = Size(bitmap.width.toFloat(), bitmap.height.toFloat()),
             )
+            drawImage(image)
         }
-    }
-    LaunchedEffect(bitmap, zoom, offset, viewportPixels, enabled) {
-        currentOnCropChanged(if (enabled && viewportPixels > 0f) {
-            AvatarCropRequest(bitmap, zoom, offset, viewportPixels)
-        } else {
-            null
-        })
+        val outside = Path().apply {
+            fillType = PathFillType.EvenOdd
+            addRect(Rect(Offset.Zero, size))
+            addOval(Rect(center = center, radius = diameter / 2f))
+        }
+        drawPath(outside, Color.Black.copy(alpha = 0.55f))
+        drawCircle(Color.White, radius = diameter / 2f, style = Stroke(3.dp.toPx()))
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Icon(Icons.Filled.ZoomOut, contentDescription = null, tint = Color.White)
+        Slider(
+            value = crop.zoom,
+            onValueChange = { value ->
+                onCropChanged(crop.transformed(bitmap.width, bitmap.height, viewport, Offset(viewport.width / 2f, viewport.height / 2f), Offset.Zero, value / crop.zoom))
+            },
+            valueRange = 1f..MAX_AVATAR_ZOOM,
+            enabled = enabled,
+            modifier = Modifier.weight(1f).semantics { contentDescription = "Масштаб фото" },
+        )
+        Icon(Icons.Filled.ZoomIn, contentDescription = null, tint = Color.White)
+      }
     }
 }
 
@@ -255,53 +319,72 @@ private fun AvatarSaveButton(
     }
 }
 
-private data class AvatarCropRequest(
-    val bitmap: Bitmap,
-    val zoom: Float,
-    val offset: Offset,
-    val viewportPixels: Float,
+internal data class WorkerAvatarCrop(
+    val zoom: Float = 1f,
+    val centerX: Float = 0.5f,
+    val centerY: Float = 0.5f,
 )
 
-internal fun avatarPanBounds(
-    sourceRatio: Float,
-    viewportPixels: Float,
-    zoom: Float,
-): Offset {
-    if (viewportPixels <= 0f || sourceRatio <= 0f) return Offset.Zero
-    val baseWidth = viewportPixels * max(sourceRatio, 1f)
-    val baseHeight = viewportPixels * max(1f / sourceRatio, 1f)
-    return Offset(
-        x = ((baseWidth * zoom - viewportPixels) / 2f).coerceAtLeast(0f),
-        y = ((baseHeight * zoom - viewportPixels) / 2f).coerceAtLeast(0f),
-    )
+internal fun WorkerAvatarCrop.sourceRect(width: Int, height: Int): Rect {
+    val edge = min(width, height) / zoom.coerceIn(1f, MAX_AVATAR_ZOOM)
+    val half = edge / 2f
+    val x = (centerX * width).coerceIn(half, width - half)
+    val y = (centerY * height).coerceIn(half, height - half)
+    return Rect(x - half, y - half, x + half, y + half)
 }
 
-internal fun cropAvatarBitmap(
-    source: Bitmap,
-    zoom: Float,
-    offset: Offset,
-    viewportPixels: Float,
-): Bitmap {
-    require(source.width > 0 && source.height > 0 && viewportPixels > 0f)
-    val baseScale = max(viewportPixels / source.width, viewportPixels / source.height)
-    val totalScale = baseScale * zoom.coerceIn(1f, 5f)
-    val cropSize = (viewportPixels / totalScale).roundToInt()
-        .coerceIn(1, min(source.width, source.height))
-    val centerX = source.width / 2f - offset.x / totalScale
-    val centerY = source.height / 2f - offset.y / totalScale
-    val left = (centerX - cropSize / 2f).roundToInt().coerceIn(0, source.width - cropSize)
-    val top = (centerY - cropSize / 2f).roundToInt().coerceIn(0, source.height - cropSize)
-    val cropped = Bitmap.createBitmap(source, left, top, cropSize, cropSize)
-    val outputSize = min(AVATAR_OUTPUT_SIZE, cropSize)
-    if (cropped.width == outputSize) return cropped
-    return Bitmap.createScaledBitmap(cropped, outputSize, outputSize, true).also { cropped.recycle() }
+internal fun WorkerAvatarCrop.transformed(
+    width: Int,
+    height: Int,
+    viewport: Size,
+    centroid: Offset,
+    pan: Offset,
+    zoomChange: Float,
+): WorkerAvatarCrop {
+    val diameter = min(viewport.width, viewport.height) * 0.9f
+    if (diameter <= 0f) return this
+    val before = sourceRect(width, height)
+    val nextZoom = (zoom * zoomChange).coerceIn(1f, MAX_AVATAR_ZOOM)
+    val nextEdge = min(width, height) / nextZoom
+    val anchor = centroid - Offset(viewport.width / 2f, viewport.height / 2f)
+    val center = before.center + anchor * ((before.width - nextEdge) / diameter) - pan * (nextEdge / diameter)
+    val candidate = WorkerAvatarCrop(nextZoom, center.x / width, center.y / height)
+    val bounded = candidate.sourceRect(width, height)
+    return candidate.copy(centerX = bounded.center.x / width, centerY = bounded.center.y / height)
 }
 
-private fun decodeAvatarBitmap(context: Context, uri: Uri): Bitmap {
+internal fun renderWorkerAvatar(source: Bitmap, crop: WorkerAvatarCrop): Bitmap {
+    val selected = crop.sourceRect(source.width, source.height)
+    val output = Bitmap.createBitmap(AVATAR_OUTPUT_SIZE, AVATAR_OUTPUT_SIZE, Bitmap.Config.ARGB_8888)
+    android.graphics.Canvas(output).apply {
+        drawColor(android.graphics.Color.WHITE)
+        val scale = AVATAR_OUTPUT_SIZE / selected.width
+        scale(scale, scale)
+        translate(-selected.left, -selected.top)
+        drawBitmap(source, 0f, 0f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG))
+    }
+    return output
+}
+
+internal fun decodeAvatarBitmap(context: Context, uri: Uri): Bitmap {
+    if (Build.VERSION.SDK_INT >= 28) {
+        val source = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
+        return android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+            decoder.setTargetColorSpace(android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+            val factor = min(1f, MAX_EDITOR_EDGE.toFloat() / maxOf(info.size.width, info.size.height))
+            decoder.setTargetSize(
+                (info.size.width * factor).toInt().coerceAtLeast(1),
+                (info.size.height * factor).toInt().coerceAtLeast(1),
+            )
+        }
+    }
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    context.contentResolver.openInputStream(uri)?.use { input ->
+    val boundsStream = context.contentResolver.openInputStream(uri)
+        ?: throw IOException("Selected image is unavailable")
+    boundsStream.use { input ->
         BitmapFactory.decodeStream(input, null, bounds)
-    } ?: throw IOException("Selected image is unavailable")
+    }
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Invalid image bounds")
     var sample = 1
     while (bounds.outWidth / sample > MAX_EDITOR_EDGE || bounds.outHeight / sample > MAX_EDITOR_EDGE) {
@@ -354,5 +437,6 @@ private sealed interface AvatarSourceState {
     data class Ready(val bitmap: Bitmap) : AvatarSourceState
 }
 
-private const val MAX_EDITOR_EDGE = 2_400
+private const val MAX_EDITOR_EDGE = 2_048
 private const val AVATAR_OUTPUT_SIZE = 1_024
+private const val MAX_AVATAR_ZOOM = 6f

@@ -16,6 +16,7 @@ const defaultKpiSettings = {
     version: 1,
     ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
     overdueColor: "#7F1D1D",
+    completedColor: "#238636",
   },
   activeSchedule: null,
   pendingSchedule: null,

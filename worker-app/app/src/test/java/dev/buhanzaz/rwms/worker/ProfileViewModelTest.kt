@@ -105,9 +105,12 @@ class ProfileViewModelTest {
                     "createUploadSession" -> {
                         uploads += 1
                         uploadFailure?.let { throw it }
-                        Response.success(UploadSessionDto("upload", "new", NOW, "/api/media/v1/upload-sessions/$NEW_ID/variants/SMALL/content", emptyList()))
+                        Response.success(UploadSessionDto("upload", "new", NOW, "/api/media/v1/upload-sessions/$NEW_ID/content", emptyList()))
                     }
-                    "uploadMediaContent" -> Response.success(UploadedObjectDto("version", "etag", "a".repeat(64)))
+                    "uploadMediaContent" -> {
+                        assertThat(args!![0]).isEqualTo("/api/media/v1/upload-sessions/$NEW_ID/content")
+                        Response.success(UploadedObjectDto("version", "etag", "a".repeat(64)))
+                    }
                     "finalizeUploadSession" -> Response.success(asset("new"))
                     else -> error("Unexpected profile API call: ${method.name}")
                 }

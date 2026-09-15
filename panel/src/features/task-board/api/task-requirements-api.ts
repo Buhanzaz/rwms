@@ -19,6 +19,20 @@ export type TaskRequirements = {
   items: TaskRequirement[]
 }
 const base = getGatewayRuntimeConfig().taskBoardApiBaseUrl
+export const taskRegistrationQueryKey = (
+  warehouseId: string,
+  externalTaskId: string
+) => ["task-board", warehouseId, "registration", externalTaskId] as const
+export function getTaskRegistration(
+  accessToken: string,
+  warehouseId: string,
+  externalTaskId: string
+) {
+  return bearerRequest<{ taskId: string }>(
+    accessToken,
+    `${base}/warehouses/${encodeURIComponent(warehouseId)}/task-board/tasks/by-external-id/${encodeURIComponent(externalTaskId)}`
+  )
+}
 export const taskRequirementsQueryKey = (warehouseId: string, taskId: string) =>
   ["task-board", warehouseId, "requirements", taskId] as const
 export function getTaskRequirements(

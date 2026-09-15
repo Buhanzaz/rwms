@@ -77,7 +77,7 @@ fun requireSameOriginMediaReadPath(path: String): String {
 }
 
 private val UPLOAD_CONTENT_PATH = Regex(
-    "^/api/media/v1/upload-sessions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/variants/(?:SMALL|MEDIUM|LARGE)/content$",
+    "^/api/media/v1/upload-sessions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:content|variants/(?:SMALL|MEDIUM|LARGE)/content)$",
 )
 private val MEDIA_READ_PATH = Regex(
     "^/api/media/v1/assets/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:original|variants/(?:SMALL|MEDIUM|LARGE)/content)$",

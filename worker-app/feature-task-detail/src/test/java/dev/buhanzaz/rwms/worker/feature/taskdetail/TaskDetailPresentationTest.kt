@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
+import androidx.compose.ui.graphics.Color
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.network.TaskSourceReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto
@@ -33,10 +34,11 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `restored requirements return to the default card tone`() {
+    fun `manager restored requirements use the green card tone while worker undo is available`() {
         assertThat(requirementAvailabilityTone("MISSING")).isEqualTo(RequirementAvailabilityTone.MISSING)
-        assertThat(requirementAvailabilityTone("RESTORED")).isEqualTo(RequirementAvailabilityTone.DEFAULT)
+        assertThat(requirementAvailabilityTone("RESTORED")).isEqualTo(RequirementAvailabilityTone.RESTORED)
         assertThat(requirementAvailabilityTone("AVAILABLE")).isEqualTo(RequirementAvailabilityTone.DEFAULT)
+        assertThat(restoredRequirementColor).isEqualTo(Color(0xFF238636))
     }
 
     @Test

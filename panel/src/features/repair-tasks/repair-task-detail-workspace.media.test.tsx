@@ -216,7 +216,6 @@ describe("RepairTaskDetailWorkspace media", () => {
         { mediaId: generalMediaId, generation: 2 },
       ],
       coverMediaId: generalMediaId,
-      presentation: "work-carousel",
     })
     expect(gallery("Фото работы «Заменить окно»")).toMatchObject({
       owner: {
@@ -245,10 +244,10 @@ describe("RepairTaskDetailWorkspace media", () => {
       '[data-slot="repair-work-detail-workspace-grid"]'
     )
     expect(workspace?.className).toContain(
-      "xl:grid-rows-[20rem_minmax(18rem,1fr)]"
+      "xl:grid-rows-[minmax(22rem,1fr)_minmax(18rem,1fr)]"
     )
     expect(workspace?.className).toContain(
-      "xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]"
+      "xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]"
     )
     expect(workspace?.className).toContain("flex-none xl:flex-1")
   })

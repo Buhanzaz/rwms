@@ -82,6 +82,11 @@ import {
   type TaskRequirement,
 } from "@/features/task-board/api/task-requirements-api"
 
+import {
+  requirementStyle,
+  requirementStateLabel,
+} from "./requirement-presentation"
+
 type BoardAction =
   | {
       kind: "take"
@@ -1344,8 +1349,8 @@ function TaskBoardWarehousePage() {
           <DialogHeader>
             <DialogTitle>Восстановить задание</DialogTitle>
             <DialogDescription>
-              Отметьте появившиеся позиции. Связанные позиции выбираются вместе
-              — сервер принимает только полный набор.
+              Отметьте появившиеся позиции. Связанные работы и материалы
+              выбираются вместе.
             </DialogDescription>
           </DialogHeader>
           {requirementsQuery.isLoading ? (
@@ -1362,12 +1367,10 @@ function TaskBoardWarehousePage() {
                 return (
                   <label
                     key={item.itemId}
-                    className={cn(
-                      "flex items-center gap-2 rounded-md border p-2",
-                      item.state === "MISSING" &&
-                        "border-destructive bg-destructive/10",
-                      item.state === "RESTORED" &&
-                        "border-green-600 bg-green-500/10"
+                    className="flex items-center gap-2 rounded-md border p-2"
+                    style={requirementStyle(
+                      item.state,
+                      kpiSettingsQuery.data?.palette
                     )}
                   >
                     <Checkbox
@@ -1465,7 +1468,8 @@ function TaskBoardWarehousePage() {
           <DialogHeader>
             <DialogTitle>Требования задания</DialogTitle>
             <DialogDescription>
-              Состояния работ и материалов задаёт сервер.
+              Показаны отсутствующие, выполненные и восстановленные позиции.
+              Цвета задаются в админке.
             </DialogDescription>
           </DialogHeader>
           {requirementsQuery.isLoading ? (
@@ -1475,18 +1479,21 @@ function TaskBoardWarehousePage() {
               {requirementsQuery.data.items.map((item) => (
                 <div
                   key={item.itemId}
-                  className={cn(
-                    "rounded-md border p-2 text-sm",
-                    item.state === "MISSING" &&
-                      "border-destructive bg-destructive/10 text-destructive",
-                    item.state === "RESTORED" &&
-                      "border-green-600 bg-green-500/10 text-green-700 dark:text-green-400"
+                  className="rounded-md border p-2 text-sm"
+                  style={requirementStyle(
+                    item.state,
+                    kpiSettingsQuery.data?.palette
                   )}
                 >
                   <span className="font-medium">
                     {item.kind === "WORK" ? "Работа" : "Материал"}:
                   </span>{" "}
-                  {item.name}
+                  <span>{item.name}</span>
+                  {requirementStateLabel(item.state) ? (
+                    <span className="ml-2 text-xs">
+                      {requirementStateLabel(item.state)}
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>

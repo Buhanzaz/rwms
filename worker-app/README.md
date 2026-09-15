@@ -146,8 +146,9 @@ Tapping a missing row's undo control queues `RESTORE_ITEM`, sent to the dedicate
 `/worker/v1/entries/{entryId}/requirements/{itemId}/restore` endpoint with the same
 operation identity on retries. Task-board restores the exact dependency group; the app
 never calculates authoritative linked state. Controls wait for synchronization.
-Missing rows show a red background and an explicit status; restored rows return to
-the same translucent white surface as available rows. The historical problem flag
+Missing rows show a red background and an explicit status. A worker undo is returned
+by the server as `AVAILABLE` and keeps the normal translucent white surface; a
+manager confirmation is returned as `RESTORED` and uses the green surface. The historical problem flag
 neither tints the task screen nor adds a general problem banner. A COMPLETE accepted with missing
 requirements remains visibly incomplete with the server-provided completed-work share.
 Room 12→13 adds these task-projection fields without changing saved reports.
@@ -352,6 +353,10 @@ create duplicate evidence and normal volume handling returns after the camera
 closes.
 The visible Video tab intentionally does not produce MP4 because the public
 worker evidence contract does not accept it.
+
+## Profile avatar
+
+The worker profile uses the client application's circular photo selection and crop interaction: drag, pinch, a zoom slider and explicit confirmation. The editor paints the complete screen black, including system-bar areas; controls respect safe insets. The crop exports a fresh 1024-pixel square for the existing `TASK_BOARD_WORKER_PROFILE` / `PROFILE_AVATAR` upload flow. Android 28+ uses bounded software ImageDecoder decoding; Android 23–27 retain bounds-checked BitmapFactory decoding and EXIF orientation support. Selecting or cancelling a photo does not upload it. Task content continues scrolling beneath the opaque header with its existing fade.
 
 ## Build and focused checks
 

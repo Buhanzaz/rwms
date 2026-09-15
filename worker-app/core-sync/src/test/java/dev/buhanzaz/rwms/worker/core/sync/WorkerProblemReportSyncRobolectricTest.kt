@@ -123,6 +123,12 @@ class WorkerProblemReportSyncRobolectricTest {
         assertThat(api.restoreRequests).hasSize(2)
         assertThat(api.restoreRequests[0]).isEqualTo(api.restoreRequests[1])
         assertThat(api.restoreRequests[0].expectedVersion).isEqualTo(4)
+        val cachedDetail = database.detailDao().detail(USER, ENTRY)
+        assertThat(cachedDetail).isNotNull()
+        val cachedMaterial = json.decodeFromString<WorkerTaskDetailDto>(
+            cachedDetail!!.sanitizedDetailJson,
+        ).materials.single()
+        assertThat(cachedMaterial.availabilityState).isEqualTo("AVAILABLE")
         assertThat(api.events).doesNotContain("complete")
         assertThat(database.outboxDao().pending(USER)).isEmpty()
     }
@@ -435,12 +441,13 @@ class WorkerProblemReportSyncRobolectricTest {
             events += "restore"
             restoreRequests += request
             if (restoreFailuresRemaining-- > 0) throw java.io.IOException("offline")
-            return Response.success(WorkerActionResultDto("APPLIED", 5, detail().copy(
+            val response = WorkerActionResultDto("APPLIED", 5, detail().copy(
                 status = "IN_PROGRESS",
                 materials = listOf(dev.buhanzaz.rwms.worker.core.network.WorkerMaterialDto(
-                    "hanger", "Вешалка", 1.0, "шт", "RESTORED",
+                    "hanger", "Вешалка", 1.0, "шт", "AVAILABLE",
                 )),
-            )))
+            ))
+            return Response.success(response)
         }
         val reportRequests = mutableListOf<WorkerProblemReportRequestDto>()
         val ownReportCalls = AtomicInteger()

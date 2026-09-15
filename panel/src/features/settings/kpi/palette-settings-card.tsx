@@ -160,13 +160,16 @@ export function PaletteSettingsCard({
   const [problemColor, setProblemColor] = useState<string | null>(
     settings.palette?.problemColor ?? "#FF3B30"
   )
+  const [completedColor, setCompletedColor] = useState<string | null>(
+    settings.palette?.completedColor ?? "#238636"
+  )
   const [newBoundary, setNewBoundary] = useState("50")
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const boundaryDragRef = useRef<BoundaryDrag | null>(null)
   const suppressBoundaryClickRef = useRef(false)
-  const validation = validatePalette(ranges, overdueColor)
+  const validation = validatePalette(ranges, overdueColor, problemColor, completedColor)
 
   function addBoundary(value: number) {
     const next = splitPaletteRange(ranges, value)
@@ -308,6 +311,7 @@ export function PaletteSettingsCard({
       })),
       overdueColor: normalizeRgb(overdueColor)!,
       problemColor: normalizeRgb(problemColor)!,
+      completedColor: normalizeRgb(completedColor)!,
     })
   }
 
@@ -545,13 +549,22 @@ export function PaletteSettingsCard({
           <FieldError>{validationError ?? actionError}</FieldError>
         </Field>
         <Field>
-          <FieldLabel>Цвет задания с проблемой</FieldLabel>
+          <FieldLabel>Отсутствующие работы и материалы</FieldLabel>
           <ColorPopover label="проблемы" value={problemColor} disabled={blocked} onChange={setProblemColor}>
             <Button type="button" variant="outline" className="rwms-button-color shadow-sm" style={{ backgroundColor: rangeBackground(problemColor), color: rangeForeground(problemColor) }} disabled={blocked}>
               Цвет проблемы
             </Button>
           </ColorPopover>
-          <FieldDescription>Этот яркий цвет перекрывает KPI, когда рабочий сообщил о проблеме.</FieldDescription>
+          <FieldDescription>Отмечает отсутствующие позиции в работах и материалах.</FieldDescription>
+        </Field>
+        <Field>
+          <FieldLabel>Выполненные и восстановленные работы и материалы</FieldLabel>
+          <ColorPopover label="выполненных и восстановленных работ и материалов" value={completedColor} disabled={blocked} onChange={setCompletedColor}>
+            <Button type="button" variant="outline" className="rwms-button-color shadow-sm" style={{ backgroundColor: rangeBackground(completedColor), color: rangeForeground(completedColor) }} disabled={blocked}>
+              Цвет выполненных и восстановленных
+            </Button>
+          </ColorPopover>
+          <FieldDescription>Подтверждённые при завершении и восстановленные позиции используют этот цвет.</FieldDescription>
         </Field>
 
         <div className="flex flex-wrap gap-2">

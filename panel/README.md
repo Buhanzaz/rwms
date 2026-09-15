@@ -158,10 +158,12 @@ contexts and screens are usable.
   unavailable reads remain visible, never fabricated as successful or empty results.
   Resource reports also show the cabin number and missing work/material list.
   A warehouse editor can apply the same missing catalog resources to all active
-  tasks in that warehouse through the idempotent server command. Problem cards use
-  the separately configurable problem color. Incomplete tasks retain their credited
-  progress; restoration confirms complete linked groups in the server-backed
-  checklist, with missing rows red and restored rows green.
+  tasks in that warehouse through the idempotent server command. Matching tasks become
+  grey blocked cards while their missing work/material rows stay red; applying a report
+  stops those tasks from advancing. Incomplete tasks retain their credited progress.
+  Restoration confirms complete linked groups in the server-backed checklist; restored
+  rows are green and the unblocked card returns to the normal KPI appearance.
+- Repair details resolve each registered external task through the public task-board API, then read its requirements every 15 seconds. Line IDs retain missing, completed and restored states across the repair and board views. Missing rows use `problemColor`; completed/restored rows use `completedColor` from the shared palette edited in `/admin/kpi`. Available rows remain neutral. General media use the wide detail column; source and result media retain exact owners and appear in labelled grids.
 - Catalog location choices are retained in both work and material descriptions,
   without creating a priced location line. Material quantities at different
   locations remain separate.

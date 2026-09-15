@@ -73,7 +73,7 @@ function renderBell() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(
+  render(
     <QueryClientProvider client={client}>
       <TaskProblemReportsBell
         accessToken="token"
@@ -83,6 +83,7 @@ function renderBell() {
       />
     </QueryClientProvider>
   )
+  return client
 }
 
 describe("TaskProblemReportsBell", () => {
@@ -140,7 +141,8 @@ describe("TaskProblemReportsBell", () => {
     })
     vi.stubGlobal("crypto", { randomUUID: () => "operation-1" })
     const user = userEvent.setup()
-    renderBell()
+    const client = renderBell()
+    client.setQueryData(["task-board", "warehouse-1"], { sentinel: true })
 
     await user.click(
       await screen.findByRole("button", { name: /1 непрочитанных/ })
@@ -159,6 +161,9 @@ describe("TaskProblemReportsBell", () => {
       )
     )
     await waitFor(() => expect(listTaskProblemReports).toHaveBeenCalledTimes(2))
+    expect(
+      client.getQueryState(["task-board", "warehouse-1"])?.isInvalidated
+    ).toBe(true)
   })
 
   it("keeps the operation ID when a failed bulk apply is retried", async () => {

@@ -222,6 +222,24 @@ class TaskBoardWorkerExecutionService {
    */
   void setTaskSuspended(
       UUID warehouseId, UUID taskId, TaskSuspensionRequest request, boolean suspended) {
+    setTaskSuspended(warehouseId, taskId, request, suspended, false);
+  }
+
+  /** Stops a bulk-matched task, including an untaken route, without crediting unfinished work. */
+  void blockForMissingRequirements(UUID warehouseId, UUID taskId) {
+    queuePositions.lockQueueMutation(warehouseId);
+    BoardTask task = tasks.findById(taskId)
+        .filter(value -> value.getWarehouseId().equals(warehouseId))
+        .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    if (!requirements.hasMissing(task)) {
+      throw new ConflictException("В задании нет отсутствующих материалов или работ");
+    }
+    setTaskSuspended(warehouseId, taskId,
+        new TaskSuspensionRequest(task.getVersion(), List.of()), true, true);
+  }
+
+  private void setTaskSuspended(UUID warehouseId, UUID taskId,
+      TaskSuspensionRequest request, boolean suspended, boolean missingRequirements) {
     queuePositions.lockQueueMutation(warehouseId);
     BoardTask task = tasks.findById(taskId)
         .filter(value -> value.getWarehouseId().equals(warehouseId))
@@ -236,7 +254,7 @@ class TaskBoardWorkerExecutionService {
       throw new ConflictException("Приостановка доступна только для обычных очередей");
     }
     if (task.isSuspended() == suspended) return;
-    if (suspended && route.stream().noneMatch(entry ->
+    if (suspended && !missingRequirements && route.stream().noneMatch(entry ->
         entry.getStatus() == EntryStatus.IN_PROGRESS || entry.getStatus() == EntryStatus.PAUSED)) {
       throw new ConflictException("Приостановить можно только взятую задачу");
     }

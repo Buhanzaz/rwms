@@ -98,6 +98,7 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     onFutureAvailabilityChange,
     onSuspend,
     onRestore,
+    onRequirements,
     onToggleCollapsed,
     onScrollTopChange,
   }: {
@@ -131,6 +132,7 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     ) => void
     onSuspend: (entry: TaskBoardEntryDto) => void
     onRestore: (entry: TaskBoardEntryDto) => void
+    onRequirements: (entry: TaskBoardEntryDto) => void
     onToggleCollapsed: (queueKey: string) => void
     onScrollTopChange: (queueKey: string, scrollTop: number) => void
   }) => (
@@ -234,6 +236,20 @@ vi.mock("@/features/task-board/task-board-column", () => ({
           Восстановить тестовое задание
         </button>
       ) : null}
+      {visibleEntries
+        .filter(
+          (entry) =>
+            entry.source?.type === "MAINTENANCE_REPAIR" && !entry.suspended
+        )
+        .map((entry) => (
+          <button
+            key={`requirements-${entry.id}`}
+            type="button"
+            onClick={() => onRequirements(entry)}
+          >
+            Требования
+          </button>
+        ))}
     </div>
   ),
 }))
@@ -525,7 +541,9 @@ describe("task board warehouse access", () => {
     )
     expect(work.getAttribute("aria-checked")).toBe("false")
     expect(material.getAttribute("aria-checked")).toBe("false")
-    expect(material.closest("label")?.className).toContain("bg-green-500")
+    expect(material.closest("label")?.style.borderColor).toBe(
+      "rgb(35, 134, 54)"
+    )
     expect(material.closest("label")?.className).not.toContain("bg-destructive")
     expect(other.closest("label")?.className).not.toContain("bg-green-500")
     await userEventApi.click(
@@ -545,6 +563,7 @@ describe("task board warehouse access", () => {
       ...taskEntry("restore", "Восстановление"),
       suspended: true,
       taskVersion: 2,
+      source: { type: "MAINTENANCE_REPAIR" as const, sourceId: "repair-1" },
     }
     const currentBoard = {
       ...board,
@@ -580,10 +599,47 @@ describe("task board warehouse access", () => {
           state: "AVAILABLE",
           linkedItemIds: ["material-1"],
         },
+        {
+          itemId: "unrelated-missing",
+          kind: "MATERIAL",
+          name: "Шурупы",
+          state: "MISSING",
+          linkedItemIds: [],
+        },
+      ],
+    }
+    const restoredRequirements = {
+      ...requirements,
+      hasProblem: true,
+      incomplete: false,
+      items: requirements.items.map((item) =>
+        item.itemId === "work-1" || item.itemId === "material-1"
+          ? { ...item, state: "RESTORED" as const }
+          : item
+      ),
+    }
+    const restoredBoard = {
+      ...currentBoard,
+      queues: [
+        {
+          ...currentBoard.queues[0]!,
+          entries: [
+            {
+              ...entry,
+              suspended: false,
+              incomplete: false,
+              hasProblem: true,
+            },
+          ],
+        },
       ],
     }
     const userEventApi = userEvent.setup()
     renderPage("EDIT", { currentBoard, requirements })
+    mocks.getTaskRequirements
+      .mockResolvedValueOnce(requirements)
+      .mockResolvedValue(restoredRequirements)
+    mocks.restoreTaskBoardTask.mockResolvedValue(restoredBoard)
 
     await userEventApi.click(
       await screen.findByRole("button", {
@@ -607,6 +663,26 @@ describe("task board warehouse access", () => {
     )
     expect(mocks.restoreTaskBoardTask.mock.calls[0]![2]).not.toContain(
       "available-1"
+    )
+    await userEventApi.click(
+      await screen.findByRole("button", { name: "Требования" })
+    )
+    const restoredWork = await screen.findByText("Покраска")
+    const restoredMaterial = screen.getByText("Краска")
+    const availableItem = screen.getByText("Грунтовка")
+    const unrelatedMissing = screen.getByText("Шурупы")
+    expect(restoredWork.closest("div")?.style.borderColor).toBe(
+      "rgb(35, 134, 54)"
+    )
+    expect(restoredMaterial.closest("div")?.style.borderColor).toBe(
+      "rgb(35, 134, 54)"
+    )
+    expect(unrelatedMissing.closest("div")?.style.borderColor).toBe(
+      "rgb(255, 59, 48)"
+    )
+    expect(availableItem.closest("div")?.style.backgroundColor).toBe("")
+    expect(availableItem.closest("div")?.className).not.toContain(
+      "bg-destructive"
     )
   })
 
@@ -1222,6 +1298,8 @@ describe("task board warehouse access", () => {
     const suspended = {
       ...taken,
       suspended: true,
+      hasProblem: true,
+      incomplete: false,
       status: "WAITING" as const,
       taskVersion: 2,
     }
@@ -1257,6 +1335,11 @@ describe("task board warehouse access", () => {
         screen.getByTestId("first-visible-task-suspended").textContent
       ).toBe("true")
     )
+    expect(
+      await screen.findByRole("button", {
+        name: "Восстановить тестовое задание",
+      })
+    ).toBeTruthy()
     await user.click(
       await screen.findByRole("button", {
         name: "Восстановить тестовое задание",

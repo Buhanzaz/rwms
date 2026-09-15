@@ -36,7 +36,7 @@ export function TaskBoardCompletionDialog({
           <DialogTitle>Завершить этап</DialogTitle>
           <DialogDescription>
             {entry
-              ? `Этап «${entry.title}» будет завершён в task-board-service.`
+              ? `Завершить работу над этапом «${entry.title}»? Если отмечены отсутствующие материалы или работы, задание останется на текущем этапе до восстановления.`
               : "Подтвердите завершение этапа."}
           </DialogDescription>
         </DialogHeader>

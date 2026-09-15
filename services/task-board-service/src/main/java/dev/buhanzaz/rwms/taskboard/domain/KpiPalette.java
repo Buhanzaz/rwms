@@ -11,7 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Versioned installation-wide KPI display thresholds and the overdue color. */
+/** Versioned installation-wide KPI display thresholds and semantic status colors. */
 @Entity
 @Table(name = "kpi_palette")
 public class KpiPalette extends AbstractVersionedEntity {
@@ -21,8 +21,14 @@ public class KpiPalette extends AbstractVersionedEntity {
   @Column(name = "problem_color", nullable = false, length = 7)
   private String problemColor = "#FF3B30";
 
+  @Column(name = "completed_color", nullable = false, length = 7)
+  private String completedColor = "#238636";
+
   public String getProblemColor() { return problemColor; }
   public void changeProblemColor(String value) { problemColor = value; }
+
+  public String getCompletedColor() { return completedColor; }
+  public void changeCompletedColor(String value) { completedColor = value; }
 
   @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
   @JoinColumn(name = "palette_id", nullable = false)

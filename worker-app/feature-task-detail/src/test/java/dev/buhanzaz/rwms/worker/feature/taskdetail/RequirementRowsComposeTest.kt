@@ -33,7 +33,7 @@ class RequirementRowsComposeTest {
             MaterialTheme {
                 Column {
                     RequirementCard("Вешалка", "1 шт", availability.value, true, {
-                        availability.value = if (availability.value == "MISSING") "RESTORED" else "MISSING"
+                        availability.value = if (availability.value == "MISSING") "AVAILABLE" else "MISSING"
                     })
                     RequirementCard("Краска", "1 л", "AVAILABLE", true, {})
                 }
@@ -42,20 +42,20 @@ class RequirementRowsComposeTest {
         compose.onNodeWithContentDescription("Нет на складе: Вешалка").performClick()
         compose.onNodeWithText("Нет на складе").assertIsDisplayed()
         compose.onNodeWithContentDescription("Отменить отметку: Вешалка").assertIsSelected().performClick()
-        compose.onNodeWithText("Есть на складе").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Нет на складе: Вешалка").assertIsDisplayed()
         compose.onNodeWithContentDescription("Нет на складе: Вешалка").assertIsEnabled()
         compose.onNodeWithContentDescription("Нет на складе: Краска").assertIsEnabled()
     }
 
     @Test
-    fun restoredMaterialUsesTheOriginalCardSurfaceColor() {
+    fun managerRestoredMaterialUsesGreenCardSurfaceWhileWorkerUndoIsWhite() {
         val availability = mutableStateOf("AVAILABLE")
         var renderedColor = Color.Unspecified
         compose.setContent {
             RwmsWorkerTheme {
                 renderedColor = requirementCardColors(availability.value).containerColor
                 RequirementCard("Вешалка", "1 шт", availability.value, true, {
-                    availability.value = if (availability.value == "MISSING") "RESTORED" else "MISSING"
+                    availability.value = if (availability.value == "MISSING") "AVAILABLE" else "MISSING"
                 })
             }
         }
@@ -68,7 +68,16 @@ class RequirementRowsComposeTest {
         }
         compose.onNodeWithContentDescription("Отменить отметку: Вешалка").performClick()
         compose.runOnIdle {
-            check(renderedColor == initial) { "RESTORED card must use the original surface color" }
+            check(renderedColor == initial) { "Worker undo must return the available white surface" }
+        }
+
+        availability.value = "RESTORED"
+        var managerColor = Color.Unspecified
+        compose.runOnIdle {
+            managerColor = renderedColor
+            check(managerColor == restoredRequirementColor) {
+                "Manager restored card must use the green surface"
+            }
         }
     }
 
@@ -80,13 +89,13 @@ class RequirementRowsComposeTest {
                 WorkRow(
                     WorkerWorkDto("work", "Установка вешалки", 1.0, "шт", 10, null,
                         availabilityState = availability.value),
-                    emptyList(), {}, true, { availability.value = "RESTORED" },
+                    emptyList(), {}, true, { availability.value = "AVAILABLE" },
                 )
             }
         }
         compose.onNodeWithText("Не выполнена").assertIsDisplayed()
         compose.onNodeWithContentDescription("Отменить отметку: Установка вешалки").performClick()
-        compose.onNodeWithText("Можно выполнить").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Не выполнена: Установка вешалки").assertIsDisplayed()
         compose.onNodeWithContentDescription("Не выполнена: Установка вешалки").assertIsEnabled()
     }
 
