@@ -774,8 +774,13 @@ at the gateway.
 Provide database credentials, HTTPS auth issuer and token URI, the
 task-board service secret, worker offline-lease secret, private auth worker-
 credential URL, private warehouse lifecycle URL, explicit CORS origins, Kafka
-brokers, `TASK_BOARD_KAFKA_ENABLED=true`, `TASK_BOARD_FCM_ENABLED=true`,
-`TASK_BOARD_FCM_PROJECT_ID`, and Google Application Default Credentials.
+brokers and `TASK_BOARD_KAFKA_ENABLED=true`.
+
+FCM push is optional. With the default `TASK_BOARD_FCM_ENABLED=false` no
+Firebase project or credentials are used: slinger notifications remain
+`PENDING` in `worker_push_outbox`, and WorkerApp relies on SSE invalidations and
+the authoritative REST feed. `TASK_BOARD_FCM_ENABLED=true` additionally requires
+`TASK_BOARD_FCM_PROJECT_ID` and Google Application Default Credentials.
 
 Enable the new flow with `DRIVER_DAILY_SHIFT_ENABLED=true`. Configure
 `DRIVER_SHIFT_DAY_START`, `DRIVER_SHIFT_SUSPICIOUS_ODOMETER_JUMP_KM`, an
@@ -786,8 +791,8 @@ URL; no weather API key is used or returned to Android.
 
 `TaskBoardProductionSafetyValidator` rejects missing/insecure endpoints,
 disabled Kafka, topic drift, unsafe binder retry/DLT settings, topic
-auto-creation, non-acknowledged publishing, and publish timeouts that can exceed
-the outbox lease outside dev/test.
+auto-creation, non-acknowledged publishing, publish timeouts that can exceed
+the outbox lease, and enabled FCM without a project ID outside dev/test.
 
 ## Verification
 

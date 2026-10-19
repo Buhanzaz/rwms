@@ -49,7 +49,7 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
                 .anyMatch(profile -> profile.equals("dev") || profile.equals("test"));
     if (!localProfile) {
       requireKafkaCutover();
-      requireFcmPush();
+      requireFcmProjectWhenPushEnabled();
     }
     List.of(
             new Endpoint("AUTH_ISSUER", "spring.security.oauth2.resourceserver.jwt.issuer-uri"),
@@ -79,12 +79,14 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
     }
   }
 
-  private void requireFcmPush() {
-    if (!environment.getProperty(
-        "rwms.task-board.push.fcm.enabled", Boolean.class, false)) {
-      throw new IllegalStateException("TASK_BOARD_FCM_ENABLED должен быть true вне dev/test");
+  /**
+   * FCM is an optional WorkerApp invalidation transport; SSE and the authoritative REST feed work
+   * without it. Enabled push still needs an explicit Firebase project.
+   */
+  private void requireFcmProjectWhenPushEnabled() {
+    if (environment.getProperty("rwms.task-board.push.fcm.enabled", Boolean.class, false)) {
+      requireText("TASK_BOARD_FCM_PROJECT_ID", "rwms.task-board.push.fcm.project-id");
     }
-    requireText("TASK_BOARD_FCM_PROJECT_ID", "rwms.task-board.push.fcm.project-id");
   }
 
   private void requireKafkaCutover() {
