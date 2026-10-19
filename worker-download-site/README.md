@@ -28,6 +28,12 @@ A published manifest requires:
   `release-trust-policy.json`; and
 - `RWMS_WORKER_APK` to point to that reviewed APK while the site is built.
 
+The same public `productionSignerSha256Allowlist` is the WorkerApp Android App
+Links fingerprint source of the [managed installer](../tools/deploy/README.ru.md):
+it is published by the gateway's `/.well-known/assetlinks.json` on the next
+install or update. Rotate a release signing key here; operators are not asked
+for the fingerprint.
+
 The source checkout never stores an APK. For a published release, the build
 checks the APK's SHA-256 and puts it only in ignored generated output. The
 OpenNext/Sites build puts the APK at a separate backing path under

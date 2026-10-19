@@ -22,9 +22,7 @@ def fixture():
     values = {key: 'safe-generated-test-value-' + key + '-1234567890' for key in cfg.SECRET_KEYS}
     values.update(DOMAIN='wms.example.org', PUBLIC_IPV4='8.8.8.8', ACME_EMAIL='admin@example.org',
                   AUTH_BOOTSTRAP_ADMIN_USERNAME='admin', LLM_BASE_URL='https://api.example.org/v1',
-                  LLM_MODEL='test-model', WORKER_CERT_SHA256=':'.join(['AB'] * 32),
-                  FCM_PROJECT_ID='example', FCM_CREDENTIALS_FILE='/etc/rwms-test/firebase.json',
-                  PLANNER_SYNC_ENABLED='true',
+                  LLM_MODEL='test-model', PLANNER_SYNC_ENABLED='true',
                   TASK_BOARD_WORKER_OFFLINE_LEASE_SECRET=base64.b64encode(b'x' * 36).decode())
     return values
 
@@ -87,11 +85,62 @@ class ConfigurationTests(unittest.TestCase):
             self.assertNotIn('AUTH_DB_PASSWORD', env if name != 'auth-service' else {})
         gateway = core['services']['api-gateway-service']['environment']
         self.assertEqual(gateway['LOGISTICS_PLANNER_URL'], 'http://logistics-planner:8000')
-        self.assertIn('RWMS_GATEWAY_APPLINKS_SHA256CERTFINGERPRINTS', gateway)
+        self.assertEqual(gateway['RWMS_GATEWAY_APPLINKS_SHA256CERTFINGERPRINTS'], cfg.worker_app_links())
         task = core['services']['task-board-service']['environment']
         self.assertTrue(task['AUTH_TOKEN_URI'].startswith('https://'))
         self.assertTrue(task['WAREHOUSE_SERVICE_INTERNAL_BASE_URL'].startswith('https://'))
-        self.assertEqual(task['TASK_BOARD_FCM_ENABLED'], 'true')
+        # Firebase is not used: no project, credentials file or mount reaches task-board.
+        self.assertEqual(task['TASK_BOARD_FCM_ENABLED'], 'false')
+        self.assertFalse({'TASK_BOARD_FCM_PROJECT_ID', 'GOOGLE_APPLICATION_CREDENTIALS'} & set(task))
+        self.assertNotIn('volumes', core['services']['task-board-service'])
+        self.assertNotIn('firebase', cfg.compose_json(core).lower())
+
+    def test_worker_app_links_use_public_pinned_production_signers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / 'release-trust-policy.json'
+            base = {'schemaVersion': 1, 'applicationId': 'dev.buhanzaz.rwms.worker',
+                    'artifactNamePrefix': 'rwms-worker', 'internalTestSignerSha256Allowlist': ['11' * 32]}
+            policy.write_text(json.dumps({**base, 'productionSignerSha256Allowlist': ['0a' * 32, 'f9' * 32]}))
+            self.assertEqual(cfg.worker_app_links(policy), ':'.join(['0A'] * 32) + ',' + ':'.join(['F9'] * 32))
+            for broken in ({**base, 'productionSignerSha256Allowlist': []},
+                           {**base, 'productionSignerSha256Allowlist': ['0A' * 32]},
+                           {**base, 'productionSignerSha256Allowlist': ['0a' * 31]},
+                           {**base, 'applicationId': 'dev.buhanzaz.rwms.driver', 'productionSignerSha256Allowlist': ['0a' * 32]},
+                           {**base, 'schemaVersion': 2, 'productionSignerSha256Allowlist': ['0a' * 32]}):
+                with self.subTest(broken=broken):
+                    policy.write_text(json.dumps(broken))
+                    with self.assertRaises(ValueError):
+                        cfg.worker_app_links(policy)
+            with self.assertRaises(ValueError):
+                cfg.worker_app_links(Path(directory) / 'missing.json')
+        # The checked-in policy yields the gateway format and covers the published WorkerApp signer.
+        links = cfg.worker_app_links()
+        self.assertRegex(links, r'^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}(?:,(?:[0-9A-F]{2}:){31}[0-9A-F]{2})*$')
+        release = json.loads((deploy.REPO / 'worker-download-site/release.json').read_text())
+        if release['signerCertificateSha256']:
+            self.assertIn(':'.join(re.findall('..', release['signerCertificateSha256'])).upper(), links.split(','))
+
+    def test_configure_asks_neither_firebase_nor_worker_certificate(self):
+        answers = iter(['wms.example.org', '8.8.8.8', 'admin@example.org', '', '', '', '', ''])
+        hidden = iter(['', 'llm-test-key', 'llm-test-key', '', ''])
+        prompts = []
+
+        def reply(source):
+            return lambda label='': prompts.append(label) or next(source)
+
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as screen, \
+                patch('builtins.input', reply(answers)), patch.object(deploy.getpass, 'getpass', reply(hidden)), \
+                patch.object(deploy.sys, 'stdin') as stdin:
+            stdin.isatty.return_value = True
+            file = Path(directory) / 'system.env'
+            deploy.wizard(file)
+            values = cfg.load_env(file)
+        self.assertIsNone(next(answers, None))
+        self.assertIsNone(next(hidden, None))
+        dialogue = screen.getvalue() + '\n'.join(prompts)
+        for word in ('Firebase', 'FCM', 'SHA-256', 'service-account', 'fingerprint'):
+            self.assertNotIn(word, dialogue)
+        self.assertEqual(set(values), set(cfg.PUBLIC_KEYS + cfg.SECRET_KEYS))
 
     def test_auth_username_and_worker_key_obey_production_guards(self):
         c = fixture()
@@ -216,6 +265,7 @@ class RuntimeSafetyTests(unittest.TestCase):
                  patch.object(deploy.subprocess, 'Popen', side_effect=AssertionError('No processes allowed')):
                 self.assertEqual(deploy.main(), 0)
             self.assertNotIn(fixture()['LLM_API_KEY'], screen.getvalue())
+            self.assertIn(cfg.worker_app_links(), screen.getvalue())
 
     def test_update_rejects_foreign_and_changed_state(self):
         with tempfile.TemporaryDirectory() as directory:

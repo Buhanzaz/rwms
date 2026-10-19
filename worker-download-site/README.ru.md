@@ -31,6 +31,12 @@ Published-manifest собирается только с проверенным A
 - переменная `RWMS_WORKER_APK`, указывающая на этот проверенный APK во время
   сборки сайта.
 
+Этот же публичный `productionSignerSha256Allowlist` служит источником
+fingerprint WorkerApp для Android App Links в [managed installer](../tools/deploy/README.ru.md):
+gateway публикует его в `/.well-known/assetlinks.json` при следующих install или
+update. Смена release signing key выполняется здесь; оператора fingerprint не
+спрашивают.
+
 Исходный checkout не хранит APK. Для опубликованного релиза сборка проверяет
 SHA-256 APK и кладёт его только в игнорируемый generated output. OpenNext/Sites
 build размещает APK по отдельному backing-пути в

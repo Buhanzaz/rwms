@@ -49,23 +49,14 @@ sudo ss -lntp
 | Логин/пароль SYSTEM_ADMIN | Первый вход в panel и admin | Мастер спросит логин; пароль можно ввести или сгенерировать |
 | Внутренние DB/OAuth/MinIO/signing secrets | Отдельные учетные записи, M2M и подпись | По умолчанию генерируются независимо; можно выбрать ручной ввод каждого |
 | LLM API key + HTTPS base URL + model | Работа assistant-service | Ключ из кабинета провайдера, скрытый ввод; без него полный стек не пройдет стандартный старт |
-| Firebase service-account JSON + project_id | Push-уведомления task-board | Существующий секретный файл на сервере с правами 0600 |
-| SHA-256 сертификата подписи **WorkerApp release** | Проверка Android App Links gateway | Реальный fingerprint сертификата APK, **не** TLS Let's Encrypt |
 | Yandex Geosuggest API key | Подсказки адресов | Необязательно, скрытый ввод |
 | Yandex Geocoder API key | Геокодирование адресов | Необязательно, скрытый ввод |
 | Yandex Maps v3 browser key | Отображение карты Yandex | Не в этом мастере: после установки через `/admin/logistics` |
 
-**Почему нужны Firebase и WorkerApp fingerprint, если основной запрос — web?** Текущие production guards `task-board-service` и `api-gateway-service` требуют их при запуске полного сервиса. Инструмент не подставляет фальшивые значения, не переключает приложение в `dev` и не отключает защиту. Если этих credentials пока нет, сначала подготовьте их; web-only обход потребовал бы отдельного продуктового изменения.
+**Firebase и SHA-256 сертификата WorkerApp мастер не спрашивает.**
 
-Файл Firebase не следует присылать в чат или класть в Git. Например, положите его в `/root/rwms-firebase.json`, затем:
-
-```bash
-sudo chmod 600 /root/rwms-firebase.json
-```
-
-Проверьте `project_id` и права service account в Firebase. Скрипт проверяет структуру/соответствие project_id, но **не доказывает** доставку push; ее нужно проверить отдельным smoke.
-
-Fingerprint WorkerApp имеет формат 32 hex-байта через двоеточие: `AA:BB:...`. Получайте его из **реального release signing certificate**, например командой `keytool -list -v -keystore <существующий-keystore>` на доверенном build-хосте. Не создавайте новый Android signing key ради прохождения формы.
+- Firebase не используется: task-board запускается с `TASK_BOARD_FCM_ENABLED=false`, service-account JSON и `project_id` не нужны. WorkerApp получает изменения через SSE и обновление authoritative REST feed.
+- Публичные SHA-256 release-сертификата WorkerApp для Android App Links (`/.well-known/assetlinks.json` gateway) уже закреплены в [`worker-download-site/release-trust-policy.json`](../../worker-download-site/release-trust-policy.json), поле `productionSignerSha256Allowlist`. По этому же списку проверяется публикуемый APK. Installer берет оттуда только production-подписи, приводит их к формату `AA:BB:...` и показывает в `plan`. При смене ключа подписи обновляется эта policy в Git; новый Android signing key ради установки не создается.
 
 ### 2.3. Репозиторий
 
@@ -105,9 +96,8 @@ sudo bash tools/deploy/deploy.sh configure
 4. **Логин и пароль администратора**. Пароль минимум 12 символов; Enter генерирует случайное значение.
 5. **Внутренние секреты**. Рекомендуемый ответ — `no` на ручной ввод: все генерируются независимо из криптографически случайных байтов, в standard Base64. При `yes` каждый можно ввести дважды или сгенерировать Enter. Минимум 32 печатных ASCII-символа без пробелов; `TASK_BOARD_WORKER_OFFLINE_LEASE_SECRET` дополнительно обязан быть standard Base64 с минимум 32 байтами после декодирования. Enter генерирует совместимое значение.
 6. **LLM API**. URL по умолчанию Mistral `/v1`, затем модель и настоящий ключ. Для другого совместимого провайдера укажите его данные.
-7. **WorkerApp fingerprint и Firebase JSON/project_id** — обязательные production prerequisites.
-8. **Два необязательных ключа Yandex**. Enter оставляет пустыми: Valhalla работает без них, Yandex-поиск адресов — нет.
-9. **Интеграцию planner**. `yes` включает demand sync и capacity publication; `no` оставляет planner без M2M-обмена до отдельно согласованного включения.
+7. **Два необязательных ключа Yandex**. Enter оставляет пустыми: Valhalla работает без них, Yandex-поиск адресов — нет.
+8. **Интеграцию planner**. `yes` включает demand sync и capacity publication; `no` оставляет planner без M2M-обмена до отдельно согласованного включения.
 
 Конфигурация сохраняется в:
 
@@ -149,10 +139,10 @@ INSTALL wms.company.ru
 
 | № | После завершения | Что делает | Что считается успешным |
 | ---: | ---: | --- | --- |
-| 1 | 5% | Проверяет ОС/архитектуру, Git, RAM/disk, DNS, interface IP, Firebase, порты и чужие ресурсы | Нет конфликтов и небезопасной подмены существующей установки |
+| 1 | 5% | Проверяет ОС/архитектуру, Git, RAM/disk, DNS, interface IP, trust policy WorkerApp, порты и чужие ресурсы | Нет конфликтов и небезопасной подмены существующей установки |
 | 2 | 10% | Ставит Docker, Compose v2, Buildx, Nginx, Certbot из Ubuntu; включает службы | Команды завершаются с exit 0 |
 | 3 | 20% | Создает private Docker bridge, HTTP-01 webroot, сертификат и timer renew, проверяет Nginx | Certificate создан; `nginx -t` и reload успешны |
-| 4 | 25% | Формирует закрытые Compose JSON, policy bucket, SQL migration artifact и Firebase mount | Compose `config --quiet` проходит |
+| 4 | 25% | Формирует закрытые Compose JSON, policy bucket и SQL migration artifact | Compose `config --quiet` проходит |
 | 5 | 50% | Собирает все Java JAR, Go media, три panel entry points и planner images | Все Docker builds успешны |
 | 6 | 55% | Включает HTTP 503 для публичного трафика; при update останавливает writers и делает pg_dump | Writers остановлены; каждый DB dump завершился без ошибок |
 | 7 | 65% | Запускает 11 PostgreSQL, Kafka, MinIO; включает bucket versioning; создает topics | Health инфраструктуры и init job успешны |
@@ -240,7 +230,6 @@ TLS покрывает публичный edge, обязательные private
 | --- | --- |
 | `/etc/rwms-managed/system.env` | Главная конфигурация, 0600/root |
 | `/etc/rwms-managed/auth.p12` | Persistent signing key, 0600 для runtime UID 10001 |
-| `/etc/rwms-managed/firebase.json` | Копия service-account JSON для task-board, 0600 для UID 10001 |
 | `/etc/nginx/conf.d/rwms-managed.conf` | HTTP/HTTPS и private proxy; access logs отключены, чтобы не писать capability/query secrets |
 | `/etc/systemd/system/nginx.service.d/rwms-managed.conf` | Nginx стартует после Docker |
 | `/etc/letsencrypt/live/<domain>/` | Сертификат Let's Encrypt |
@@ -268,7 +257,7 @@ TLS покрывает публичный edge, обязательные private
 6. Проверьте доступ без токена и с запрещенной ролью, refresh/logout, cross-warehouse запреты.
 7. Загрузите разрешенное тестовое медиа, дождитесь READY, проверьте чтение без выдачи MinIO credentials.
 8. Сделайте тестовый запрос к assistant и проверьте реальные лимиты/баланс LLM API.
-9. Проверьте Firebase push на подписанном WorkerApp. Installer не собирает и не публикует APK.
+9. Проверьте `https://<domain>/.well-known/assetlinks.json` и вход подписанного WorkerApp через App Link. Installer не собирает и не публикует APK.
 10. Проверьте truck routes, индекс ограничений, изохроны и разрешенную M2M-интеграцию planner на тестовых данных.
 11. Настройте мониторинг, внешний backup и log rotation/retention. Installer не устанавливает Prometheus/Grafana и не удаляет старые images/dumps/logs.
 
@@ -279,7 +268,7 @@ TLS покрывает публичный edge, обязательные private
 ### До обновления
 
 1. Выберите и проверьте новый commit в **том же checkout**, без незакоммиченных изменений.
-2. Сделайте полный внешний backup: 11 БД, PostGIS planner, versioned MinIO objects, Kafka recovery state, `system.env`, Firebase credentials, signing key и конфигурацию. Зафиксируйте OSM manifest. Проверить восстановление нужно в изоляции.
+2. Сделайте полный внешний backup: 11 БД, PostGIS planner, versioned MinIO objects, Kafka recovery state, `system.env`, signing key и конфигурацию. Зафиксируйте OSM manifest. Проверить восстановление нужно в изоляции.
 3. Сохраните вне checkout непустой файл-отчет с адресом backup, временем, составом, результатом restore-test и ответственным. **Файл-отчет — подтверждение оператора, не автоматическая проверка backup скриптом**.
 4. Согласуйте окно обслуживания. Для базовых приложений будет временный HTTP 503.
 
@@ -351,7 +340,7 @@ sudo bash tools/deploy/deploy.sh resume
 | Certbot HTTP-01 failed | Доступность TCP 80 извне, firewall провайдера, DNS; не повторяйте много раз из-за ACME rate limits |
 | Долго на 25–50% | Журнал Docker build, registry/Gradle/npm, RAM и disk; сборка Java ограничена двумя Gradle workers |
 | Долго на 65–75% | Download/indexer/Valhalla logs, размеры PBF, диск, CPU; job `Exited (0)` — норма |
-| Task-board/gateway не проходят startup | Реальные FCM credentials, Worker certificate fingerprint, Java startup guard logs |
+| Task-board/gateway не проходят startup | `worker-download-site/release-trust-policy.json` (production signer WorkerApp), Java startup guard logs |
 | Media fail-closed | Все SQL migrations, TLS 9444, HTTPS JWKS, bucket versioning, Kafka topics |
 | Процент не меняется, байты растут | Один долгий этап; это ожидаемо, см. native log |
 | Heartbeat есть, байты не растут | Supervisor жив; процесс может ждать сеть/CPU или зависнуть. Проверить ресурсы и дождаться/разобрать timeout |
@@ -372,7 +361,7 @@ python3 -m py_compile tools/deploy/configuration.py tools/deploy/deploy.py
 bash -n tools/deploy/deploy.sh
 ```
 
-Покрываются нормализация/инъекции домена, права и round-trip `.env`, отказ от shell evaluation, secret redaction, совпадение M2M secrets, URL encoding, обязательные env placeholders, private ports, HTTPS topology, failure/timeout propagation, безвредность `plan`, отказ от чужого state и согласованность Kafka inventory task-board.
+Покрываются нормализация/инъекции домена, права и round-trip `.env`, отказ от shell evaluation, secret redaction, совпадение M2M secrets, URL encoding, обязательные env placeholders, private ports, HTTPS topology, failure/timeout propagation, безвредность `plan`, отказ от чужого state, согласованность Kafka inventory task-board, App Links fingerprint из trust policy WorkerApp и мастер без вопросов о Firebase/SHA-256.
 
 Дополнительно на build-хосте с Java 25:
 
@@ -382,6 +371,6 @@ bash ./gradlew :services:task-board-service:test \
   --no-daemon --max-workers=2
 ```
 
-Исправление task-board намеренно узкое: startup guard теперь включает уже существующий канонический `rwms.task-board.driver-shift-owner-proof.v1`, сохраняя запрет на неизвестные дополнительные destinations. Новых событий, scope или миграций эта правка не вводит.
+Исправления task-board намеренно узкие: startup guard включает уже существующий канонический `rwms.task-board.driver-shift-owner-proof.v1`, сохраняя запрет на неизвестные дополнительные destinations, и больше не требует FCM в production; при `TASK_BOARD_FCM_ENABLED=true` по-прежнему обязателен `TASK_BOARD_FCM_PROJECT_ID`. Новых событий, scope или миграций эти правки не вводят.
 
 Следующий обязательный acceptance gate — полный чистый install, затем update/resume, reboot и восстановление backup на отдельном Ubuntu 24.04 VPS с реальным DNS/TLS. Не заменять его успешными offline-тестами.
