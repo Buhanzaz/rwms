@@ -102,7 +102,8 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
             "rwms.task-board.queue-entry.v1",
             "rwms.task-board.entry-owner-proof.v1",
             "rwms.task-board.task-evidence.v1",
-            "rwms.task-board.group-kpi-day.v1");
+            "rwms.task-board.group-kpi-day.v1",
+            "rwms.task-board.driver-shift-owner-proof.v1");
     for (int index = 0; index < requiredDestinations.size(); index++) {
       String configured =
           environment.getProperty("rwms.platform.kafka.destinations[" + index + "]");

@@ -1,0 +1,14 @@
+.git
+**/node_modules
+**/build
+**/dist
+**/dist-admin
+**/dist-manager
+**/.gradle
+**/.kotlin
+**/__pycache__
+**/.env
+**/.env.*
+**/*.p12
+**/*.key
+**/*.log
