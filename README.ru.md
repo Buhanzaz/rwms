@@ -200,6 +200,8 @@ producer/consumer compatibility; для Android-контракта нужно с
 
 ## Основные материалы
 
+- [Интерактивный установщик Ubuntu 24.04: домен, секреты, этапы и проценты](tools/deploy/README.ru.md)
+- [Развертывание сервисов, panel и logistics](docs/deployment.ru.md)
 - [Текущая архитектура](docs/project-knowledge/architecture.md)
 - [Текущий каталог компонентов](docs/project-knowledge/service-catalog.md)
 - [Сквозные runtime-потоки](docs/project-knowledge/runtime-flows.md)
