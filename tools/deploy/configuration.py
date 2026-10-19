@@ -43,8 +43,29 @@ INTERNAL_SECRETS = [f"{name.upper().replace('-', '_')}_DB_PASSWORD" for name in 
 SECRET_KEYS = INTERNAL_SECRETS + ["AUTH_BOOTSTRAP_ADMIN_PASSWORD", "LLM_API_KEY",
                                  "YANDEX_GEOSUGGEST_API_KEY", "YANDEX_GEOCODER_API_KEY"]
 PUBLIC_KEYS = ["DOMAIN", "PUBLIC_IPV4", "ACME_EMAIL", "AUTH_BOOTSTRAP_ADMIN_USERNAME",
-               "LLM_BASE_URL", "LLM_MODEL", "WORKER_CERT_SHA256", "FCM_PROJECT_ID",
-               "FCM_CREDENTIALS_FILE", "PLANNER_SYNC_ENABLED"]
+               "LLM_BASE_URL", "LLM_MODEL", "PLANNER_SYNC_ENABLED"]
+WORKER_APP_ID = "dev.buhanzaz.rwms.worker"
+WORKER_TRUST_POLICY = Path(__file__).resolve().parents[2] / "worker-download-site" / "release-trust-policy.json"
+
+
+def worker_app_links(policy: Path = WORKER_TRUST_POLICY) -> str:
+    """Gateway App Links fingerprints of the public, already pinned WorkerApp release signers.
+
+    Certificate fingerprints are public and maintained in Git for the download site, so the
+    operator is never asked for them. Only PRODUCTION signers are published: internal test
+    builds use another package and must not gain App Links trust.
+    """
+    try:
+        data = json.loads(policy.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict) or data.get("schemaVersion") != 1 or data.get("applicationId") != WORKER_APP_ID:
+        raise ValueError(f"{policy}: нужна release trust policy v1 для {WORKER_APP_ID}")
+    signers = data.get("productionSignerSha256Allowlist")
+    if not isinstance(signers, list) or not signers or not all(
+            isinstance(item, str) and re.fullmatch(r"[0-9a-f]{64}", item) for item in signers):
+        raise ValueError(f"{policy}: нет production SHA-256 сертификата подписи WorkerApp")
+    return ",".join(dict.fromkeys(":".join(item[i:i + 2] for i in range(0, 64, 2)).upper() for item in signers))
 
 
 def domain_name(raw: str) -> str:
@@ -139,18 +160,14 @@ def validate(c: dict[str, str]) -> None:
         raise ValueError("TASK_BOARD_WORKER_OFFLINE_LEASE_SECRET: минимум 32 байта после Base64 decode")
     if len(c["AUTH_BOOTSTRAP_ADMIN_PASSWORD"]) < 12:
         raise ValueError("Пароль администратора: минимум 12 символов")
-    for key in ("AUTH_BOOTSTRAP_ADMIN_USERNAME", "LLM_MODEL", "LLM_API_KEY", "FCM_PROJECT_ID"):
+    for key in ("AUTH_BOOTSTRAP_ADMIN_USERNAME", "LLM_MODEL", "LLM_API_KEY"):
         if not c[key].strip():
             raise ValueError(f"{key} обязателен")
     url = urlsplit(c["LLM_BASE_URL"])
     if url.scheme != "https" or not url.hostname or url.username or url.query or url.fragment:
         raise ValueError("LLM_BASE_URL: HTTPS URL без credentials/query/fragment")
-    if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}", c["WORKER_CERT_SHA256"]):
-        raise ValueError("Нужен реальный SHA-256 сертификата WorkerApp: AA:BB:... (32 байта)")
     if c["PLANNER_SYNC_ENABLED"] not in ("true", "false"):
         raise ValueError("PLANNER_SYNC_ENABLED: true или false")
-    if not Path(c["FCM_CREDENTIALS_FILE"]).is_absolute():
-        raise ValueError("FCM_CREDENTIALS_FILE: абсолютный путь к Firebase service account JSON")
 
 
 def fingerprint(c: dict[str, str]) -> str:
@@ -186,7 +203,7 @@ def service_env(name: str, c: dict[str, str]) -> dict[str, str]:
         env.update(GATEWAY_PUBLIC_BASE_URI=origin, API_GATEWAY_PORT="8088",
                    GATEWAY_TRUSTED_PROXY_ADDRESSES=BRIDGE_IP,
                    LOGISTICS_PLANNER_URL="http://logistics-planner:8000",
-                   RWMS_GATEWAY_APPLINKS_SHA256CERTFINGERPRINTS=c["WORKER_CERT_SHA256"])
+                   RWMS_GATEWAY_APPLINKS_SHA256CERTFINGERPRINTS=worker_app_links())
         return env
     domain = name.removesuffix("-service")
     prefix = domain.upper().replace("-", "_")
@@ -219,9 +236,7 @@ def service_env(name: str, c: dict[str, str]) -> dict[str, str]:
                    WAREHOUSE_SERVICE_INTERNAL_BASE_URL=origin + ":9443/warehouse",
                    MEDIA_SERVICE_INTERNAL_BASE_URL=urls["MEDIA_SERVICE_URL"],
                    MAINTENANCE_SERVICE_URL=urls["MAINTENANCE_SERVICE_URL"],
-                   WORKER_ORIGIN=origin, DRIVER_ORIGIN=origin, TASK_BOARD_FCM_ENABLED="true",
-                   TASK_BOARD_FCM_PROJECT_ID=c["FCM_PROJECT_ID"],
-                   GOOGLE_APPLICATION_CREDENTIALS="/run/rwms/firebase.json")
+                   WORKER_ORIGIN=origin, DRIVER_ORIGIN=origin, TASK_BOARD_FCM_ENABLED="false")
     if domain == "asset":
         env.update(ASSET_WAREHOUSE_REGISTRY_ENABLED="true", ASSET_MEDIA_IMPORT_ENABLED="true",
                    ASSET_WAREHOUSE_TOKEN_URI="http://auth-service:9002/oauth2/token",
@@ -312,7 +327,6 @@ def core_compose(c: dict[str, str], release: Path, config: Path, tag: str) -> di
             "ports": [f"127.0.0.1:{port}:{port}"],
             "security_opt": ["no-new-privileges:true"], "cap_drop": ["ALL"]}
     services["auth-service"]["volumes"] = [f"{config}/auth.p12:/run/rwms/auth.p12:ro"]
-    services["task-board-service"]["volumes"] = [f"{config}/firebase.json:/run/rwms/firebase.json:ro"]
     services["keygen"] = {"image": f"rwms-managed-java:{tag}", "user": "0:0", "network_mode": "none",
         "volumes": [f"{config}:/keys"], "environment": {"STORE_PASSWORD": c["AUTH_SIGNING_KEY_STORE_PASSWORD"]},
         "entrypoint": ["keytool"], "command": ["-genkeypair", "-alias", "rwms-auth", "-keyalg", "RSA",

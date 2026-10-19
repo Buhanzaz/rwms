@@ -35,7 +35,7 @@ from configuration import (
     APPS, BRIDGE_IP, CLIENT_SECRETS, DATABASES, INTERNAL_SECRETS, JAVA, NETWORK,
     PLANNER_PROJECT, PROJECT, SECRET_KEYS, SUBNET, compose_json, core_compose,
     db_user, domain_name, fingerprint, kafka_topics, load_env, nginx_config,
-    planner_override, private_write, save_env, validate,
+    planner_override, private_write, save_env, validate, worker_app_links,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -86,22 +86,6 @@ def ask_secret(label: str, *, generate: bool = False, optional: bool = False, mi
         print("  Значения не совпали.")
 
 
-def firebase_file(path: Path, project: str) -> bytes:
-    if not path.is_file() or path.is_symlink():
-        raise DeployError("Firebase JSON не найден или является symlink")
-    if path.stat().st_mode & 0o077:
-        raise DeployError("Ограничьте доступ к Firebase JSON: chmod 600 <путь>")
-    raw = path.read_bytes()
-    try:
-        data = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
-        raise DeployError("Firebase credentials: некорректный JSON (содержимое скрыто)") from None
-    if (data.get("type") != "service_account" or data.get("project_id") != project or
-            not data.get("client_email") or not str(data.get("private_key", "")).startswith("-----BEGIN PRIVATE KEY-----")):
-        raise DeployError("Firebase service_account JSON не соответствует project_id или не содержит ключ")
-    return raw
-
-
 def wizard(path: Path) -> None:
     if path.exists():
         raise DeployError(".env уже существует. Не перезаписываем пароли и DB credentials. Используйте plan/update.")
@@ -125,17 +109,11 @@ def wizard(path: Path) -> None:
     c["LLM_BASE_URL"] = prompt("HTTPS base URL провайдера", "https://api.mistral.ai/v1")
     c["LLM_MODEL"] = prompt("Модель", "mistral-large-latest")
     c["LLM_API_KEY"] = ask_secret("LLM_API_KEY: получите в кабинете выбранного провайдера")
-    print("\n7. Текущие production guards требуют Firebase push и WorkerApp App Links.")
-    print("Это не секреты Let's Encrypt. Без них task-board/gateway не пройдут production startup.")
-    c["WORKER_CERT_SHA256"] = prompt("SHA-256 реального release signing certificate WorkerApp (AA:BB:...)")
-    c["FCM_PROJECT_ID"] = prompt("Firebase project_id")
-    c["FCM_CREDENTIALS_FILE"] = str(Path(prompt("Абсолютный путь к service-account JSON (chmod 600)")).expanduser().absolute())
-    firebase_file(Path(c["FCM_CREDENTIALS_FILE"]), c["FCM_PROJECT_ID"])
-    print("\n8. Yandex — необязательно. Без ключей маршруты Valhalla работают, поиск адресов Yandex — нет.")
+    print("\n7. Yandex — необязательно. Без ключей маршруты Valhalla работают, поиск адресов Yandex — нет.")
     c["YANDEX_GEOSUGGEST_API_KEY"] = ask_secret("Ключ Geosuggest", optional=True)
     c["YANDEX_GEOCODER_API_KEY"] = ask_secret("Ключ Geocoder", optional=True)
     print("Ключ карты Yandex Maps v3 настраивается отдельно через /admin/logistics после входа.")
-    print("\n9. Синхронизация planner включает получение заказов и публикацию capacity в RWMS.")
+    print("\n8. Синхронизация planner включает получение заказов и публикацию capacity в RWMS.")
     c["PLANNER_SYNC_ENABLED"] = "true" if prompt("Включить интеграцию? YES/no", "yes") == "yes" else "false"
     validate(c)
     save_env(path, c)
@@ -360,9 +338,9 @@ class Deployment:
         interfaces = json.loads(capture(["ip", "-j", "address", "show"]))
         if self.c["PUBLIC_IPV4"] not in {a["local"] for nic in interfaces for a in nic.get("addr_info", [])}:
             raise DeployError("PUBLIC_IPV4 должен быть назначен интерфейсу VPS. NAT/external proxy в v1 не поддерживается.")
-        firebase_file(Path(self.c["FCM_CREDENTIALS_FILE"]), self.c["FCM_PROJECT_ID"])
+        worker_app_links()  # Fail before host changes if the public WorkerApp signer pin is broken.
         if self.mode == "install":
-            occupied = [NGINX, CONFIG / "auth.p12", CONFIG / "firebase.json",
+            occupied = [NGINX, CONFIG / "auth.p12",
                         Path("/etc/letsencrypt/live") / self.c["DOMAIN"],
                         Path("/etc/systemd/system/nginx.service.d/rwms-managed.conf"),
                         Path("/etc/letsencrypt/renewal-hooks/deploy/rwms-managed.sh")]
@@ -474,10 +452,6 @@ class Deployment:
         self.planner_data = data
         private_write(self.planner, compose_json(data))
         private_write(self.release / "topics.txt", "\n".join(kafka_topics(REPO)) + "\n")
-        firebase = CONFIG / "firebase.json"
-        if not firebase.exists():
-            private_write(firebase, firebase_file(Path(self.c["FCM_CREDENTIALS_FILE"]), self.c["FCM_PROJECT_ID"]).decode())
-            os.chown(firebase, 10001, 10001)
         self.runner.run("Проверка planner compose", self.planner_cmd("config", "--quiet"), timeout=60)
 
     def build(self) -> None:
@@ -656,6 +630,8 @@ def main() -> int:
         c = load_env(args.env_file)
         if args.command == "plan":
             print(f"Домен: {c['DOMAIN']}\nIssuer: https://{c['DOMAIN']}/auth\nСекреты: скрыты")
+            print(f"WorkerApp App Links SHA-256 (публичные, из worker-download-site/release-trust-policy.json): "
+                  f"{worker_app_links()}")
             print("Новый single-host managed Docker stack + host Nginx; чужие ресурсы не принимаются.")
             print("PostgreSQL × 11 + planner PostGIS, Kafka RF=1, private MinIO TLS, Valhalla.")
             completed = 0

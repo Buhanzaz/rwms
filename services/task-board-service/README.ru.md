@@ -790,8 +790,14 @@ warehouse-service `http://localhost:8083`, Kafka `localhost:9092`, service port
 Задайте database credentials, HTTPS auth issuer/token URI, task-board service
 secret, worker offline-lease secret, private auth worker-credential URL,
 private warehouse lifecycle URL, explicit CORS origins, Kafka brokers и
-`TASK_BOARD_KAFKA_ENABLED=true`, `TASK_BOARD_FCM_ENABLED=true`,
-`TASK_BOARD_FCM_PROJECT_ID` и Google Application Default Credentials.
+`TASK_BOARD_KAFKA_ENABLED=true`.
+
+FCM push необязателен. При значении по умолчанию `TASK_BOARD_FCM_ENABLED=false`
+Firebase project и credentials не используются: уведомления стропальщику
+остаются `PENDING` в `worker_push_outbox`, а WorkerApp опирается на SSE
+invalidations и authoritative REST feed. `TASK_BOARD_FCM_ENABLED=true`
+дополнительно требует `TASK_BOARD_FCM_PROJECT_ID` и Google Application Default
+Credentials.
 
 Новый flow включается `DRIVER_DAILY_SHIFT_ENABLED=true`. Нужно настроить
 `DRIVER_SHIFT_DAY_START`, `DRIVER_SHIFT_SUSPICIOUS_ODOMETER_JUMP_KM`,
@@ -802,8 +808,8 @@ warehouse-service; weather API key не используется и не воз�
 
 `TaskBoardProductionSafetyValidator` запрещает missing/insecure endpoints,
 disabled Kafka, topic drift, unsafe binder retry/DLT, topic auto-creation,
-non-acknowledged publishing и publish timeouts, способные превысить outbox lease,
-вне dev/test.
+non-acknowledged publishing, publish timeouts, способные превысить outbox lease,
+и включённый FCM без project ID вне dev/test.
 
 ## Проверка
 

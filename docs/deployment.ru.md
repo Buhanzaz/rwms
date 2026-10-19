@@ -6,7 +6,7 @@
 
 **Для новой установки на Ubuntu 24.04 amd64:** добавлен [интерактивный установщик](../tools/deploy/README.ru.md) с вводом домена/секретов, HTTPS, процентами этапов, журналами и режимами install/update/resume. Он создает отдельную managed Docker topology и не принимает существующий сервер автоматически. Ниже — общая карта компонентов и ручных операций, а не конфигурация этого установщика.
 
-**Уточнение после проверки startup guards:** gateway с профилем `production` запрещает loopback downstream и требует WorkerApp certificate fingerprint; task-board вне dev/test требует Firebase и HTTPS для token/worker-credentials/warehouse endpoints. Приведенные ниже host/loopback примеры сами по себе не удовлетворяют этим ограничениям: для production нужны private DNS/HTTPS и соответствующие credentials. Установщик учитывает их без отключения защит.
+**Уточнение после проверки startup guards:** gateway с профилем `production` запрещает loopback downstream и требует WorkerApp certificate fingerprint (публичный production signer из [`worker-download-site/release-trust-policy.json`](../worker-download-site/release-trust-policy.json)); task-board вне dev/test требует HTTPS для token/worker-credentials/warehouse endpoints. Firebase push необязателен: только при `TASK_BOARD_FCM_ENABLED=true` нужны `TASK_BOARD_FCM_PROJECT_ID` и Google credentials. Приведенные ниже host/loopback примеры сами по себе не удовлетворяют этим ограничениям: для production нужны private DNS/HTTPS и соответствующие credentials. Установщик учитывает их без отключения защит.
 
 Документ описывает состав системы, подготовку окружения, сборку, конфигурацию, порядок запуска и проверку развертывания. Он основан на текущих исходниках, а не на исторических планах.
 

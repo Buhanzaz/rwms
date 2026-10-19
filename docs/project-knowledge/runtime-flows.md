@@ -2582,9 +2582,11 @@ and
    does not own a second transfer command or inventory projection.
 7. The driver's successful logistics `TAKE` commits a
    `TASK_JOIN_AVAILABLE` push-outbox row in the same task-board transaction for
-   each eligible secondary worker. The leased dispatcher sends only to active
+   each eligible secondary worker. FCM is optional in production: only when
+   `TASK_BOARD_FCM_ENABLED=true` does the leased dispatcher send to active
    WorkerApp installations, using the registered Firebase Installation ID;
-   retries are bounded and an invalid installation is revoked. FCM and SSE are
+   retries are bounded and an invalid installation is revoked. Without FCM the
+   row stays pending and SSE remains the live path. FCM and SSE are
    invalidations, so WorkerApp refreshes the authoritative feed.
 8. WorkerApp has no driver board or independent driver-trip transport. It reveals a joint
    `LOGISTICS_DRIVER` entry only after the driver has made it active and only
