@@ -1,0 +1,281 @@
+package dev.buhanzaz.rwms.architecture;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class LogisticsSourcePolicyTest {
+  @TempDir Path temporaryDirectory;
+
+  @Test
+  void currentLogisticsSourcesKeepTheStageEightBoundaryAndInfrastructure() {
+    Path root = Path.of(System.getProperty("rwms.root.dir"));
+
+    assertDoesNotThrow(
+        () -> LogisticsSourcePolicy.assertSafe(root.resolve("services/logistics-service")));
+  }
+
+  @Test
+  void acceptsLocalTransportAndReadOnlyMapperSources() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/integration/SafeGateway.java",
+        """
+        package dev.buhanzaz.rwms.logistics.integration;
+
+        final class SafeGateway {
+          private static final String SCOPE = "asset.logistics";
+        }
+        """);
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/mapper/SafeReadMapper.java",
+        """
+        package dev.buhanzaz.rwms.logistics.mapper;
+
+        @org.mapstruct.Mapper
+        interface SafeReadMapper {
+          Response toResponse(Projection source);
+
+          record Projection(String id) {}
+          record Response(String id) {}
+        }
+        """);
+
+    assertDoesNotThrow(() -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+  }
+
+  @Test
+  void rejectsServicePanelLegacyAndProjectLeaks() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/service/UnsafeLogisticsService.java",
+        """
+        package dev.buhanzaz.rwms.logistics.service;
+
+        import dev.buhanzaz.rwms.asset.domain.RentalItem;
+        import dev.buhanzaz.rwms.panel.runtime.PanelStore;
+
+        final class UnsafeLogisticsService {
+          private RentalItem item;
+          private PanelStore store;
+        }
+        """);
+    write(
+        "build.gradle.kts",
+        """
+        dependencies {
+          implementation(project(":services:asset-service"))
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("another service implementation"));
+    assertTrue(failure.getMessage().contains("panel, browser, legacy"));
+    assertTrue(failure.getMessage().contains("must not depend on another service project"));
+  }
+
+  @Test
+  void rejectsBroadScopesAndRequestToEntityMutation() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/mapper/UnsafeScopeMapper.java",
+        """
+        package dev.buhanzaz.rwms.logistics.mapper;
+
+        @org.mapstruct.Mapper
+        interface UnsafeScopeMapper {
+          String SCOPE = "asset.internal";
+
+          void update(CreateReturnRequest request,
+              @org.mapstruct.MappingTarget ReturnEntity entity);
+
+          record CreateReturnRequest(String id) {}
+          final class ReturnEntity {}
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("forbidden broad or unowned scope"));
+    assertTrue(failure.getMessage().contains("must not mutate mapping targets"));
+  }
+
+  @Test
+  void rejectsForbiddenScopePassedToAScopeMethod() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/integration/UnsafeScopeGateway.java",
+        """
+        package dev.buhanzaz.rwms.logistics.integration;
+
+        final class UnsafeScopeGateway {
+          void requestScope(String scope) {}
+
+          void unsafe() {
+            requestScope("media.read");
+          }
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("forbidden broad or unowned scope"));
+  }
+
+  @Test
+  void requiresLocalEventAndExactScopeInfrastructure() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/LogisticsServiceApplication.java",
+        """
+        package dev.buhanzaz.rwms.logistics;
+
+        final class LogisticsServiceApplication {}
+        """);
+
+    AssertionError failure =
+        assertThrows(AssertionError.class, () -> LogisticsSourcePolicy.assertSafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("LogisticsEventStore.java"));
+    assertTrue(failure.getMessage().contains("LogisticsReplayVerifier.java"));
+    assertTrue(failure.getMessage().contains("V1__logistics_schema.sql"));
+  }
+
+  @Test
+  void rejectsLowLevelSqlOutsideTheNarrowTechnicalAdapters() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsDocumentService.java",
+        """
+        package dev.buhanzaz.rwms.logistics.service;
+
+        import org.springframework.jdbc.core.JdbcTemplate;
+
+        final class LogisticsDocumentService {
+          private JdbcTemplate jdbc;
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("low-level SQL is restricted"));
+  }
+
+  @Test
+  void rejectsJdbcInTheWarehousePersistencePackageOutsideItsExactAdapters() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/UnauthorizedJdbcPersistence.java",
+        """
+        package dev.buhanzaz.rwms.logistics.service.persistence;
+
+        import org.springframework.jdbc.core.JdbcTemplate;
+
+        final class UnauthorizedJdbcPersistence {
+          private JdbcTemplate jdbc;
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("low-level SQL is restricted"));
+  }
+
+  @Test
+  void rejectsArbitraryNativeSqlInABusinessRepository() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/repository/UnsafeBusinessRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.repository;
+
+        interface UnsafeBusinessRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select * from logistics_document",
+              nativeQuery = true)
+          java.util.List<Object> findEverythingWithNativeSql();
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("native JPA SQL is restricted"));
+  }
+
+  @Test
+  void acceptsOnlyTheExactApprovedNativeMethodAndQuery() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.customer.repository;
+
+        interface CustomerNotificationRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select clock_timestamp()",
+              nativeQuery = true)
+          java.time.Instant currentDatabaseTimestamp();
+        }
+        """);
+
+    assertDoesNotThrow(() -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+  }
+
+  @Test
+  void rejectsChangedSqlInsideAnApprovedNativeRepository() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.customer.repository;
+
+        interface CustomerNotificationRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select transaction_timestamp()",
+              nativeQuery = true)
+          java.time.Instant currentDatabaseTimestamp();
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("exact approved repository methods and queries"));
+  }
+
+  @Test
+  void rejectsChangedMethodInsideAnApprovedNativeRepository() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.customer.repository;
+
+        interface CustomerNotificationRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select clock_timestamp()",
+              nativeQuery = true)
+          java.time.Instant arbitraryDatabaseRead();
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("exact approved repository methods and queries"));
+  }
+
+  private void write(String relativePath, String source) throws Exception {
+    Path path = temporaryDirectory.resolve(relativePath);
+    Files.createDirectories(path.getParent());
+    Files.writeString(path, source);
+  }
+}

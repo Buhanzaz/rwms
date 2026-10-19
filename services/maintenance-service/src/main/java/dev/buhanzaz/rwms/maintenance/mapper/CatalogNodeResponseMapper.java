@@ -1,0 +1,49 @@
+package dev.buhanzaz.rwms.maintenance.mapper;
+
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.CatalogNodeResponse;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.CatalogNodeType;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.CabinCharacteristicReference;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.FurnitureEquipmentReference;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.RoutingSnapshot;
+import dev.buhanzaz.rwms.maintenance.domain.CatalogNode;
+import org.mapstruct.InjectionStrategy;
+import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
+import org.mapstruct.MappingConstants;
+import org.mapstruct.ReportingPolicy;
+
+/** Maps CatalogNodeResponse at the maintenance boundary without applying a domain transition. */
+@Mapper(
+    componentModel = MappingConstants.ComponentModel.SPRING,
+    injectionStrategy = InjectionStrategy.CONSTRUCTOR,
+    unmappedTargetPolicy = ReportingPolicy.ERROR)
+public interface CatalogNodeResponseMapper {
+  @Mapping(target = "id", source = "node.id")
+  @Mapping(target = "catalogVersionId", source = "node.catalogVersionId")
+  @Mapping(target = "nodeType", source = "nodeType")
+  @Mapping(target = "name", source = "node.name")
+  @Mapping(target = "active", source = "node.active")
+  @Mapping(target = "parentNodeId", source = "node.parentNodeId")
+  @Mapping(target = "furnitureCategory", source = "node.furnitureCategory")
+  @Mapping(target = "furnitureEquipment", source = "furnitureEquipment")
+  @Mapping(target = "unit", source = "node.unit")
+  @Mapping(target = "unitPrice", source = "unitPrice")
+  @Mapping(target = "durationMinutes", source = "node.durationMinutes")
+  @Mapping(target = "includeInEstimate", source = "node.includeInEstimate")
+  @Mapping(target = "commonItem", source = "node.commonItem")
+  @Mapping(target = "showInMainMenu", source = "node.showInMainMenu")
+  @Mapping(target = "canvasX", source = "node.canvasX")
+  @Mapping(target = "canvasY", source = "node.canvasY")
+  @Mapping(target = "routing", source = "routing")
+  @Mapping(target = "comment", source = "node.comment")
+  @Mapping(target = "displayColor", source = "node.displayColor")
+  @Mapping(target = "forcesCapitalRepair", source = "node.forcesCapitalRepair")
+  @Mapping(target = "characteristic", source = "characteristic")
+  CatalogNodeResponse toResponse(
+      CatalogNode node,
+      CatalogNodeType nodeType,
+      FurnitureEquipmentReference furnitureEquipment,
+      String unitPrice,
+      RoutingSnapshot routing,
+      CabinCharacteristicReference characteristic);
+}

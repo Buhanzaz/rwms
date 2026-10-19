@@ -1,0 +1,7 @@
+rwms:
+  assistant:
+    llm:
+      require-api-key-on-startup: true
+  cors:
+    allowed-origins:
+      - ${PANEL_ORIGIN:http://localhost:8080}

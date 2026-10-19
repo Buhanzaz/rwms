@@ -1,0 +1,102 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://rwms.example/contracts/events/technical/domain-event-envelope-v2.schema.yaml
+title: RWMS Domain Event Envelope V2
+description: >-
+  Framework-neutral envelope used by service-local event stores and Kafka
+  integration after the owning service cutover. Payload schemas remain owned
+  and versioned by their producing domains.
+type: object
+required:
+  - envelopeVersion
+  - eventId
+  - eventType
+  - eventVersion
+  - occurredAt
+  - recordedAt
+  - producer
+  - aggregateType
+  - aggregateId
+  - aggregateVersion
+  - correlation
+  - actorRef
+  - payload
+properties:
+  envelopeVersion:
+    type: integer
+    const: 2
+  eventId:
+    type: string
+    format: uuid
+  eventType:
+    type: string
+    maxLength: 256
+    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.v[1-9][0-9]*$"
+  eventVersion:
+    type: integer
+    minimum: 1
+  occurredAt:
+    oneOf:
+      - type: string
+        format: date-time
+      - type: "null"
+  recordedAt:
+    type: string
+    format: date-time
+  producer:
+    type: string
+    maxLength: 128
+    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+  aggregateType:
+    description: >-
+      Upper-snake aggregate family whose canonical lower-kebab form matches the
+      second eventType segment; for example, BOARD_TASK maps to board-task.
+    type: string
+    maxLength: 128
+    pattern: "^[A-Z][A-Z0-9_]{0,127}$"
+  aggregateId:
+    type: string
+    maxLength: 256
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+  aggregateVersion:
+    type: integer
+    format: int64
+    minimum: 0
+  correlation:
+    $ref: "#/$defs/correlationContext"
+  actorRef:
+    oneOf:
+      - $ref: "#/$defs/opaqueActorReference"
+      - type: "null"
+  payload:
+    type: object
+additionalProperties: false
+$defs:
+  correlationContext:
+    type: object
+    required: [correlationId, causationId]
+    properties:
+      correlationId:
+        type: string
+        format: uuid
+      causationId:
+        oneOf:
+          - type: string
+            format: uuid
+          - type: "null"
+    additionalProperties: false
+  opaqueActorReference:
+    type: object
+    required: [subjectId, principalType, profileRevision]
+    properties:
+      subjectId:
+        type: string
+        pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      principalType:
+        type: string
+        pattern: "^[A-Z][A-Z0-9_]{0,63}$"
+      profileRevision:
+        oneOf:
+          - type: string
+            pattern: "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"
+          - type: "null"
+    additionalProperties: false

@@ -1,0 +1,502 @@
+import {
+  apiErrorFromRequestFailure,
+  apiErrorFromResponse,
+  bearerRequest,
+  invalidApiResponseError,
+} from "@/lib/api-client"
+import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
+import type { AdditionalContact } from "@/features/clients/domain/clients"
+import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
+import { assertPresentationRentalPrice } from "@/features/assistant/api/rental-pricing-api"
+import { parseOrderPayment } from "@/features/orders/domain/order-payment"
+
+export type PresentationPhoto = {
+  mediaId: string
+  generation: number
+  sortOrder: number
+  availableVariants: string[]
+  thumbnailUrl: string
+  contentUrl: string
+}
+
+export type PresentationCabin = {
+  id: string
+  number: string
+  pricingVersion: number | null
+  monthlyPriceRubles: string | null
+  rentalType: string | null
+  dimensions: string | null
+  finishing: string | null
+  category: string | null
+  characteristics: string | null
+  linoleum: boolean | null
+  passport: Record<string, unknown>
+  tags: string[]
+  currentContents: PresentationEquipmentContent[]
+  photos: PresentationPhoto[]
+}
+
+export type PresentationEquipmentContent = {
+  equipmentId: string
+  equipmentName: string | null
+  quantity: number
+  locationKind: string
+}
+
+export type PresentationEquipmentAvailability = {
+  equipmentId: string
+  equipmentName: string
+  availableQuantity: number
+  maximumPerCabin: number | null
+}
+
+export type PresentationMode = "NORMAL" | "REPLACEMENT"
+
+export type PresentationGroup = {
+  key: string
+  label: string
+  cabins: PresentationCabin[]
+}
+
+export type ClientPresentation = {
+  id: string
+  version: number
+  revision: number
+  inquiryId: string
+  warehouseId: string
+  state: "ACTIVE" | "BOOKING_PENDING" | "BOOKED" | "REVOKED"
+  expiresAt: string
+  viewUntil: string
+  canConfirm: boolean
+  publicPath: string
+  bookedOrderId: string | null
+  mode: PresentationMode
+  replacementUnitIds: string[]
+  requiredSelectionCount: number | null
+  requiresDesiredDeliveryWindows: boolean
+  desiredDeliveryWindows: DesiredDeliveryWindow[]
+  equipmentAvailability: PresentationEquipmentAvailability[]
+  groups: PresentationGroup[]
+}
+
+export type PublicClientPresentation = {
+  id: string
+  revision: number
+  state: "ACTIVE" | "BOOKING_PENDING" | "BOOKED" | "REVOKED"
+  expiresAt: string
+  viewUntil: string
+  viewOnly: boolean
+  mode: PresentationMode
+  requiredSelectionCount: number | null
+  requiresDesiredDeliveryWindows: boolean
+  /** Warehouse-local dates that the client may request for this revision. */
+  requestableDeliveryDates: string[]
+  desiredDeliveryWindows: DesiredDeliveryWindow[]
+  equipmentAvailability: PresentationEquipmentAvailability[]
+  groups: PresentationGroup[]
+  /** Server-owned identity restores this exact revision's booking after a page reload. */
+  bookingId: string | null
+  bookedOrderId: string | null
+}
+
+export type PresentationCabinSelection = {
+  rentalItemId: string
+  equipment: Array<{ equipmentId: string; quantity: number }>
+}
+
+export type PresentationBooking = {
+  bookingId: string
+  state: "PENDING" | "COMPLETED" | "REJECTED"
+  orderId: string | null
+  statusPath: string
+  errorCode: string | null
+}
+
+export type RentalSettings = {
+  version: number
+  chatSelectionHoldMinutes: number
+  manualBookingHoldMinutes: number
+  presentationHoldMinutes: number
+  draftReservationHoldMinutes: number
+  lateChangeNoticeDays: number
+  lateChangeFeeMode: "FIXED" | "PERCENT" | null
+  lateChangeFeeValue: string | null
+  rentalSupportPhone: string | null
+  updatedBy: string | null
+  updatedAt: string
+}
+
+export type RentalBookingAlertClient = {
+  id: string
+  version: number
+  type: string
+  displayName: string
+  phone: string | null
+  email: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type RentalBookingAlertCabin = {
+  id: string
+  number: string
+  rentalType: string | null
+  dimensions: string | null
+  finishing: string | null
+  category: string | null
+}
+
+export type RentalBookingAlert = {
+  bookingId: string
+  version: number
+  inquiryId: string
+  orderId: string
+  client: RentalBookingAlertClient
+  confirmedAt: string
+  cabins: RentalBookingAlertCabin[]
+}
+
+export type RentalBookingAlertAction = "CONTINUE" | "KEEP_DRAFT"
+
+function logisticsV1(path: string) {
+  return `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1${path}`
+}
+
+function publicPresentationEndpoint(token: string, path = "") {
+  return `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/public/v1/client-presentations/${encodeURIComponent(token)}${path}`
+}
+
+function parsePresentationPrices<
+  T extends ClientPresentation | PublicClientPresentation,
+>(value: T): T {
+  if (!value || !Array.isArray(value.groups)) {
+    throw invalidApiResponseError("Некорректные группы представления.")
+  }
+  for (const group of value.groups) {
+    if (!group || !Array.isArray(group.cabins)) {
+      throw invalidApiResponseError("Некорректные бытовки представления.")
+    }
+    for (const cabin of group.cabins) assertPresentationRentalPrice(cabin)
+  }
+  return value
+}
+
+export async function publishClientPresentation(params: {
+  accessToken: string
+  inquiryId: string
+  warehouseId: string
+  idempotencyKey: string
+  manualBookingDraftId?: string
+  mode?: PresentationMode
+  replacementUnitIds?: string[]
+  groups: Array<{
+    key: string
+    label: string
+    rentalItemIds: string[]
+  }>
+}) {
+  return parsePresentationPrices(
+    await bearerRequest<ClientPresentation>(
+      params.accessToken,
+      logisticsV1(
+        `/rental-inquiries/${encodeURIComponent(params.inquiryId)}/client-presentation`
+      ),
+      {
+        method: "PUT",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({
+          warehouseId: params.warehouseId,
+          manualBookingDraftId: params.manualBookingDraftId,
+          mode: params.mode,
+          replacementUnitIds: params.replacementUnitIds,
+          groups: params.groups,
+        }),
+      }
+    )
+  )
+}
+
+export async function getClientPresentation(params: {
+  accessToken: string
+  inquiryId: string
+}) {
+  return parsePresentationPrices(
+    await bearerRequest<ClientPresentation>(
+      params.accessToken,
+      logisticsV1(
+        `/rental-inquiries/${encodeURIComponent(params.inquiryId)}/client-presentation`
+      )
+    )
+  )
+}
+
+function parseRentalSettings(value: RentalSettings): RentalSettings {
+  if (
+    !value ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 0 ||
+    !Number.isInteger(value.lateChangeNoticeDays) ||
+    value.lateChangeNoticeDays < 0 ||
+    value.lateChangeNoticeDays > 2147483647 ||
+    (value.lateChangeFeeMode !== null &&
+      value.lateChangeFeeMode !== "FIXED" &&
+      value.lateChangeFeeMode !== "PERCENT") ||
+    (value.rentalSupportPhone !== null &&
+      (typeof value.rentalSupportPhone !== "string" ||
+        !/^\+[1-9][0-9]{7,14}$/.test(value.rentalSupportPhone))) ||
+    !validRentalFee(value.lateChangeFeeMode, value.lateChangeFeeValue)
+  )
+    throw invalidApiResponseError(new Error("Invalid rental policy settings"))
+  return value
+}
+
+/** Decimal strings preserve the full server ruble range without floating-point rounding. */
+export function validRentalFee(
+  mode: RentalSettings["lateChangeFeeMode"],
+  value: unknown
+): boolean {
+  if (mode === null) return value === null
+  if (
+    typeof value !== "string" ||
+    !/^(0|[1-9][0-9]{0,18})(\.[0-9]{1,2})?$/.test(value)
+  )
+    return false
+  if (mode === "FIXED") {
+    const [whole, fraction = ""] = value.split(".")
+    return !/[1-9]/.test(fraction) && BigInt(whole) <= 9223372036854775807n
+  }
+  return mode === "PERCENT" && Number(value) <= 100
+}
+
+export async function getRentalSettings(accessToken: string) {
+  return parseRentalSettings(
+    await bearerRequest<RentalSettings>(
+      accessToken,
+      logisticsV1("/settings/rental")
+    )
+  )
+}
+
+export async function updateRentalSettings(params: {
+  accessToken: string
+  expectedVersion: number
+  chatSelectionHoldMinutes: number
+  manualBookingHoldMinutes: number
+  presentationHoldMinutes: number
+  draftReservationHoldMinutes: number
+  lateChangeNoticeDays: number
+  lateChangeFeeMode: RentalSettings["lateChangeFeeMode"]
+  lateChangeFeeValue: string | null
+  rentalSupportPhone: string | null
+}) {
+  return parseRentalSettings(
+    await bearerRequest<RentalSettings>(
+      params.accessToken,
+      logisticsV1("/settings/rental"),
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedVersion: params.expectedVersion,
+          chatSelectionHoldMinutes: params.chatSelectionHoldMinutes,
+          manualBookingHoldMinutes: params.manualBookingHoldMinutes,
+          presentationHoldMinutes: params.presentationHoldMinutes,
+          draftReservationHoldMinutes: params.draftReservationHoldMinutes,
+          lateChangeNoticeDays: params.lateChangeNoticeDays,
+          lateChangeFeeMode: params.lateChangeFeeMode,
+          lateChangeFeeValue: params.lateChangeFeeValue,
+          rentalSupportPhone: params.rentalSupportPhone,
+        }),
+      }
+    )
+  )
+}
+
+export function getRentalBookingAlerts(accessToken: string) {
+  return bearerRequest<RentalBookingAlert[]>(
+    accessToken,
+    logisticsV1("/rental-booking-alerts")
+  )
+}
+
+export function actOnRentalBookingAlert(params: {
+  accessToken: string
+  bookingId: string
+  expectedVersion: number
+  action: RentalBookingAlertAction
+  idempotencyKey: string
+}) {
+  return bearerRequest<void>(
+    params.accessToken,
+    logisticsV1(
+      `/rental-booking-alerts/${encodeURIComponent(params.bookingId)}/actions`
+    ),
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": params.idempotencyKey },
+      body: JSON.stringify({
+        expectedVersion: params.expectedVersion,
+        action: params.action,
+      }),
+    }
+  )
+}
+
+async function publicJson<T>(input: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers)
+  headers.set("Accept", "application/json")
+  if (init?.body !== undefined) headers.set("Content-Type", "application/json")
+  let response: Response
+  try {
+    response = await fetch(input, { ...init, headers })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
+  }
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response)
+  }
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
+}
+
+async function publicBookingJson(
+  input: string,
+  init?: RequestInit
+): Promise<PresentationBooking> {
+  const headers = new Headers(init?.headers)
+  headers.set("Accept", "application/json")
+  if (init?.body !== undefined) headers.set("Content-Type", "application/json")
+  let response: Response
+  try {
+    response = await fetch(input, { ...init, headers })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
+  }
+  const errorResponse = response.clone()
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch (error) {
+    if (!response.ok) throw await apiErrorFromResponse(errorResponse)
+    throw invalidApiResponseError(error)
+  }
+  if (
+    (response.ok || response.status === 409) &&
+    body !== null &&
+    typeof body === "object" &&
+    typeof (body as Partial<PresentationBooking>).bookingId === "string" &&
+    ["PENDING", "COMPLETED", "REJECTED"].includes(
+      String((body as Partial<PresentationBooking>).state)
+    )
+  ) {
+    return body as PresentationBooking
+  }
+  if (!response.ok) throw await apiErrorFromResponse(errorResponse)
+  throw invalidApiResponseError(
+    new Error("Public presentation booking response is invalid")
+  )
+}
+
+export async function getPublicPresentation(token: string) {
+  const value = parsePresentationPrices(
+    await publicJson<PublicClientPresentation>(
+      publicPresentationEndpoint(token)
+    )
+  )
+  if (
+    value.bookingId !== null &&
+    (typeof value.bookingId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        value.bookingId
+      ))
+  )
+    throw invalidApiResponseError(
+      "Сервис не вернул корректный идентификатор бронирования."
+    )
+  return value
+}
+
+export function confirmPublicPresentation(params: {
+  token: string
+  selections: PresentationCabinSelection[]
+  desiredDeliveryWindows?: DesiredDeliveryWindow[]
+  rentalMonths?: number
+  deliveryAddress?: string
+  latitude?: number
+  longitude?: number
+  additionalContacts?: AdditionalContact[]
+  idempotencyKey: string
+}) {
+  return publicBookingJson(
+    publicPresentationEndpoint(params.token, "/bookings"),
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": params.idempotencyKey },
+      body: JSON.stringify({
+        selections: params.selections,
+        desiredDeliveryWindows: params.desiredDeliveryWindows,
+        rentalMonths: params.rentalMonths,
+        deliveryAddress: params.deliveryAddress,
+        latitude: params.latitude,
+        longitude: params.longitude,
+        additionalContacts: params.additionalContacts,
+      }),
+    }
+  )
+}
+
+export function getPublicPresentationBooking(params: {
+  token: string
+  bookingId: string
+}) {
+  return publicBookingJson(
+    publicPresentationEndpoint(
+      params.token,
+      `/bookings/${encodeURIComponent(params.bookingId)}`
+    )
+  )
+}
+
+export async function getPublicPresentationPayment(params: {
+  token: string
+  bookingId: string
+  orderId: string
+}) {
+  return parseOrderPayment(
+    await publicJson<unknown>(
+      publicPresentationEndpoint(
+        params.token,
+        "/bookings/" + encodeURIComponent(params.bookingId) + "/payment"
+      )
+    ),
+    params.orderId
+  )
+}
+
+/** Explicit simulation; no card information or provider credentials are accepted by this route. */
+export async function confirmPublicPresentationTestPayment(params: {
+  token: string
+  bookingId: string
+  orderId: string
+  expectedVersion: number
+  idempotencyKey: string
+}) {
+  return parseOrderPayment(
+    await publicJson<unknown>(
+      publicPresentationEndpoint(
+        params.token,
+        "/bookings/" +
+          encodeURIComponent(params.bookingId) +
+          "/payment/confirm-test"
+      ),
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({ expectedVersion: params.expectedVersion }),
+      }
+    ),
+    params.orderId
+  )
+}

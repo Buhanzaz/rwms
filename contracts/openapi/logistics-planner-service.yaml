@@ -1,0 +1,1657 @@
+openapi: 3.1.0
+info:
+  title: RWMS Logistics Planner Administration API
+  version: 1.2.0
+  x-rwms-owner: logistics-planner-service
+  x-rwms-stability: admin-catalog-v1
+  description: >-
+    Canonical API for the logistics planner's catalog-home vehicles, trailers,
+    warehouse planning settings and global map display settings.
+    Administrator traffic enters through the same-origin gateway prefix
+    /api/logistics-planner/v1/admin; the gateway rewrites that prefix to the
+    planner's private FastAPI implementation path /api/admin. Operator map reads
+    use the existing /logistics-panel/api Nginx route, declared by the path-level
+    server override. This contract does not expose the Spring logistics-service
+    operational vehicle-assignment API.
+servers:
+  - url: /api/logistics-planner/v1
+security:
+  - bearerJwt: []
+tags:
+  - name: Planner administration catalog
+    description: SYSTEM_ADMIN-only permanent catalog-home administration.
+  - name: Planner administration settings
+    description: SYSTEM_ADMIN-only planning, tariffs and exceptional map policies.
+paths:
+  /admin/map-settings:
+    get:
+      tags: [Planner administration settings]
+      operationId: plannerAdminGetMapSettings
+      summary: Read the global logistics map display settings
+      description: >-
+        Requires the isolated rwms-admin-web USER client, SYSTEM_ADMIN role and
+        admin.manage scope. Returns key presence without echoing the saved key.
+        This setting is shared by all warehouses and never changes truck routing.
+      responses:
+        '200':
+          description: Current version and map provider; Cache-Control no-store.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminMapSettings'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    put:
+      tags: [Planner administration settings]
+      operationId: plannerAdminReplaceMapSettings
+      summary: Select the standard map or Yandex JavaScript API 3.0
+      description: >-
+        Uses the same isolated administrator authority as GET. expected_version
+        fences the global setting; stale writes return 409 MAP_SETTINGS_VERSION_CONFLICT.
+        A null, omitted or blank yandex_api_key retains the stored key; a nonblank
+        value replaces it after trimming. YANDEX requires a stored or supplied key,
+        otherwise returns 422 YANDEX_MAP_KEY_REQUIRED. STANDARD preserves the key
+        for later reuse. The key is never seeded into source or returned here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MapSettingsUpdate'}
+      responses:
+        '200':
+          description: Saved setting with incremented version; Cache-Control no-store.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminMapSettings'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /map-settings:
+    servers:
+      - url: /logistics-panel/api
+    get:
+      tags: [Planner map display]
+      operationId: plannerGetMapSettings
+      summary: Read the selected map configuration for the authenticated logistics browser
+      description: >-
+        Served through the existing same-origin logistics application API prefix,
+        rewritten to the planner's /api/map-settings. Requires a panel USER session
+        and rwms.read. The JavaScript browser key is returned only when YANDEX is
+        active, never for STANDARD. The migration-created default is STANDARD.
+        Missing configuration returns 503 MAP_SETTINGS_UNAVAILABLE, not a fallback.
+      responses:
+        '200':
+          description: Current browser map configuration; Cache-Control no-store.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MapSettings'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/vehicles:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminListVehicles
+      summary: List catalog-home vehicles for one eligible warehouse
+      description: >-
+        Returns only vehicles whose permanent catalog home is warehouse_id. The
+        warehouse UUID is the canonical warehouse-service UUID, never a
+        planner-local database UUID.
+      responses:
+        '200':
+          description: Complete administrative vehicle representations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/vehicle-configurations:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminCreateVehicleConfiguration
+      summary: Create a vehicle and its complete axle-load profile set
+      description: >-
+        Requires Idempotency-Key. A replay is accepted only for the exact same
+        authenticated actor, operation, canonical warehouse UUID and request
+        payload; it returns the originally created vehicle and never creates a
+        second catalog row.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VehicleConfigurationCreate'}
+      responses:
+        '201':
+          description: Vehicle configuration created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/vehicles/{vehicle_id}:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    patch:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminUpdateVehicle
+      summary: Optimistically update a catalog-home vehicle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VehiclePatch'}
+      responses:
+        '200':
+          description: Updated vehicle with incremented version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    delete:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminDeleteVehicle
+      summary: Delete an unused catalog-home vehicle
+      description: >-
+        expected_version is mandatory. The planner takes the vehicle's driver
+        shift advisory lock and rejects deletion for every DriverShift, whether
+        active or retained history. It never cascades away shift history or a
+        route cycle.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': {description: Vehicle deleted.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/VehicleDeleteConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/vehicles/{vehicle_id}/configuration:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    put:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminReplaceVehicleConfiguration
+      summary: Atomically replace a vehicle and its axle-load profile set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VehicleConfigurationUpdate'}
+      responses:
+        '200':
+          description: Replaced vehicle configuration with incremented version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/vehicles/{vehicle_id}/relocate:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminRehomeVehicle
+      summary: Permanently rehome a vehicle's catalog base
+      description: >-
+        This is a permanent catalog-home rehome to target_warehouse_id. It is
+        not a physical move, transport task, reservation, or operational
+        assignment. The command takes the vehicle's shift advisory lock and
+        rejects active DriverShift records and an attached default trailer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CatalogRehomeRequest'}
+      responses:
+        '200':
+          description: Vehicle catalog home changed and version incremented.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/trailers:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminListTrailers
+      summary: List catalog-home trailers for one eligible warehouse
+      responses:
+        '200':
+          description: Complete administrative trailer representations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminCreateTrailer
+      summary: Create a catalog-home trailer
+      description: >-
+        Requires Idempotency-Key. A replay is accepted only for the exact same
+        authenticated actor, operation, canonical warehouse UUID and request
+        payload; it returns the originally created trailer without another write.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TrailerCreate'}
+      responses:
+        '201':
+          description: Trailer created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/trailers/{trailer_id}:
+    parameters:
+      - $ref: '#/components/parameters/TrailerId'
+    patch:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminUpdateTrailer
+      summary: Optimistically update a catalog-home trailer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TrailerPatch'}
+      responses:
+        '200':
+          description: Updated trailer with incremented version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    delete:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminDeleteTrailer
+      summary: Delete an unassigned catalog-home trailer
+      description: >-
+        expected_version is mandatory. The planner takes the trailer-assignment
+        advisory lock and rejects a trailer selected as any vehicle's default;
+        it never relies on the database SET NULL action for this command.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': {description: Trailer deleted.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/TrailerDeleteConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/trailers/{trailer_id}/relocate:
+    parameters:
+      - $ref: '#/components/parameters/TrailerId'
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminRehomeTrailer
+      summary: Permanently rehome a trailer's catalog base
+      description: >-
+        This is a permanent catalog-home rehome, not a physical operational
+        relocation. The trailer-assignment advisory lock rejects a trailer that
+        remains any vehicle's default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CatalogRehomeRequest'}
+      responses:
+        '200':
+          description: Trailer catalog home changed and version incremented.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/planning-settings:
+    get:
+      operationId: plannerAdminGetPlanningSettings
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlanningSettingsRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+      security:
+      - bearerJwt: []
+      summary: Get Planning Settings
+      tags:
+      - Planner administration settings
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Representative warehouses retain their own configuration. Returns the
+        owning planner configuration and effective defaults; an unconfigured workspace is an explicit error.
+    put:
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Representative warehouses retain their own configuration. Replaces the
+        observed settings and contiguous tariff ladder atomically with expected_version. Publishes capacity after
+        commit and reports its actual outcome.
+      operationId: plannerAdminReplacePlanningSettings
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminPlanningSettingsUpdate'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlanningSettingsRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Replace Planning Settings
+      tags:
+      - Planner administration settings
+  /admin/warehouses/{warehouse_id}/policy-zones:
+    get:
+      operationId: plannerAdminListPolicyZones
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/AdminPolicyZoneRead'
+                title: Response Planneradminlistpolicyzones
+                type: array
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+      security:
+      - bearerJwt: []
+      summary: List Admin Policy Zones
+      tags:
+      - Planner administration settings
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
+    post:
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. Requires
+        Idempotency-Key; an identical actor and payload replay returns the original polygon.
+      operationId: plannerAdminCreatePolicyZone
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          maxLength: 200
+          minLength: 1
+          pattern: ^[\x21-\x7e]+$
+          title: Idempotency-Key
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyZoneCreate'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPolicyZoneRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Create Admin Policy Zone
+      tags:
+      - Planner administration settings
+  /admin/warehouses/{warehouse_id}/policy-zones/{zone_id}:
+    delete:
+      operationId: plannerAdminDeletePolicyZone
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      - in: path
+        name: zone_id
+        required: true
+        schema:
+          format: uuid
+          title: Zone Id
+          type: string
+      - in: query
+        name: expected_version
+        required: true
+        schema:
+          minimum: 1
+          title: Expected Version
+          type: integer
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Delete Admin Policy Zone
+      tags:
+      - Planner administration settings
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
+    patch:
+      operationId: plannerAdminUpdatePolicyZone
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      - in: path
+        name: zone_id
+        required: true
+        schema:
+          format: uuid
+          title: Zone Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyZoneUpdate'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPolicyZoneRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Update Admin Policy Zone
+      tags:
+      - Planner administration settings
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Only an interactive USER token with client_id rwms-admin-web,
+        global_role SYSTEM_ADMIN, audience rwms-services, and exactly the
+        business scope admin.manage after removing openid, profile and
+        offline_access is authorized. WMS_ADMIN is explicitly rejected.
+  parameters:
+    WarehouseId:
+      name: warehouse_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    VehicleId:
+      name: vehicle_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    TrailerId:
+      name: trailer_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    ExpectedVersion:
+      name: expected_version
+      in: query
+      required: true
+      schema: {$ref: '#/components/schemas/ExpectedVersion'}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: '^[\x21-\x7e]+$'
+  responses:
+    Unauthorized:
+      description: Missing, malformed, expired, or invalid Bearer token (AUTHENTICATION_REQUIRED).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Forbidden:
+      description: >-
+        ACCESS_DENIED: the caller is not rwms-admin-web SYSTEM_ADMIN, has a
+        business scope other than exactly admin.manage, or is WMS_ADMIN.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    NotFound:
+      description: >-
+        CATALOG resource, canonical warehouse, or local planner warehouse is
+        absent (for example VEHICLE_NOT_FOUND, TRAILER_NOT_FOUND,
+        CANONICAL_WAREHOUSE_NOT_FOUND, WAREHOUSE_NOT_CONFIGURED_FOR_LOGISTICS).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Conflict:
+      description: >-
+        A stable domain conflict such as CATALOG_VERSION_CONFLICT, duplicate
+        registration, idempotency payload mismatch,
+        CATALOG_RELOCATION_TARGET_UNCHANGED,
+        VEHICLE_HAS_ACTIVE_SHIFTS, VEHICLE_HAS_DEFAULT_TRAILER, or
+        TRAILER_IS_DEFAULT_FOR_VEHICLE.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    VehicleDeleteConflict:
+      description: >-
+        CATALOG_VERSION_CONFLICT, VEHICLE_HAS_ACTIVE_SHIFTS (with shift_id), or
+        VEHICLE_HAS_LINKED_SHIFTS (with shift_id). The latter covers inactive,
+        historical, and route-cycle-retained shifts.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    TrailerDeleteConflict:
+      description: >-
+        CATALOG_VERSION_CONFLICT or TRAILER_IS_DEFAULT_FOR_VEHICLE (with
+        vehicle_id).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    ValidationFailed:
+      description: >-
+        Request schema validation uses FastAPI's application/json validation
+        body; domain validation uses an RFC 9457 Problem Details body.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/RequestValidationError'}
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    DependencyFailure:
+      description: A required canonical RWMS dependency failed (5xx Problem Details).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    DependencyUnavailable:
+      description: A required planner dependency is unavailable (5xx Problem Details).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    MapProvider:
+      type: string
+      enum: [STANDARD, YANDEX]
+    AdminMapSettings:
+      type: object
+      additionalProperties: false
+      required: [version, provider, yandex_api_key_configured]
+      properties:
+        version: {type: integer, minimum: 1}
+        provider: {$ref: '#/components/schemas/MapProvider'}
+        yandex_api_key_configured: {type: boolean}
+    MapSettingsUpdate:
+      type: object
+      additionalProperties: false
+      required: [expected_version, provider]
+      properties:
+        expected_version: {type: integer, minimum: 1}
+        provider: {$ref: '#/components/schemas/MapProvider'}
+        yandex_api_key:
+          type: [string, 'null']
+          maxLength: 256
+          writeOnly: true
+          description: Omit, use null or leave blank to keep the saved JavaScript API key.
+    MapSettings:
+      type: object
+      additionalProperties: false
+      required: [version, provider, yandex_api_key]
+      properties:
+        version: {type: integer, minimum: 1}
+        provider: {$ref: '#/components/schemas/MapProvider'}
+        yandex_api_key:
+          type: [string, 'null']
+          description: Browser JavaScript API key for YANDEX; null for STANDARD.
+    Uuid:
+      type: string
+      format: uuid
+    ExpectedVersion:
+      type: integer
+      minimum: 1
+    NonBlankString:
+      type: string
+      minLength: 1
+    NullablePositiveInteger:
+      type: [integer, 'null']
+      minimum: 1
+    NullableString:
+      type: [string, 'null']
+    NullableBoolean:
+      type: [boolean, 'null']
+    VehicleLoadProfile:
+      type: object
+      additionalProperties: false
+      required: [configuration_type, max_actual_axle_load_kg]
+      properties:
+        configuration_type:
+          type: string
+          enum:
+            - EMPTY_TRUCK
+            - CARGO_ON_TRUCK
+            - EMPTY_COMBINATION
+            - CARGO_ON_TRUCK_WITH_TRAILER
+            - CARGO_ON_TRAILER_WITH_TRAILER
+            - TWO_CARGO_SPLIT
+        max_actual_axle_load_kg: {type: integer, minimum: 1}
+    VehicleCreate:
+      type: object
+      additionalProperties: false
+      required: [name, registration_number]
+      properties:
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        capacity: {type: integer, minimum: 1, maximum: 2, default: 2}
+        active: {type: boolean, default: true}
+        average_speed_city: {type: number, exclusiveMinimum: 0, default: 35}
+        average_speed_region: {type: number, exclusiveMinimum: 0, default: 65}
+        vehicle_type: {$ref: '#/components/schemas/NullableString'}
+        manufacturer: {$ref: '#/components/schemas/NullableString'}
+        model: {$ref: '#/components/schemas/NullableString'}
+        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        can_use_trailer: {$ref: '#/components/schemas/NullableBoolean'}
+        default_trailer_id:
+          type: [string, 'null']
+          format: uuid
+        combined_length_with_trailer_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_safety_margin_mm: {type: integer, minimum: 0, default: 0}
+        width_safety_margin_mm: {type: integer, minimum: 0, default: 0}
+        weight_safety_margin_kg: {type: integer, minimum: 0, default: 0}
+        notes: {type: string, default: ''}
+    VehiclePatch:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: {$ref: '#/components/schemas/ExpectedVersion'}
+        name:
+          type: [string, 'null']
+          minLength: 1
+        registration_number:
+          type: [string, 'null']
+          minLength: 1
+        capacity:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 2
+        active: {$ref: '#/components/schemas/NullableBoolean'}
+        average_speed_city:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+        average_speed_region:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+        vehicle_type: {$ref: '#/components/schemas/NullableString'}
+        manufacturer: {$ref: '#/components/schemas/NullableString'}
+        model: {$ref: '#/components/schemas/NullableString'}
+        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        can_use_trailer: {$ref: '#/components/schemas/NullableBoolean'}
+        default_trailer_id:
+          type: [string, 'null']
+          format: uuid
+        combined_length_with_trailer_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_safety_margin_mm:
+          type: [integer, 'null']
+          minimum: 0
+        width_safety_margin_mm:
+          type: [integer, 'null']
+          minimum: 0
+        weight_safety_margin_kg:
+          type: [integer, 'null']
+          minimum: 0
+        notes: {$ref: '#/components/schemas/NullableString'}
+    VehicleConfigurationCreate:
+      type: object
+      additionalProperties: false
+      required: [vehicle]
+      properties:
+        vehicle: {$ref: '#/components/schemas/VehicleCreate'}
+        load_profiles:
+          type: array
+          default: []
+          items: {$ref: '#/components/schemas/VehicleLoadProfile'}
+    VehicleConfigurationUpdate:
+      type: object
+      additionalProperties: false
+      required: [vehicle, load_profiles]
+      properties:
+        vehicle: {$ref: '#/components/schemas/VehiclePatch'}
+        load_profiles:
+          type: array
+          items: {$ref: '#/components/schemas/VehicleLoadProfile'}
+    TrailerCreate:
+      type: object
+      additionalProperties: false
+      required: [name, registration_number]
+      properties:
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        active: {type: boolean, default: true}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        notes: {type: string, default: ''}
+    TrailerPatch:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: {$ref: '#/components/schemas/ExpectedVersion'}
+        name:
+          type: [string, 'null']
+          minLength: 1
+        registration_number:
+          type: [string, 'null']
+          minLength: 1
+        active: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        notes: {$ref: '#/components/schemas/NullableString'}
+    CatalogRehomeRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version, target_warehouse_id]
+      properties:
+        expected_version: {$ref: '#/components/schemas/ExpectedVersion'}
+        target_warehouse_id: {$ref: '#/components/schemas/Uuid'}
+    AdminVehicle:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - warehouse_id
+        - name
+        - registration_number
+        - capacity
+        - active
+        - average_speed_city
+        - average_speed_region
+        - vehicle_type
+        - manufacturer
+        - model
+        - is_hgv
+        - tare_weight_kg
+        - max_gross_weight_kg
+        - length_mm
+        - width_mm
+        - height_mm
+        - axle_count
+        - max_axle_load_kg
+        - payload_capacity_kg
+        - platform_length_mm
+        - platform_width_mm
+        - platform_height_from_ground_mm
+        - max_platform_payload_kg
+        - max_cargo_length_mm
+        - max_cargo_width_mm
+        - max_cargo_height_mm
+        - max_cargo_weight_kg
+        - can_use_trailer
+        - default_trailer_id
+        - combined_length_with_trailer_mm
+        - coupling_length_mm
+        - height_safety_margin_mm
+        - width_safety_margin_mm
+        - weight_safety_margin_kg
+        - notes
+        - load_profiles
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        version: {$ref: '#/components/schemas/ExpectedVersion'}
+        warehouse_id: {$ref: '#/components/schemas/Uuid'}
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        capacity: {type: integer, minimum: 1, maximum: 2}
+        active: {type: boolean}
+        average_speed_city: {type: number, exclusiveMinimum: 0}
+        average_speed_region: {type: number, exclusiveMinimum: 0}
+        vehicle_type: {$ref: '#/components/schemas/NullableString'}
+        manufacturer: {$ref: '#/components/schemas/NullableString'}
+        model: {$ref: '#/components/schemas/NullableString'}
+        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        can_use_trailer: {$ref: '#/components/schemas/NullableBoolean'}
+        default_trailer_id:
+          type: [string, 'null']
+          format: uuid
+        combined_length_with_trailer_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_safety_margin_mm: {type: integer, minimum: 0}
+        width_safety_margin_mm: {type: integer, minimum: 0}
+        weight_safety_margin_kg: {type: integer, minimum: 0}
+        notes: {type: string}
+        load_profiles:
+          type: array
+          items: {$ref: '#/components/schemas/VehicleLoadProfile'}
+    AdminTrailer:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - warehouse_id
+        - name
+        - registration_number
+        - active
+        - tare_weight_kg
+        - max_gross_weight_kg
+        - length_mm
+        - width_mm
+        - height_mm
+        - platform_length_mm
+        - platform_width_mm
+        - platform_height_from_ground_mm
+        - max_platform_payload_kg
+        - payload_capacity_kg
+        - axle_count
+        - max_axle_load_kg
+        - max_cargo_length_mm
+        - max_cargo_width_mm
+        - max_cargo_height_mm
+        - max_cargo_weight_kg
+        - notes
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        version: {$ref: '#/components/schemas/ExpectedVersion'}
+        warehouse_id: {$ref: '#/components/schemas/Uuid'}
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        active: {type: boolean}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        notes: {type: string}
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [type, title, status, detail, instance, code]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string, format: uri-reference}
+        code: {type: string}
+        shift_id: {$ref: '#/components/schemas/Uuid'}
+        vehicle_id: {$ref: '#/components/schemas/Uuid'}
+        warehouse_id: {$ref: '#/components/schemas/Uuid'}
+    RequestValidationError:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    AdminPlanningSettingsRead:
+      additionalProperties: false
+      description: Current configuration and map context, without private warehouse identities.
+      properties:
+        capacity_publish_status:
+          enum:
+          - NOT_REQUESTED
+          - PENDING
+          - PUBLISHED
+          - FAILED
+          - REVIEW_REQUIRED
+          title: Capacity Publish Status
+          type: string
+        isochrone_tariffs:
+          items:
+            $ref: '#/components/schemas/IsochroneTariff'
+          title: Isochrone Tariffs
+          type: array
+        latitude:
+          title: Latitude
+          type: number
+        longitude:
+          title: Longitude
+          type: number
+        name:
+          title: Name
+          type: string
+        settings:
+          $ref: '#/components/schemas/PlanningSettings'
+        timezone:
+          title: Timezone
+          type: string
+        version:
+          title: Version
+          type: integer
+        warehouse_id:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      required:
+      - warehouse_id
+      - version
+      - name
+      - timezone
+      - latitude
+      - longitude
+      - settings
+      - isochrone_tariffs
+      - capacity_publish_status
+      title: AdminPlanningSettingsRead
+      type: object
+    AdminPlanningSettingsUpdate:
+      additionalProperties: false
+      description: Replace observed settings and the complete contiguous tariff ladder together.
+      properties:
+        expected_version:
+          minimum: 1.0
+          title: Expected Version
+          type: integer
+        isochrone_tariffs:
+          items:
+            $ref: '#/components/schemas/IsochroneTariff'
+          maxItems: 12
+          minItems: 1
+          title: Isochrone Tariffs
+          type: array
+        settings:
+          $ref: '#/components/schemas/PlanningSettings'
+      required:
+      - expected_version
+      - settings
+      - isochrone_tariffs
+      title: AdminPlanningSettingsUpdate
+      type: object
+    AdminPolicyZoneRead:
+      additionalProperties: false
+      description: Policy evidence whose warehouse_id is the canonical warehouse-service UUID.
+      properties:
+        color:
+          title: Color
+          type: string
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        delivery_price_rubles:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Delivery Price Rubles
+        geometry:
+          $ref: '#/components/schemas/GeoJsonMultiPolygon'
+        id:
+          format: uuid
+          title: Id
+          type: string
+        kind:
+          $ref: '#/components/schemas/PolicyZoneKind'
+        name:
+          title: Name
+          type: string
+        pickup_price_rubles:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Pickup Price Rubles
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        version:
+          title: Version
+          type: integer
+        warehouse_id:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      required:
+      - id
+      - warehouse_id
+      - name
+      - kind
+      - color
+      - geometry
+      - version
+      - delivery_price_rubles
+      - pickup_price_rubles
+      - created_at
+      - updated_at
+      title: AdminPolicyZoneRead
+      type: object
+    GeoJsonMultiPolygon:
+      additionalProperties: false
+      description: Validated WGS84 GeoJSON MultiPolygon used at every policy boundary.
+      properties:
+        coordinates:
+          $ref: '#/components/schemas/MultiPolygonCoordinates'
+        type:
+          const: MultiPolygon
+          title: Type
+          type: string
+      required:
+      - type
+      - coordinates
+      title: GeoJsonMultiPolygon
+      type: object
+    IsochroneTariff:
+      additionalProperties: false
+      description: One contiguous hourly road-travel price tier.
+      properties:
+        price_rubles:
+          minimum: 0.0
+          title: Price Rubles
+          type: integer
+        travel_minutes:
+          maximum: 720.0
+          minimum: 60.0
+          multipleOf: 60.0
+          title: Travel Minutes
+          type: integer
+      required:
+      - travel_minutes
+      - price_rubles
+      title: IsochroneTariff
+      type: object
+    Latitude:
+      maximum: 90.0
+      minimum: -90.0
+      type: number
+    LinearRing:
+      items:
+        $ref: '#/components/schemas/Position'
+      minItems: 4
+      type: array
+    Longitude:
+      maximum: 180.0
+      minimum: -180.0
+      type: number
+    MultiPolygonCoordinates:
+      items:
+        $ref: '#/components/schemas/PolygonCoordinates'
+      minItems: 1
+      type: array
+    PlanningSettings:
+      additionalProperties: false
+      description: Tunable deterministic planner and mock-routing settings.
+      properties:
+        additional_resource_activation_penalty:
+          default: 180
+          minimum: 0.0
+          title: Additional Resource Activation Penalty
+          type: number
+        allow_soft_overtime:
+          default: false
+          title: Allow Soft Overtime
+          type: boolean
+        city_speed_kmh:
+          default: 35
+          exclusiveMinimum: 0.0
+          title: City Speed Kmh
+          type: number
+        default_buffer_minutes:
+          default: 15
+          minimum: 0.0
+          title: Default Buffer Minutes
+          type: integer
+        default_cargo_height_mm:
+          default: 2400
+          exclusiveMinimum: 0.0
+          maximum: 10000.0
+          title: Default Cargo Height Mm
+          type: integer
+        default_cargo_length_mm:
+          default: 6000
+          exclusiveMinimum: 0.0
+          maximum: 30000.0
+          title: Default Cargo Length Mm
+          type: integer
+        default_cargo_weight_kg:
+          default: 1200
+          exclusiveMinimum: 0.0
+          maximum: 100000.0
+          title: Default Cargo Weight Kg
+          type: integer
+        default_cargo_width_mm:
+          default: 2400
+          exclusiveMinimum: 0.0
+          maximum: 10000.0
+          title: Default Cargo Width Mm
+          type: integer
+        default_depot_turnaround_minutes:
+          default: 15
+          minimum: 0.0
+          title: Default Depot Turnaround Minutes
+          type: integer
+        default_load_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Load Minutes
+          type: integer
+        default_pickup_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Pickup Minutes
+          type: integer
+        default_route_buffer_minutes:
+          default: 15
+          minimum: 0.0
+          title: Default Route Buffer Minutes
+          type: integer
+        default_service_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Service Minutes
+          type: integer
+        default_unload_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Unload Minutes
+          type: integer
+        deliveries_before_pickups:
+          const: true
+          default: true
+          title: Deliveries Before Pickups
+          type: boolean
+        detour_weight:
+          default: 1.2
+          minimum: 0.0
+          title: Detour Weight
+          type: number
+        driver_workload_weight:
+          default: 3
+          minimum: 0.0
+          title: Driver Workload Weight
+          type: number
+        empty_travel_weight:
+          default: 1.5
+          minimum: 0.0
+          title: Empty Travel Weight
+          type: number
+        evening_traffic_multiplier:
+          default: 1.2
+          minimum: 1.0
+          title: Evening Traffic Multiplier
+          type: number
+        last_available_date_penalty:
+          default: 10000
+          minimum: 0.0
+          title: Last Available Date Penalty
+          type: number
+        max_candidate_neighbors:
+          default: 8
+          minimum: 1.0
+          title: Max Candidate Neighbors
+          type: integer
+        max_customer_wait_minutes:
+          default: 120
+          minimum: 0.0
+          title: Max Customer Wait Minutes
+          type: integer
+        max_delivery_stops:
+          default: 2
+          maximum: 2.0
+          minimum: 1.0
+          title: Max Delivery Stops
+          type: integer
+        max_detour_minutes:
+          default: 35
+          minimum: 0.0
+          title: Max Detour Minutes
+          type: integer
+        max_detour_ratio:
+          default: 1.5
+          minimum: 0.0
+          title: Max Detour Ratio
+          type: number
+        max_local_search_iterations:
+          default: 100
+          minimum: 0.0
+          title: Max Local Search Iterations
+          type: integer
+        max_optimization_seconds:
+          default: 5
+          exclusiveMinimum: 0.0
+          title: Max Optimization Seconds
+          type: number
+        max_pickup_stops:
+          default: 2
+          maximum: 2.0
+          minimum: 1.0
+          title: Max Pickup Stops
+          type: integer
+        max_trace_events:
+          default: 2000
+          minimum: 0.0
+          title: Max Trace Events
+          type: integer
+        morning_traffic_multiplier:
+          default: 1.25
+          minimum: 1.0
+          title: Morning Traffic Multiplier
+          type: number
+        paired_delivery_bonus:
+          default: 20
+          minimum: 0.0
+          title: Paired Delivery Bonus
+          type: number
+        paired_pickup_bonus:
+          default: 15
+          minimum: 0.0
+          title: Paired Pickup Bonus
+          type: number
+        preferred_shift_utilization_percent:
+          default: 80
+          exclusiveMinimum: 0.0
+          maximum: 100.0
+          title: Preferred Shift Utilization Percent
+          type: number
+        region_speed_kmh:
+          default: 65
+          exclusiveMinimum: 0.0
+          title: Region Speed Kmh
+          type: number
+        road_factor:
+          default: 1.25
+          minimum: 1.0
+          title: Road Factor
+          type: number
+        soft_overtime_limit_minutes:
+          default: 0
+          minimum: 0.0
+          title: Soft Overtime Limit Minutes
+          type: integer
+        trace_sample_rate:
+          default: 1
+          minimum: 1.0
+          title: Trace Sample Rate
+          type: integer
+        unassigned_hard_task_penalty:
+          default: 100000
+          minimum: 0.0
+          title: Unassigned Hard Task Penalty
+          type: number
+        vehicle_capacity:
+          const: 2
+          default: 2
+          title: Vehicle Capacity
+          type: integer
+      title: PlanningSettings
+      type: object
+    PolicyZoneCreate:
+      additionalProperties: false
+      description: Create one exceptional policy without any ordinary delivery-region meaning.
+      properties:
+        color:
+          anyOf:
+          - pattern: ^#[0-9A-Fa-f]{6}$
+            type: string
+          - type: 'null'
+          title: Color
+        delivery_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Delivery Price Rubles
+        geometry:
+          $ref: '#/components/schemas/GeoJsonMultiPolygon'
+        kind:
+          $ref: '#/components/schemas/PolicyZoneKind'
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        pickup_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Pickup Price Rubles
+      required:
+      - name
+      - kind
+      - geometry
+      title: PolicyZoneCreate
+      type: object
+    PolicyZoneKind:
+      description: Supported exceptional policies layered over ordinary isochrone coverage.
+      enum:
+      - SPECIAL_PRICE
+      - FORBIDDEN
+      - NO_TRAILER
+      title: PolicyZoneKind
+      type: string
+    PolicyZoneUpdate:
+      additionalProperties: false
+      description: Optimistically fenced partial update for one exceptional policy.
+      properties:
+        color:
+          anyOf:
+          - pattern: ^#[0-9A-Fa-f]{6}$
+            type: string
+          - type: 'null'
+          title: Color
+        delivery_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Delivery Price Rubles
+        expected_version:
+          minimum: 1.0
+          title: Expected Version
+          type: integer
+        geometry:
+          anyOf:
+          - $ref: '#/components/schemas/GeoJsonMultiPolygon'
+          - type: 'null'
+        kind:
+          anyOf:
+          - $ref: '#/components/schemas/PolicyZoneKind'
+          - type: 'null'
+        name:
+          anyOf:
+          - maxLength: 200
+            minLength: 1
+            type: string
+          - type: 'null'
+          title: Name
+        pickup_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Pickup Price Rubles
+      required:
+      - expected_version
+      title: PolicyZoneUpdate
+      type: object
+    PolygonCoordinates:
+      items:
+        $ref: '#/components/schemas/LinearRing'
+      minItems: 1
+      type: array
+    Position:
+      maxItems: 2
+      minItems: 2
+      prefixItems:
+      - $ref: '#/components/schemas/Longitude'
+      - $ref: '#/components/schemas/Latitude'
+      type: array

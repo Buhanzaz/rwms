@@ -1,0 +1,87 @@
+server:
+  port: ${ANALYTICS_SERVICE_PORT:8093}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: analytics-service
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+spring:
+  application:
+    name: analytics-service
+  datasource:
+    url: ${ANALYTICS_DB_URL}
+    username: ${ANALYTICS_DB_USERNAME}
+    password: ${ANALYTICS_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  cloud:
+    function:
+      definition: analyticsKpiDayConsumer
+    stream:
+      dynamic-destinations:
+        - rwms.task-board.group-kpi-day.v1.analytics-projection-v1.dlt
+      bindings:
+        analyticsKpiDayConsumer-in-0:
+          destination: rwms.task-board.group-kpi-day.v1
+          group: analytics-projection-v1
+          consumer:
+            max-attempts: 1
+      kafka:
+        bindings:
+          analyticsKpiDayConsumer-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+        binder:
+          brokers: ${ANALYTICS_KAFKA_BROKERS:}
+          auto-create-topics: false
+          configuration:
+            acks: all
+            enable.idempotence: true
+            compression.type: zstd
+        default:
+          producer:
+            sync: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER}
+          audiences: ${AUTH_AUDIENCE:rwms-services}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${ANALYTICS_KAFKA_ENABLED:false}
+      publisher-enabled: false
+  analytics:
+    gap:
+      maximum-attempts: ${ANALYTICS_GAP_MAXIMUM_ATTEMPTS:4}
+    security:
+      dev-auth-bypass: ${ANALYTICS_DEV_AUTH_BYPASS:false}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN}

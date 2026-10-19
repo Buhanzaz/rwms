@@ -1,0 +1,217 @@
+package dev.buhanzaz.rwms.worker.feature.camera
+
+import com.google.common.truth.Truth.assertThat
+import java.io.File
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.JUnit4
+
+@RunWith(JUnit4::class)
+class CameraCaptureContractsTest {
+    @Test
+    fun `first camera permission request remains requestable`() {
+        assertThat(
+            cameraPermissionGate(
+                granted = false,
+                requestedAtLeastOnce = false,
+                shouldShowRationale = false,
+            ),
+        ).isEqualTo(CameraPermissionGate.REQUESTABLE)
+    }
+
+    @Test
+    fun `permanent camera denial opens settings path`() {
+        assertThat(
+            cameraPermissionGate(
+                granted = false,
+                requestedAtLeastOnce = true,
+                shouldShowRationale = false,
+            ),
+        ).isEqualTo(CameraPermissionGate.PERMANENTLY_DENIED)
+    }
+
+    @Test
+    fun `camera x successful callback accepts a nonempty jpeg target`() {
+        val target = File.createTempFile("rwms-camera", ".jpg")
+        try {
+            target.writeBytes(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()))
+
+            val result = validateCameraXSave(target)
+
+            assertThat(result).isInstanceOf(CameraXSaveResult.Saved::class.java)
+            assertThat((result as CameraXSaveResult.Saved).file).isEqualTo(target)
+        } finally {
+            target.delete()
+        }
+    }
+
+    @Test
+    fun `camera x successful callback rejects an empty output target`() {
+        val target = File.createTempFile("rwms-camera", ".jpg")
+        try {
+            val result = validateCameraXSave(target)
+
+            assertThat(result).isInstanceOf(CameraXSaveResult.Failed::class.java)
+            assertThat((result as CameraXSaveResult.Failed).message).contains("пустую")
+        } finally {
+            target.delete()
+        }
+    }
+
+    @Test
+    fun `camera x jpeg allocation is rejected before exceeding evidence limit`() {
+        assertThat(workerCameraJpegSizeAllowed(4)).isTrue()
+        assertThat(
+            workerCameraJpegSizeAllowed(15 * 1024 * 1024),
+        ).isTrue()
+        assertThat(
+            workerCameraJpegSizeAllowed(15 * 1024 * 1024 + 1),
+        ).isFalse()
+    }
+
+    @Test
+    fun `saved captures are consumed once before a route can be reopened`() {
+        val evidenceIds = listOf("evidence-1", "evidence-2")
+        val saved = CameraUiState(savedEvidenceIds = evidenceIds)
+
+        val consumed = saved.consumeSavedCaptures(evidenceIds)
+
+        assertThat(consumed.savedEvidenceIds).isEmpty()
+        assertThat(consumed.consumeSavedCaptures(evidenceIds)).isEqualTo(consumed)
+    }
+
+    @Test
+    fun `saved captures remain pending when a different result tries to consume them`() {
+        val saved = CameraUiState(savedEvidenceIds = listOf("evidence-1", "evidence-2"))
+
+        val unchanged = saved.consumeSavedCaptures(listOf("evidence-1"))
+
+        assertThat(unchanged).isEqualTo(saved)
+    }
+
+    @Test
+    fun `empty result cannot clear an unrelated camera error`() {
+        val failed = CameraUiState(error = "capture failed")
+
+        val unchanged = failed.consumeSavedCaptures(emptyList())
+
+        assertThat(unchanged).isEqualTo(failed)
+    }
+
+    @Test
+    fun `partial camera acknowledgement is consumed once without hiding its error`() {
+        val savedPath = File("saved.jpg").absolutePath
+        val partial = CameraUiState(
+            persistedCapturePaths = setOf(savedPath),
+            persistedCameraCaptureCount = 1,
+            error = "one capture failed",
+        )
+
+        val consumed = partial.consumePersistedCaptures(setOf(savedPath))
+
+        assertThat(consumed.persistedCapturePaths).isEmpty()
+        assertThat(consumed.persistedCameraCaptureCount).isEqualTo(1)
+        assertThat(consumed.error).isEqualTo("one capture failed")
+        assertThat(consumed.consumePersistedCaptures(setOf(savedPath))).isEqualTo(consumed)
+    }
+
+    @Test
+    fun `different camera acknowledgement cannot remove retry state`() {
+        val partial = CameraUiState(persistedCapturePaths = setOf(File("saved.jpg").absolutePath))
+
+        val unchanged = partial.consumePersistedCaptures(setOf(File("other.jpg").absolutePath))
+
+        assertThat(unchanged).isEqualTo(partial)
+    }
+
+    @Test
+    fun `persisted camera files are removed while failed files keep capture order`() {
+        val first = File("first.jpg")
+        val saved = File("saved.jpg")
+        val last = File("last.jpg")
+
+        val remaining = remainingWorkerCameraCaptures(
+            files = listOf(first, saved, last),
+            persistedPaths = setOf(saved.absolutePath),
+        )
+
+        assertThat(remaining).containsExactly(first, last).inOrder()
+    }
+
+    @Test
+    fun `partial camera failure reports the durable subset`() {
+        val message = cameraBatchFailureMessage(
+            savedCount = 2,
+            selectedCount = 4,
+            cause = IllegalStateException("HTTP 500: /var/private/evidence"),
+        )
+
+        assertThat(message).contains("Сохранено 2 из 4 фото")
+        assertThat(message).contains("Не удалось сохранить фотографию")
+        assertThat(message).doesNotContain("HTTP 500")
+        assertThat(message).doesNotContain("/var/private")
+    }
+
+    @Test
+    fun `camera failure without saved evidence returns its cause`() {
+        assertThat(
+            cameraBatchFailureMessage(
+                savedCount = 0,
+                selectedCount = 3,
+                cause = IllegalStateException("SQL constraint worker_evidence_sha256"),
+            ),
+        ).isEqualTo("Не удалось сохранить фотографию. Повторите снимок.")
+    }
+
+    @Test
+    fun `partial gallery failure reports the durable subset`() {
+        val message = galleryBatchFailureMessage(
+            savedCount = 2,
+            selectedCount = 4,
+            cause = IllegalArgumentException("java.lang.IllegalArgumentException at ContentResolver"),
+        )
+
+        assertThat(message).contains("Добавлено 2 из 4 фото")
+        assertThat(message).contains("Не удалось добавить фотографию")
+        assertThat(message).doesNotContain("java.lang")
+        assertThat(message).doesNotContain("ContentResolver")
+    }
+
+    @Test
+    fun `gallery failure without saved evidence returns its cause`() {
+        assertThat(
+            galleryBatchFailureMessage(
+                savedCount = 0,
+                selectedCount = 3,
+                cause = IllegalStateException("content://private/image"),
+            ),
+        ).isEqualTo(
+            "Не удалось добавить фотографию. " +
+                "Проверьте файл и повторите попытку.",
+        )
+    }
+
+    @Test
+    fun `camera sync transport failure is actionable without its endpoint`() {
+        val message = cameraSyncFailureReason(
+            IOException("Failed to connect to internal-gateway:8080"),
+        )
+
+        assertThat(message).contains("Проверьте сеть")
+        assertThat(message).doesNotContain("internal-gateway")
+    }
+
+    @Test
+    fun `camera presentation mapping propagates cancellation`() {
+        val cancellation = CancellationException("screen closed")
+
+        try {
+            cameraBatchFailureMessage(0, 1, cancellation)
+            throw AssertionError("CancellationException expected")
+        } catch (actual: CancellationException) {
+            assertThat(actual).isSameInstanceAs(cancellation)
+        }
+    }
+}

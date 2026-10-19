@@ -1,0 +1,439 @@
+package dev.buhanzaz.rwms.maintenance.service;
+
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
+
+import dev.buhanzaz.rwms.maintenance.domain.EstimateLine;
+import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
+import dev.buhanzaz.rwms.maintenance.domain.FurnitureAccountingMode;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEstimate;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
+import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
+import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
+import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
+import dev.buhanzaz.rwms.maintenance.repository.MaintenanceEstimateRepository;
+import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+import tools.jackson.databind.JsonNode;
+
+/**
+ * Stable estimate-lifecycle facade. Creation delegates to its cohesive owner; this type retains
+ * reads, revision, completion and amendment workflows plus their durable downstream intent.
+ */
+@Service
+public class MaintenanceEstimateUseCases {
+  private final MaintenanceEstimateRepository estimates;
+  private final MaintenanceRepairRepository repairs;
+  private final MaintenanceEventStore events;
+  private final MaintenanceIdempotencyStore idempotency;
+  private final MaintenanceReconciliationStore reconciliations;
+  private final WarehouseLifecycleOperations warehouseLifecycle;
+  private final MaintenanceCommandSupport commandSupport;
+  private final MaintenanceEstimateModelSupport estimateModelSupport;
+  private final MaintenanceEstimateSupport estimateSupport;
+  private final MaintenanceEstimateRevisionSupport estimateRevisionSupport;
+  private final MaintenanceEventPayloadSupport eventPayloadSupport;
+  private final MaintenanceMediaSupport mediaSupport;
+  private final MaintenanceRepairModelSupport repairModelSupport;
+  private final MaintenanceTaskBoardSupport taskBoardSupport;
+  private final MaintenanceEstimateCreationUseCases creation;
+
+  public MaintenanceEstimateUseCases(
+      MaintenanceEstimateRepository estimates,
+      MaintenanceRepairRepository repairs,
+      MaintenanceEventStore events,
+      MaintenanceIdempotencyStore idempotency,
+      MaintenanceReconciliationStore reconciliations,
+      WarehouseLifecycleOperations warehouseLifecycle,
+      MaintenanceCommandSupport commandSupport,
+      MaintenanceEstimateModelSupport estimateModelSupport,
+      MaintenanceEstimateSupport estimateSupport,
+      MaintenanceEstimateRevisionSupport estimateRevisionSupport,
+      MaintenanceEventPayloadSupport eventPayloadSupport,
+      MaintenanceMediaSupport mediaSupport,
+      MaintenanceRepairModelSupport repairModelSupport,
+      MaintenanceTaskBoardSupport taskBoardSupport,
+      MaintenanceEstimateCreationUseCases creation) {
+    this.estimates = estimates;
+    this.repairs = repairs;
+    this.events = events;
+    this.idempotency = idempotency;
+    this.reconciliations = reconciliations;
+    this.warehouseLifecycle = warehouseLifecycle;
+    this.commandSupport = commandSupport;
+    this.estimateModelSupport = estimateModelSupport;
+    this.estimateSupport = estimateSupport;
+    this.estimateRevisionSupport = estimateRevisionSupport;
+    this.eventPayloadSupport = eventPayloadSupport;
+    this.mediaSupport = mediaSupport;
+    this.repairModelSupport = repairModelSupport;
+    this.taskBoardSupport = taskBoardSupport;
+    this.creation = creation;
+  }
+
+  /** Selects and hydrates only the requested estimate board page. */
+  public PageResponse<EstimateResponse> estimates(
+      UUID warehouseId, int page, int size, EstimateState lifecycle, UUID rentalItemId) {
+    var selected = estimates.findPageByWarehouseId(
+        warehouseId, lifecycle, rentalItemId, PageRequest.of(page, size));
+    return new PageResponse<>(
+        estimateModelSupport.estimateResponses(selected.getContent()),
+        page,
+        size,
+        selected.getTotalElements());
+  }
+
+  public EstimateResponse estimate(UUID id) { return estimateModelSupport.estimateResponse(estimateModelSupport.requireEstimate(id)); }
+
+  public EstimateResponse estimate(UUID id, UUID warehouseId) {
+    return estimateModelSupport.estimateResponse(estimates.findByIdAndWarehouseId(id, warehouseId)
+        .orElseThrow(() -> new MaintenanceNotFoundException("Estimate not found")));
+  }
+
+  public CreateResult<EstimateResponse> createEstimate(
+      UUID subjectId, UUID key, CreateEstimateRequest request) {
+    return creation.createEstimate(subjectId, key, request);
+  }
+
+  /**
+   * Creates the maintenance-owned estimate paired with one immutable logistics return source.
+   *
+   * <p>The caller owns the concurrent source-key arbitration and transaction. Logistics has
+   * already validated these opaque references against the exact return-line media owner before
+   * invoking the maintenance boundary, so they are persisted without pretending that their source
+   * media owner was already the newly generated estimate ID.
+   */
+  public UUID createLogisticsReturnEstimate(
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      java.time.LocalDate dispatchDate,
+      List<MediaReferenceInput> sourceMediaReferences) {
+    return creation.createLogisticsReturnEstimate(
+        warehouseId,
+        rentalItemId,
+        rentalItemVersion,
+        dispatchDate,
+        sourceMediaReferences);
+  }
+
+  public EstimateResponse updateEstimate(UUID id, UpdateEstimateRequest request) {
+    commandSupport.requireNoCallerTransaction("update an estimate");
+    WarehouseAdmissionPreflight<Void> preflight =
+        commandSupport.inLocalTransaction(
+            "estimate update preflight", () -> updateEstimatePreflight(id, request));
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    estimateSupport.requireCustomRoutingReady(preflight.warehouseId(), request.plan());
+    return commandSupport.inLocalTransaction(
+        "estimate update finalization", () -> updateEstimateInTransaction(id, request));
+  }
+
+  private WarehouseAdmissionPreflight<Void> updateEstimatePreflight(
+      UUID id, UpdateEstimateRequest request) {
+    MaintenanceEstimate estimate = estimateModelSupport.requireEstimate(id);
+    commandSupport.assertVersion(estimate.getVersion(), request.expectedVersion());
+    estimateSupport.validateEstimatePlan(request.lines(), request.plan());
+    mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    return new WarehouseAdmissionPreflight<>(estimate.getWarehouseId(), null);
+  }
+
+  private EstimateResponse updateEstimateInTransaction(
+      UUID id, UpdateEstimateRequest request) {
+    MaintenanceEstimate estimate = estimateModelSupport.requireEstimate(id);
+    commandSupport.assertVersion(estimate.getVersion(), request.expectedVersion());
+    estimateSupport.validateEstimatePlan(request.lines(), request.plan());
+    mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    estimate.replaceMetadata(request.dispatchDate(), request.sourceParty(), estimate.getComment());
+    estimate.selectForceCapitalRepair(request.forceCapitalRepair());
+    estimate.replaceCoverMediaId(request.coverMediaId());
+    estimate.touchDraft();
+    estimateRevisionSupport.replaceEstimateRevision(estimate, request.lines(), request.plan(), null);
+    mediaSupport.replaceMedia("ESTIMATE", "MAINTENANCE_ESTIMATE", id, estimate.getWarehouseId(),
+        request.mediaReferences());
+    MaintenanceEstimate saved = estimates.saveAndFlush(estimate);
+    events.append(
+        MaintenanceAggregateType.ESTIMATE,
+        id,
+        request.expectedVersion(),
+        MaintenanceEventType.ESTIMATE_DRAFT_CHANGED,
+        eventPayloadSupport.estimateLocal(saved),
+        eventPayloadSupport.estimateFact(MaintenanceEventType.ESTIMATE_DRAFT_CHANGED, saved),
+        eventPayloadSupport.estimateSnapshot(saved));
+    mediaSupport.enqueueMediaOwnerProof(
+        "MAINTENANCE_ESTIMATE",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
+    return estimateModelSupport.estimateResponse(saved);
+  }
+
+  public CreateResult<EstimateCommandResult> completeEstimate(
+      UUID subjectId, UUID key, UUID id, CompleteEstimateRequest request) {
+    commandSupport.requireNoCallerTransaction("complete an estimate");
+    EstimateCompletionPreflight preflight =
+        commandSupport.inLocalTransaction(
+            "estimate completion preflight",
+            () -> completeEstimatePreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireOutgoing(preflight.warehouseId());
+    estimateSupport.requireCustomRoutingReady(preflight.warehouseId(), preflight.plan());
+    FurnitureAccountingMode furnitureAccountingMode =
+        resolveEstimateFurnitureAccounting(preflight, request);
+    return commandSupport.inLocalTransaction(
+        "estimate completion finalization",
+        () ->
+            completeEstimateInTransaction(
+                subjectId, key, id, request, furnitureAccountingMode));
+  }
+
+  private EstimateCompletionPreflight completeEstimatePreflight(
+      UUID subjectId, UUID key, UUID id, CompleteEstimateRequest request) {
+    String requestHash = commandSupport.hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.complete:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new EstimateCompletionPreflight(
+          new CreateResult<>(commandSupport.read(replay.get(), EstimateCommandResult.class), true),
+          null,
+          List.of(),
+          null,
+          List.of());
+    }
+    MaintenanceEstimate estimate = estimateModelSupport.requireEstimate(id);
+    commandSupport.assertVersion(estimate.getVersion(), request.expectedVersion());
+    return new EstimateCompletionPreflight(
+        null,
+        estimate.getWarehouseId(),
+        estimateSupport.storedPlanInputs(estimateModelSupport.currentPlan(estimate)),
+        estimate.getRentalItemId(),
+        estimateSupport.estimateFurnitureQuantities(estimate));
+  }
+
+  private FurnitureAccountingMode resolveEstimateFurnitureAccounting(
+      EstimateCompletionPreflight preflight, CompleteEstimateRequest request) {
+    return estimateSupport.resolveFurnitureAccounting(preflight, request);
+  }
+
+  private CreateResult<EstimateCommandResult> completeEstimateInTransaction(
+      UUID subjectId,
+      UUID key,
+      UUID id,
+      CompleteEstimateRequest request,
+      FurnitureAccountingMode furnitureAccountingMode) {
+    String requestHash = commandSupport.hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.complete:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(commandSupport.read(replay.get(), EstimateCommandResult.class), true);
+    }
+    MaintenanceEstimate estimate = estimateModelSupport.requireEstimate(id);
+    commandSupport.assertVersion(estimate.getVersion(), request.expectedVersion());
+    List<EstimateLine> lines = estimateModelSupport.currentLines(estimate);
+    MaintenanceRepair commandRepair = null;
+    if (lines.isEmpty()) {
+      estimate.complete(null);
+      reconciliations.enqueue(
+          null,
+          "ASSET",
+          "COMPLETE_EMPTY_ESTIMATE",
+          commandSupport.derived(key, "empty-asset"),
+          Map.of("estimateId", estimate.getId().toString()));
+    } else {
+      commandRepair =
+          estimateRevisionSupport.createEstimateRepair(
+              estimate,
+              estimateModelSupport.currentPlan(estimate),
+              request.priority(),
+              request.movementToRepair(),
+              request.logisticsPlanningMode(),
+              request.logisticsScheduledDate(),
+              furnitureAccountingMode);
+      estimate.complete(commandRepair.getId());
+      taskBoardSupport.enqueueRepairQueue(commandRepair, commandSupport.derived(key, "queue-repair"), false);
+    }
+    MaintenanceEstimate saved = estimates.saveAndFlush(estimate);
+    events.append(
+        MaintenanceAggregateType.ESTIMATE,
+        id,
+        request.expectedVersion(),
+        MaintenanceEventType.ESTIMATE_COMPLETED,
+        eventPayloadSupport.estimateLocal(saved),
+        eventPayloadSupport.estimateFact(MaintenanceEventType.ESTIMATE_COMPLETED, saved),
+        eventPayloadSupport.estimateSnapshot(saved));
+    EstimateCommandResult response = new EstimateCommandResult(
+        estimateModelSupport.estimateResponse(saved), commandRepair == null ? null : repairModelSupport.repairResponse(commandRepair),
+        commandRepair == null
+            ? new DeliverySnapshot(DeliveryState.RETRY_PENDING, 0, saved.getUpdatedAt())
+            : repairModelSupport.delivery(commandRepair));
+    idempotency.store(subjectId, "estimate.complete:" + id, key, requestHash, 200, response);
+    return new CreateResult<>(response, false);
+  }
+
+  public CreateResult<EstimateCommandResult> amendEstimate(
+      UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
+    commandSupport.requireNoCallerTransaction("amend an estimate");
+    WarehouseAdmissionPreflight<CreateResult<EstimateCommandResult>> preflight =
+        commandSupport.inLocalTransaction(
+            "estimate amendment preflight",
+            () -> amendEstimatePreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    estimateSupport.requireCustomRoutingReady(preflight.warehouseId(), request.plan());
+    return commandSupport.inLocalTransaction(
+        "estimate amendment finalization",
+        () -> amendEstimateInTransaction(subjectId, key, id, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<EstimateCommandResult>> amendEstimatePreflight(
+      UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
+    String requestHash = commandSupport.hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.amend:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(commandSupport.read(replay.get(), EstimateCommandResult.class), true));
+    }
+    MaintenanceEstimate estimate = estimateModelSupport.requireEstimate(id);
+    commandSupport.assertVersion(estimate.getVersion(), request.expectedVersion());
+    estimateSupport.validateEstimatePlan(request.lines(), request.plan());
+    mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    return new WarehouseAdmissionPreflight<>(estimate.getWarehouseId(), null);
+  }
+
+  private CreateResult<EstimateCommandResult> amendEstimateInTransaction(
+      UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
+    String requestHash = commandSupport.hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.amend:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(commandSupport.read(replay.get(), EstimateCommandResult.class), true);
+    }
+    MaintenanceEstimate estimate = estimateModelSupport.requireEstimate(id);
+    commandSupport.assertVersion(estimate.getVersion(), request.expectedVersion());
+    estimateSupport.validateEstimatePlan(request.lines(), request.plan());
+    mediaSupport.validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    MaintenanceRepair repair = estimate.getRepairId() == null ? null : repairModelSupport.requireRepair(estimate.getRepairId());
+    if (repair != null
+        && !estimateSupport.estimateFurnitureQuantities(estimate)
+            .equals(estimateSupport.estimateFurnitureQuantities(estimate, request.lines()))) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Furniture quantities cannot change after an estimate has created its repair");
+    }
+    List<MaintenanceEventStore.StreamRef> streams = new ArrayList<>();
+    streams.add(new MaintenanceEventStore.StreamRef(MaintenanceAggregateType.ESTIMATE, id));
+    MaintenanceRepair linkedRepair = repair;
+    if (repair != null) {
+      streams.add(new MaintenanceEventStore.StreamRef(MaintenanceAggregateType.REPAIR, repair.getId()));
+    }
+    Map<MaintenanceEventStore.StreamRef, Long> locked = events.lockStreams(streams);
+    commandSupport.assertVersion(locked.get(new MaintenanceEventStore.StreamRef(
+        MaintenanceAggregateType.ESTIMATE, id)), request.expectedVersion());
+    if (repair != null) {
+      if (request.expectedLinkedRepairVersion() == null) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_VALIDATION_FAILED", "repairExpectedVersion is required for a linked repair amendment");
+      }
+      commandSupport.assertVersion(locked.get(new MaintenanceEventStore.StreamRef(
+          MaintenanceAggregateType.REPAIR, repair.getId())), request.expectedLinkedRepairVersion());
+      commandSupport.assertVersion(repair.getVersion(), request.expectedLinkedRepairVersion());
+      repair.requirePreStartAmendment();
+      if (request.lines().isEmpty()) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_STATE_CONFLICT", "An estimate linked to a repair cannot be amended to zero lines");
+      }
+      List<EstimateLineResponse> canonicalLines =
+          estimateSupport.canonicalEstimateLines(estimate, request.lines());
+      RepairComplexitySnapshot amendedComplexity =
+          repairModelSupport.repairComplexityForLines(
+              repair.getWarehouseId(), canonicalLines, request.forceCapitalRepair());
+      boolean reclassifyingCapital =
+          repair.getExecutionState() == RepairExecutionState.QUEUED
+              && amendedComplexity.type() == RepairComplexity.CAPITAL;
+      repair.amendPreStartPlan();
+      repair.selectForceCapitalRepair(request.forceCapitalRepair());
+      if (reclassifyingCapital) {
+        repair.markReclassifyingCapital();
+      }
+      estimateRevisionSupport.replaceRepairStages(
+          repair, request.plan(), canonicalLines);
+      MaintenanceRepair repairSaved = repairs.saveAndFlush(repair);
+      linkedRepair = repairSaved;
+      if (repairSaved.getExecutionState() == RepairExecutionState.QUEUED) {
+        taskBoardSupport.enqueueRepairComplexityStatusSync(
+            repairSaved, commandSupport.derived(key, "repair-complexity-status"));
+        if (repairSaved.getTaskBoardVersion() != null && !reclassifyingCapital) {
+          reconciliations.enqueue(
+              repairSaved.getId(),
+              "TASK_BOARD",
+              "UPDATE_TASK",
+              commandSupport.derived(key, "task-update"),
+              Map.of("repairId", repairSaved.getId().toString()));
+        }
+      }
+      events.append(
+          MaintenanceAggregateType.REPAIR,
+          repair.getId(),
+          request.expectedLinkedRepairVersion(),
+          MaintenanceEventType.REPAIR_PLAN_CHANGED,
+          eventPayloadSupport.repairLocal(repairSaved),
+          eventPayloadSupport.repairFact(MaintenanceEventType.REPAIR_PLAN_CHANGED, repairSaved),
+          eventPayloadSupport.repairSnapshot(repairSaved));
+    } else {
+      if (request.expectedLinkedRepairVersion() != null) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_VERSION_CONFLICT",
+            "An estimate without a linked repair cannot accept a repair version");
+      }
+      if (request.lines().isEmpty()) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_VALIDATION_FAILED", "An empty completed estimate needs no empty amendment revision");
+      }
+    }
+    UUID linkedRepairId = linkedRepair == null ? null : linkedRepair.getId();
+    estimate.replaceCompletedMetadata(
+        request.dispatchDate(), request.sourceParty(), estimate.getComment(), linkedRepairId,
+        request.forceCapitalRepair());
+    estimate.replaceCoverMediaId(request.coverMediaId());
+    estimateRevisionSupport.replaceEstimateRevision(estimate, request.lines(), request.plan(), request.reason());
+    if (linkedRepair == null) {
+      linkedRepair = estimateRevisionSupport.createEstimateRepairFromPlan(estimate, request.plan());
+      estimate.linkCompletedRepair(linkedRepair.getId());
+      taskBoardSupport.enqueueRepairQueue(linkedRepair, commandSupport.derived(key, "queue-first-repair"), false);
+    }
+    mediaSupport.replaceMedia("ESTIMATE", "MAINTENANCE_ESTIMATE", id, estimate.getWarehouseId(),
+        request.mediaReferences());
+    MaintenanceEstimate saved = estimates.saveAndFlush(estimate);
+    events.append(
+        MaintenanceAggregateType.ESTIMATE,
+        id,
+        request.expectedVersion(),
+        MaintenanceEventType.ESTIMATE_AMENDED,
+        eventPayloadSupport.estimateLocal(saved),
+        eventPayloadSupport.estimateFact(MaintenanceEventType.ESTIMATE_AMENDED, saved),
+        eventPayloadSupport.estimateSnapshot(saved));
+    mediaSupport.enqueueMediaOwnerProof(
+        "MAINTENANCE_ESTIMATE",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
+    MaintenanceRepair linked = saved.getRepairId() == null ? null : repairModelSupport.requireRepair(saved.getRepairId());
+    EstimateCommandResult response = new EstimateCommandResult(
+        estimateModelSupport.estimateResponse(saved), linked == null ? null : repairModelSupport.repairResponse(linked),
+        linked == null ? new DeliverySnapshot(DeliveryState.DELIVERED, 0, saved.getUpdatedAt()) : repairModelSupport.delivery(linked));
+    idempotency.store(subjectId, "estimate.amend:" + id, key, requestHash, 201, response);
+    return new CreateResult<>(response, false);
+  }
+
+}

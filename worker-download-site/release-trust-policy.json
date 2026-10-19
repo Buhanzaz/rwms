@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "applicationId": "dev.buhanzaz.rwms.worker",
+  "artifactNamePrefix": "rwms-worker",
+  "productionSignerSha256Allowlist": [
+    "0db27de779f46fecee746a6af3f8cd69cf44eba9e253e44ebbc76fbf1da1c22a"
+  ],
+  "internalTestSignerSha256Allowlist": []
+}

@@ -1,0 +1,7 @@
+{
+  "formatVersion": 1,
+  "version": "0002",
+  "description": "Canonicalize auth warehouse identifiers",
+  "applySha256": "e4fadeb39b7947632923548875f1b311de2fad7810854b9696e32a4bd180aeb3",
+  "verifySha256": "937a5fa7cbf67827fe8c1ca09071cddc3e0170068f045be90d4c7b98653b77fd"
+}

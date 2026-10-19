@@ -1,6 +1,14 @@
 HELP.md
 .gradle
 build/
+node_modules/
+dist/
+panel/dist-admin/
+panel/dist-manager/
+**/__pycache__/
+*.log
+*.class
+local.properties
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -38,4 +46,50 @@ out/
 
 ### LLM ###
 .agents/
-AGENTS.md
+.codex/
+.codex-remote-attachments/
+skills-lock.json
+PROMPT_WMS_FULL_ANALYSIS_RWMS.md
+PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
+.rwms-migration-backups/
+
+### Playwright CLI ###
+/\.playwright-cli/
+/panel/.playwright-cli/
+/\.playwright-mcp/
+/services/auth-service/ui/.playwright-cli/
+/page-*.yml
+/tmp/
+
+### Gradle Kotlin DSL local state ###
+/build-logic/.kotlin/
+**/.kotlin/
+
+### Local Go build outputs ###
+/services/media-service/media-service
+
+### Local IDE and legacy runtime artifacts ###
+/amplicode.xml
+/old_db/**/target/
+*.lck
+/.playwright/
+/.claude/
+/output/
+/panel/output/
+/old_db/
+/WMS_ARCHITECTURE_KNOWLEDGE/
+
+### Local exports and standalone repositories ###
+/test.html
+/cabin-cad/
+/cabin_frame.glb
+/manager-download-site/
+/+4
+
+### Deployment secrets (examples remain versionable) ###
+.env
+.env.*
+*.env
+!.env.example
+!.env.*.example
+!*.env.example

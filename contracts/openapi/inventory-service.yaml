@@ -1,0 +1,2325 @@
+openapi: 3.1.0
+info:
+  title: RWMS Inventory Service API
+  version: 1.8.0
+  x-rwms-owner: inventory-service
+  x-rwms-stability: approved-stage-7
+  description: >-
+    Canonical Stage 7 warehouse-scoped inventory sessions, findings, immutable
+    completion statistics and independently retryable maintenance publication.
+    The server derives actor, warehouse-local business date, reconciliation,
+    validation and statistics. Browser persistence and client-calculated totals
+    are never authoritative.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+tags:
+  - { name: Sessions }
+  - { name: Findings }
+  - { name: Furniture }
+  - { name: Planning }
+  - { name: Completion }
+  - { name: Publication }
+  - { name: Statistics }
+  - { name: Operations }
+paths:
+  /api/inventory/v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listInventorySessions
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. Date/instant from values
+        are inclusive and to values are exclusive. ACTIVE and CANCELLED remain
+        visible here but never contribute completed statistics.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseId' }
+        - { $ref: '#/components/parameters/SessionLifecycleQuery' }
+        - { $ref: '#/components/parameters/BusinessDateFrom' }
+        - { $ref: '#/components/parameters/BusinessDateTo' }
+        - { $ref: '#/components/parameters/StartedFrom' }
+        - { $ref: '#/components/parameters/StartedTo' }
+        - { $ref: '#/components/parameters/TerminalFrom' }
+        - { $ref: '#/components/parameters/TerminalTo' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { $ref: '#/components/parameters/SessionSort' }
+      responses:
+        '200': { $ref: '#/components/responses/SessionPageResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Sessions]
+      operationId: startInventorySession
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. The service validates the
+        active warehouse, computes businessDate in its IANA timezone, copies one
+        stable asset capture and commits no partial local session.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartSessionRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/SessionDetailIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/active:
+    get:
+      tags: [Sessions]
+      operationId: getActiveInventorySession
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. The response carries an
+        ETag for both an active session and the no-active-session state; clients
+        can send If-None-Match to retain their local snapshot when it is current.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseId' }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
+      responses:
+        '200':
+          description: Warehouse-scoped active inventory session.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '204':
+          description: The warehouse has no active inventory session.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            ETag: { $ref: '#/components/headers/ETag' }
+        '304':
+          description: The active-session state has not changed.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            ETag: { $ref: '#/components/headers/ETag' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/inventory/v1/return-estimates/{estimateId}/inspection:
+    parameters:
+      - { name: estimateId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/WarehouseId' }
+    get:
+      tags: [Findings]
+      operationId: getReturnEstimateInspection
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW before any maintenance proof is read.
+        CONFIRMED is returned only from a persisted return-inspection receipt and includes that
+        receipt's inventory/finding identity plus the finding's cabin number, even after the
+        session is completed. Without a receipt, a proven return estimate is PENDING only while
+        the warehouse has an active session started no later than estimate completion; otherwise
+        the state is NOT_REQUIRED. A maintenance 404 also maps to NOT_REQUIRED because an ordinary
+        non-return estimate may be queried here. A proof for another warehouse remains hidden.
+      responses:
+        '200':
+          description: Receipt-backed or currently applicable return inspection status.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReturnEstimateInspection' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Sessions]
+      operationId: getInventorySession
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. Frozen statistics are
+        present only for COMPLETED sessions.
+      responses:
+        '200': { $ref: '#/components/responses/SessionDetailResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/inventory/v1/sessions/{inventoryId}/refresh:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    post:
+      tags: [Sessions]
+      operationId: refreshInventorySession
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The service rejects a
+        stale initial session revision before taking a dependency capture. It
+        then copies the fresh read-only asset capture outside the idempotent
+        local transaction, rechecks the same revision under the session lock,
+        reconciles the union of captured and currently active cabin identities
+        through the inventory membership journal, and invalidates only derived
+        furniture-review and final-plan state. Existing findings, inspection
+        evidence, media and membership history are retained.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshSessionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/SessionDetailIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/findings:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Findings]
+      operationId: listInventoryFindings
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. The active finding set
+        follows the live warehouse population: departures and transfers are
+        removed, while arrivals are added. Warehouse movements are retained
+        separately in SessionDetail.membershipMovements, excluding findings
+        created through inventory with origin ADDED_NEW or ADDED_USED.
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { $ref: '#/components/parameters/FindingSort' }
+      responses:
+        '200': { $ref: '#/components/responses/FindingPageResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/inventory/v1/sessions/{inventoryId}/registry-review:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    post:
+      tags: [Findings]
+      operationId: reviewInventoryRegistry
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Performs a read-only fresh
+        comparison of the exact active finding revision vector with current asset
+        and maintenance registry truth. It neither resolves conflicts nor changes
+        the inventory, repair cycle or logistics state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegistryReviewRequest' }
+      responses:
+        '200':
+          description: Fresh registry review for the exact requested revisions.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistryReview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/statistics-preview:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Statistics]
+      operationId: getInventoryPreliminaryStatistics
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Available only while the
+        session is ACTIVE in the CABINS review stage. Returns read-only preliminary
+        counters and money totals from persisted active findings and their active
+        frozen plan lines. It does not validate assets, require or change a furniture
+        review, create a completion preview or validation, or persist any state;
+        completion performs fresh validation and freezes the final statistics separately.
+      responses:
+        '200': { $ref: '#/components/responses/FrozenStatisticsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/planning-settings/{warehouseId}:
+    parameters:
+      - { $ref: '#/components/parameters/WarehousePathId' }
+    get:
+      tags: [Planning]
+      operationId: getInventoryPlanningSettings
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE, or the isolated rwms-admin-web
+        application token with its exact admin.manage scope and a SYSTEM_ADMIN or WMS_ADMIN
+        global role. Settings are inventory-owned holiday exceptions only; task-board owns the
+        effective object work schedule. They derive only future final-plan versions and do not
+        change frozen plan evidence.
+      responses:
+        '200':
+          description: Current inventory holiday exceptions and their optimistic revision.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/PlanningSettings' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Planning]
+      operationId: updateInventoryPlanningSettings
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE, or the isolated rwms-admin-web
+        application token with its exact admin.manage scope and a SYSTEM_ADMIN or WMS_ADMIN
+        global role. A matching settingsRevision is required; changing inventory holiday
+        exceptions marks the active session's draft final plan stale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanningSettingsUpdateRequest' }
+      responses:
+        '200':
+          description: Updated planning settings.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/PlanningSettings' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/final-plan/prepare:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Planning]
+      operationId: prepareInventoryFinalPlan
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The server creates one immutable ordered
+        final-plan version for every active finding, combines task-board's effective object work
+        calendar with inventory holidays, and preflights maintenance reconciliation candidates.
+        AUTO uses the earliest common working date without a daily capacity; MANUAL validates that
+        calendar and movement-before-repair ordering. The task-board calendar snapshot/version and
+        fingerprint fence this plan generation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrepareFinalPlanRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FinalPlanIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/final-plan:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Planning]
+      operationId: getInventoryFinalPlan
+      description: Requires USER, rwms.read and warehouse VIEW.
+      responses:
+        '200':
+          description: Current final-plan head, including stale evidence when replacement is required.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/FinalPlan' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Planning]
+      operationId: updateInventoryFinalPlan
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The request contains every active
+        finding in exact order. It always creates a new immutable final-plan version using the
+        common task-board object calendar plus inventory holidays, with no per-day capacity
+        throttle; MANUAL dates must be common working dates and preserve movement-before-repair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FinalPlanUpdateRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FinalPlanIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/number-resolutions:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Findings]
+      operationId: resolveInventoryNumber
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Resolution is global by
+        the server-derived identity match key and never moves or duplicates a
+        cross-warehouse/excluded asset.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResolveNumberRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/NumberResolutionIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/assets:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/FindingId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Findings]
+      operationId: createAndAttachInventoryAsset
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. The permanent remote
+        source is inventoryId:findingId and survives ordinary idempotency expiry.
+        Registers an isolated proposal with a stable asset identity, not a warehouse cabin.
+        Warehouse and rental availability do not include it before COMPLETED publication.
+        Completion materializes the inspected final status and passport atomically with
+        reviewed furniture; cancelling leaves the proposal isolated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFindingAssetRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FindingIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/inspection:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/FindingId' }
+    put:
+      tags: [Findings]
+      operationId: saveFindingInspection
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Reconciliation is
+        server-owned. WORK_STAGED commits only a maintenance-issued immutable
+        plan fingerprint; ABSENT and EXPLICIT_EMPTY observations remain distinct.
+        Each successful save rebases the inspection baseline to the freshly
+        validated registry truth, and the response is evaluated against that saved
+        revision. A later semantic registry change still produces a conflict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveInspectionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FindingResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/conflict-resolution:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/FindingId' }
+    put:
+      tags: [Findings]
+      operationId: resolveFindingRegistryConflict
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Available only after an
+        inspection and only while the exact current semantic registry snapshot
+        still conflicts with the inspection baseline. ACCEPT_REGISTRY rebases
+        the baseline and does not publish its previously staged work or
+        materials. KEEP_INSPECTION preserves the staged plan and records an
+        audited decision for that exact current snapshot without mutating
+        asset-service or maintenance-service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResolveConflictRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FindingResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/furniture-review/start:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Furniture]
+      operationId: startInventoryFurnitureReview
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Freezes the cabin-review
+        stage on one asset-service furniture snapshot only after the server-owned
+        return and shipment review reaches COMPLETED. Registry conflicts must be
+        resolved first. Only LOCAL cabins enter the furniture snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartFurnitureReviewRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FurnitureReviewIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/cabin-disposition-review:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Completion]
+      operationId: getInventoryCabinDispositionReview
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Returns or rebuilds the exact
+        server-owned return/missing candidate set from current active finding revisions.
+        Uninspected ADDED_NEW or ADDED_USED findings return 422
+        INVENTORY_NEW_CABIN_NOT_INSPECTED; an isolated proposal cannot become a missing
+        warehouse cabin or an automatic write-off.
+      responses:
+        '200': { $ref: '#/components/responses/CabinDispositionReviewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/inventory/v1/sessions/{inventoryId}/cabin-disposition-review/returns/confirm:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: confirmInventoryReturns
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The request must contain every
+        found-rented candidate exactly once at its current finding revision. This records
+        historical return facts only and creates neither acceptance nor estimates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmInventoryReturnsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CabinDispositionReviewIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/cabin-disposition-review/shipments/confirm:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: confirmInventoryShipments
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The request contains only missing
+        cabins known to have shipped. Every omitted missing candidate deterministically becomes
+        WRITE_OFF pending maintenance approval. Shipment furniture does not consume STOCK.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmInventoryShipmentsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CabinDispositionReviewIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/furniture-review:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Furniture]
+      operationId: getInventoryFurnitureReview
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. Returns the frozen asset
+        snapshot and the current absolute furniture observations.
+      responses:
+        '200': { $ref: '#/components/responses/FurnitureReviewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    put:
+      tags: [Furniture]
+      operationId: saveInventoryFurnitureReview
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. The request must contain
+        exactly every frozen equipment item and cabin; it updates only the
+        equipment observation facts and confirms the review.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveFurnitureReviewRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FurnitureReviewResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/inventory/v1/sessions/{inventoryId}/completion-preview:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: previewInventoryCompletion
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Advisory preview owns
+        fresh asset validation, exact statistics and acknowledgement hash; it
+        acquires no remote lease or validation token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompletionPreviewRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CompletionPreviewIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/complete:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: completeInventorySession
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Fresh validation must
+        equal the acknowledged preview. Completion is irreversible and local;
+        Kafka or maintenance outage cannot roll it back.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteSessionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/SessionDetailIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/cancel:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Completion]
+      operationId: cancelInventorySession
+      description: Requires USER, rwms.write and warehouse MANAGE. Only ACTIVE may cancel.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelSessionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/SessionDetailIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/publications:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Publication]
+      operationId: publishInventoryFindings
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Selected or all eligible
+        findings advance independently; partial success never reopens completion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PublishFindingsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicationBatchIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Publication]
+      operationId: recalculateInventoryOutcome
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Fences the submitted completed plan,
+        copies its exact reviewed entries and dispositions into one strictly newer immutable
+        final-plan generation, and durably requeues its downstream effects. An idempotency replay
+        returns the first response without creating another generation. LOCAL no-work means FREE,
+        LOCAL work means REPAIR or explicit CAPITAL_REPAIR, SHIPMENT means RENTED with frozen
+        furniture, and WRITE_OFF remains asset-less pending maintenance approval. Evidence, photos
+        and prior attempt history are retained.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecalculateInventoryOutcomeRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/OutcomeRecalculationAcceptedResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/retry:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/FindingId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Publication]
+      operationId: retryFindingPublication
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. TRANSIENT_FAILED retries;
+        BLOCKED requires an explicit reconcile reason/fingerprint. CLOSED_BLOCKED is terminal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RetryPublicationRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicationIntentIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/close:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/FindingId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Publication]
+      operationId: closeBlockedFindingPublication
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Only BLOCKED may become
+        terminal CLOSED_BLOCKED; a succeeded peer remains succeeded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClosePublicationRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicationIntentIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/statistics/sessions:
+    get:
+      tags: [Statistics]
+      operationId: listInventorySessionStatistics
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. Returns only persisted
+        COMPLETED-session statistics with inclusive-from/exclusive-to filters.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseId' }
+        - { $ref: '#/components/parameters/BusinessDateFrom' }
+        - { $ref: '#/components/parameters/BusinessDateTo' }
+        - { $ref: '#/components/parameters/StartedFrom' }
+        - { $ref: '#/components/parameters/StartedTo' }
+        - { $ref: '#/components/parameters/TerminalFrom' }
+        - { $ref: '#/components/parameters/TerminalTo' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { $ref: '#/components/parameters/StatisticsSort' }
+      responses:
+        '200': { $ref: '#/components/responses/StatisticsPageResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/inventory/v1/statistics/summary:
+    get:
+      tags: [Statistics]
+      operationId: summarizeInventoryStatistics
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. Each aggregate monetary
+        total is independently HALF_UP rounded from exact raw sums; rows are not
+        resummed to replace header totals.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseId' }
+        - { $ref: '#/components/parameters/BusinessDateFrom' }
+        - { $ref: '#/components/parameters/BusinessDateTo' }
+        - { $ref: '#/components/parameters/StartedFrom' }
+        - { $ref: '#/components/parameters/StartedTo' }
+        - { $ref: '#/components/parameters/TerminalFrom' }
+        - { $ref: '#/components/parameters/TerminalTo' }
+      responses:
+        '200': { $ref: '#/components/responses/StatisticsSummaryResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/inventory/v1/operations/outbox/{eventId}/requeue:
+    parameters:
+      - name: eventId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Operations]
+      operationId: requeueInventoryOutboxEvent
+      description: >-
+        Requires a USER with SYSTEM_ADMIN or WMS_ADMIN, plus rwms.write; the isolated admin
+        application may instead use its exact admin.manage scope. expectedReviewVersion fences
+        concurrent review. The immutable event identity, ordered aggregate head, envelope and
+        payload are validated before the same record returns to PENDING. Later aggregate versions
+        remain blocked until this head is published.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventingRecoveryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/EventingRecoveryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/inventory/v1/operations/dead-letters/{dltId}/requeue:
+    parameters:
+      - name: dltId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Operations]
+      operationId: requeueInventoryDeadLetter
+      description: >-
+        Requires a USER with SYSTEM_ADMIN or WMS_ADMIN, plus rwms.write; the isolated admin
+        application may instead use its exact admin.manage scope. expectedReviewVersion fences
+        concurrent review. A FAILED sanitized dead letter returns to PENDING only after its exact
+        three-field safe body and checksum are validated; checksum failures cannot be overridden.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventingRecoveryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/EventingRecoveryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+components:
+  securitySchemes:
+    bearerJwt: { type: http, scheme: bearer, bearerFormat: JWT }
+  headers:
+    X-Correlation-Id:
+      required: true
+      schema: { type: string, format: uuid }
+    ETag:
+      required: true
+      schema: { type: string }
+    Idempotency-Replayed:
+      schema: { type: string, const: 'true' }
+  parameters:
+    InventoryId: { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
+    FindingId: { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+    WarehousePathId: { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
+    WarehouseId: { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema: { type: string, minLength: 1, maxLength: 256 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID command identity retained for seven days; changed canonical payload conflicts.
+      schema: { type: string, format: uuid }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    SessionLifecycleQuery: { name: status, in: query, schema: { $ref: '#/components/schemas/SessionLifecycle' } }
+    BusinessDateFrom: { name: businessDateFrom, in: query, schema: { type: string, format: date } }
+    BusinessDateTo: { name: businessDateTo, in: query, description: Exclusive upper bound., schema: { type: string, format: date } }
+    StartedFrom: { name: startedFrom, in: query, schema: { type: string, format: date-time } }
+    StartedTo: { name: startedTo, in: query, description: Exclusive upper bound., schema: { type: string, format: date-time } }
+    TerminalFrom: { name: terminalFrom, in: query, schema: { type: string, format: date-time } }
+    TerminalTo: { name: terminalTo, in: query, description: Exclusive upper bound., schema: { type: string, format: date-time } }
+    SessionSort:
+      name: sort
+      in: query
+      schema: { type: string, enum: ["startedAt,asc", "startedAt,desc", "businessDate,asc", "businessDate,desc"], default: "startedAt,desc" }
+    FindingSort:
+      name: sort
+      in: query
+      schema: { type: string, enum: ["createdAt,asc", "createdAt,desc", "displayCanonicalNumber,asc", "displayCanonicalNumber,desc"], default: "createdAt,asc" }
+    StatisticsSort:
+      name: sort
+      in: query
+      schema: { type: string, enum: ["completedAt,asc", "completedAt,desc", "businessDate,asc", "businessDate,desc"], default: "completedAt,desc" }
+  responses:
+    EventingRecoveryResponse:
+      description: Stable receipt for the reviewed transition to PENDING.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/EventingRecoveryReceipt' } } }
+    SessionPageResponse:
+      description: Server-paged session history.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/SessionPage' } } }
+    SessionDetailResponse:
+      description: Warehouse-scoped session.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/SessionDetail' } } }
+    SessionDetailIdempotentResponse:
+      description: Idempotent session command result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/SessionDetail' } } }
+    FindingPageResponse:
+      description: Server-paged findings.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FindingPage' } } }
+    FindingResponse:
+      description: Finding with independent revision.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Finding' } } }
+    FindingIdempotentResponse:
+      description: Idempotent finding command result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Finding' } } }
+    NumberResolutionIdempotentResponse:
+      description: Global number resolution result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/NumberResolution' } } }
+    CompletionPreviewIdempotentResponse:
+      description: Server-owned completion preview.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/CompletionPreview' } } }
+    FinalPlanIdempotentResponse:
+      description: Server-owned immutable final-plan version.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FinalPlan' } } }
+    FurnitureReviewResponse:
+      description: Frozen furniture-review snapshot and absolute observations.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FurnitureReview' } } }
+    FurnitureReviewIdempotentResponse:
+      description: Idempotent furniture-review start result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FurnitureReview' } } }
+    CabinDispositionReviewResponse:
+      description: Current server-owned return and shipment review.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCabinDispositionReview' } } }
+    CabinDispositionReviewIdempotentResponse:
+      description: Idempotent return or shipment review result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCabinDispositionReview' } } }
+    PublicationBatchIdempotentResponse:
+      description: Per-finding publication results and derived aggregate state.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/PublicationBatch' } } }
+    OutcomeRecalculationAcceptedResponse:
+      description: Exact completed plan was durably queued for owner-by-owner recovery.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeRecalculation' } } }
+    PublicationIntentIdempotentResponse:
+      description: Publication intent result.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/PublicationIntent' } } }
+    StatisticsPageResponse:
+      description: Completed-session statistics page.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/StatisticsPage' } } }
+    StatisticsSummaryResponse:
+      description: Exact aggregate of matching completed sessions.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/StatisticsSummary' } } }
+    FrozenStatisticsResponse:
+      description: Read-only inventory statistics.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FrozenStatistics' } } }
+    BadRequest: { description: Malformed input or invalid/broad range., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+    Unauthorized: { description: Missing or invalid Bearer JWT., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+    Forbidden: { description: Principal, scope or warehouse grant is insufficient., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+    NotFound: { description: Warehouse-scoped resource is absent., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+    Conflict: { description: Version, idempotency, active-session, number, source, acknowledgement or publication conflict., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+    ValidationFailure: { description: Domain, plan, media, quantity, count or overflow validation failed., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+    DependencyUnavailable: { description: Mandatory dependency failed before local commit., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
+  schemas:
+    SessionLifecycle: { type: string, enum: [ACTIVE, COMPLETED, CANCELLED] }
+    InventoryReviewStage: { type: string, enum: [CABINS, FURNITURE] }
+    FurnitureReconciliationState: { type: string, enum: [NOT_REQUIRED, READY, PENDING, SUCCEEDED, TRANSIENT_FAILED, BLOCKED] }
+    FindingOrigin: { type: string, enum: [EXPECTED, ADDED_NEW, ADDED_USED, UNEXPECTED_EXISTING] }
+    InspectionSource: { type: string, enum: [INVENTORY, LOGISTICS_RETURN] }
+    RentalItemStatus:
+      type: string
+      enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, LOST, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
+    InventoryAssetOutcomeStatus: { type: string, enum: [FREE, REPAIR, CAPITAL_REPAIR, RENTED] }
+    InventoryCabinDispositionReviewPhase: { type: string, enum: [RETURNS, SHIPMENTS, COMPLETED] }
+    InventoryCabinDispositionKind: { type: string, enum: [LOCAL, SHIPMENT, WRITE_OFF, PRESERVE] }
+    InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
+    LogisticsPlanningMode: { type: string, enum: [AUTO, FIXED_DATE] }
+    ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
+    ConflictResolutionStrategy: { type: string, enum: [ACCEPT_REGISTRY, KEEP_INSPECTION] }
+    ObservationPresence: { type: string, enum: [ABSENT, EXPLICIT_EMPTY, PRESENT] }
+    PublicationState: { type: string, enum: [NOT_REQUIRED, READY, PENDING, SUCCEEDED, TRANSIENT_FAILED, BLOCKED, CLOSED_BLOCKED] }
+    MaintenancePublicationOutcome: { type: string, enum: [CREATED, SUCCESSOR, MATCHED] }
+    AggregatePublicationState: { type: string, enum: [NOT_REQUESTED, PENDING, PARTIAL, SUCCEEDED, BLOCKED] }
+    Sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    DecimalQuantity:
+      type: string
+      pattern: '^(?:0*[1-9][0-9]{0,13})(?:\.[0-9]{1,3})?$'
+      description: Positive exact decimal; at most 14 integer and 3 fractional digits.
+    NullableUuid: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+    NullableDateTime: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+    NullableSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
+    EventingRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedReviewVersion, reason]
+      properties:
+        expectedReviewVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    EventingRecoveryReceipt:
+      type: object
+      additionalProperties: false
+      required: [recordKind, recordId, status, reviewVersion, reviewedAt]
+      properties:
+        recordKind: { type: string, enum: [OUTBOX, DLT] }
+        recordId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING] }
+        reviewVersion: { type: integer, format: int64, minimum: 1 }
+        reviewedAt: { type: string, format: date-time }
+    StartSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId]
+      properties:
+        warehouseId: { type: string, format: uuid }
+    RefreshSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+    ResolveNumberRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, submittedNumber]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        submittedNumber: { type: string, minLength: 1, maxLength: 128 }
+    CreateFindingAssetRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedFindingRevision, sourceRevision, origin, displayCanonicalNumber, safePassport]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        origin: { type: string, enum: [ADDED_NEW, ADDED_USED] }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        safePassport: { type: object, additionalProperties: true }
+    PassportObservation:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: ABSENT }
+            value: { type: 'null' }
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: EXPLICIT_EMPTY }
+            value: { type: object, maxProperties: 0 }
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: PRESENT }
+            value: { type: object, minProperties: 1, additionalProperties: true }
+    EquipmentObservation:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: ABSENT }
+            value: { type: 'null' }
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: EXPLICIT_EMPTY }
+            value: { type: array, maxItems: 0 }
+        - type: object
+          additionalProperties: false
+          required: [presence, value]
+          properties:
+            presence: { type: string, const: PRESENT }
+            value:
+              type: array
+              minItems: 1
+              items: { type: object, additionalProperties: true }
+    MediaReference:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 0 }
+    InventoryQuantityInput:
+      type: string
+      pattern: '^(?:0|[1-9][0-9]{0,13})(?:\.[0-9]{1,3})?$'
+    CatalogInventoryPlanLineInput:
+      type: object
+      additionalProperties: false
+      required: [aggregationKind, catalogNodeId, routingCatalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
+      properties:
+        aggregationKind: { type: string, const: CATALOG }
+        catalogNodeId: { type: string, format: uuid }
+        routingCatalogNodeId: { type: 'null' }
+        description: { type: 'null' }
+        type: { type: 'null' }
+        unit: { type: 'null' }
+        quantity: { $ref: '#/components/schemas/InventoryQuantityInput' }
+        unitPriceMinor: { type: 'null' }
+        normativeMinutes: { type: 'null' }
+        groupComment: { oneOf: [{ type: string, minLength: 1, maxLength: 2000 }, { type: 'null' }] }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    ManualInventoryPlanLineInput:
+      type: object
+      additionalProperties: false
+      required: [aggregationKind, catalogNodeId, routingCatalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
+      properties:
+        aggregationKind: { type: string, const: MANUAL }
+        catalogNodeId: { type: 'null' }
+        routingCatalogNodeId:
+          description: >-
+            Active maintenance catalog node used only to freeze the line routing snapshot;
+            it does not make the manual line catalog-derived.
+          type: string
+          format: uuid
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        type: { type: string, enum: [WORK, MATERIAL] }
+        unit: { type: string, minLength: 1, maxLength: 32 }
+        quantity: { $ref: '#/components/schemas/InventoryQuantityInput' }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        normativeMinutes: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$' }
+        groupComment: { oneOf: [{ type: string, minLength: 1, maxLength: 2000 }, { type: 'null' }] }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    InventoryPlanLineInput:
+      oneOf:
+        - { $ref: '#/components/schemas/CatalogInventoryPlanLineInput' }
+        - { $ref: '#/components/schemas/ManualInventoryPlanLineInput' }
+    InventoryPlanStageSelection:
+      type: object
+      additionalProperties: false
+      required: [catalogNodeId, kind, order]
+      properties:
+        catalogNodeId: { type: string, format: uuid }
+        kind: { type: string, const: REPAIR_WORK }
+        order: { type: integer, minimum: 0 }
+    PlanSelection:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [mode, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+          properties:
+            mode: { type: string, const: AUTO }
+            priority: { type: integer, minimum: 1, maximum: 5 }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+            movementToRepair: { type: boolean }
+            forceCapitalRepair:
+              description: Explicit manager choice independent of catalog WORK flags; omitted means false.
+              type: boolean
+              default: false
+            logisticsPlanningMode:
+              oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
+            logisticsScheduledDate:
+              oneOf: [{ type: string, format: date }, { type: 'null' }]
+              description: Required only for inbound FIXED_DATE and null otherwise.
+            lines:
+              type: array
+              minItems: 1
+              maxItems: 2000
+              items: { $ref: '#/components/schemas/CatalogInventoryPlanLineInput' }
+            stages:
+              type: array
+              maxItems: 1000
+              items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
+          allOf:
+            - oneOf:
+                - properties:
+                    movementToRepair: { const: false }
+                    logisticsPlanningMode: { type: 'null' }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: AUTO }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: FIXED_DATE }
+                    logisticsScheduledDate: { type: string, format: date }
+            - not:
+                required: [movementToRepair, forceCapitalRepair]
+                properties:
+                  movementToRepair: { const: true }
+                  forceCapitalRepair: { const: true }
+        - type: object
+          additionalProperties: false
+          required: [mode, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+          properties:
+            mode: { type: string, const: MANUAL }
+            priority: { type: integer, minimum: 1, maximum: 5 }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+            movementToRepair: { type: boolean }
+            forceCapitalRepair:
+              description: Explicit manager choice independent of catalog WORK flags; omitted means false.
+              type: boolean
+              default: false
+            logisticsPlanningMode:
+              oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
+            logisticsScheduledDate:
+              oneOf: [{ type: string, format: date }, { type: 'null' }]
+              description: Required only for inbound FIXED_DATE and null otherwise.
+            lines:
+              type: array
+              minItems: 1
+              maxItems: 2000
+              items: { $ref: '#/components/schemas/InventoryPlanLineInput' }
+            stages:
+              type: array
+              minItems: 1
+              maxItems: 1000
+              items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
+          allOf:
+            - oneOf:
+                - properties:
+                    movementToRepair: { const: false }
+                    logisticsPlanningMode: { type: 'null' }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: AUTO }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: FIXED_DATE }
+                    logisticsScheduledDate: { type: string, format: date }
+            - not:
+                required: [movementToRepair, forceCapitalRepair]
+                properties:
+                  movementToRepair: { const: true }
+                  forceCapitalRepair: { const: true }
+    SaveInspectionRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [expectedSessionRevision, expectedFindingRevision, inspection, comment, passportObservation, equipmentObservation, media, coverMediaId, planSelection]
+          properties:
+            expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+            expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+            inspection: { type: string, const: READY }
+            comment: { type: string, maxLength: 2000 }
+            passportObservation: { $ref: '#/components/schemas/PassportObservation' }
+            equipmentObservation: { $ref: '#/components/schemas/EquipmentObservation' }
+            media: { type: array, maxItems: 100, uniqueItems: true, items: { $ref: '#/components/schemas/MediaReference' } }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+            planSelection: { type: 'null' }
+          allOf:
+            - if:
+                properties:
+                  media: { minItems: 1 }
+              then:
+                properties:
+                  coverMediaId: { type: string, format: uuid }
+              else:
+                properties:
+                  coverMediaId: { type: 'null' }
+        - type: object
+          additionalProperties: false
+          required: [expectedSessionRevision, expectedFindingRevision, inspection, comment, passportObservation, equipmentObservation, media, coverMediaId, planSelection]
+          properties:
+            expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+            expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+            inspection: { type: string, const: WORK_STAGED }
+            comment: { type: string, maxLength: 2000 }
+            passportObservation: { $ref: '#/components/schemas/PassportObservation' }
+            equipmentObservation: { $ref: '#/components/schemas/EquipmentObservation' }
+            media: { type: array, maxItems: 100, uniqueItems: true, items: { $ref: '#/components/schemas/MediaReference' } }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+            planSelection: { $ref: '#/components/schemas/PlanSelection' }
+          allOf:
+            - if:
+                properties:
+                  media: { minItems: 1 }
+              then:
+                properties:
+                  coverMediaId: { type: string, format: uuid }
+              else:
+                properties:
+                  coverMediaId: { type: 'null' }
+    ResolveConflictRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedFindingRevision, strategy, reason]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        strategy: { $ref: '#/components/schemas/ConflictResolutionStrategy' }
+        reason:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 2000 }
+            - { type: 'null' }
+    RevisionExpectation:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+    RegistryReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, findingRevisions]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        findingRevisions:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RevisionExpectation' }
+    StartFurnitureReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, findingRevisions]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        findingRevisions:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RevisionExpectation' }
+    InventoryShipmentFurnitureInput:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, catalogVersion, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        catalogVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    InventoryReturnInput:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, returnedOn, clientId, clientSnapshot]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        returnedOn: { type: string, format: date }
+        clientId: { type: string, format: uuid }
+        clientSnapshot: { type: string, minLength: 1, maxLength: 512 }
+    InventoryShipmentInput:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, departedOn, clientId, clientSnapshot, furniture]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        departedOn: { type: string, format: date }
+        clientId: { type: string, format: uuid }
+        clientSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        furniture:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/InventoryShipmentFurnitureInput' }
+    ConfirmInventoryReturnsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedReviewRevision, returns]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedReviewRevision: { type: integer, format: int64, minimum: 0 }
+        returns:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/InventoryReturnInput' }
+    ConfirmInventoryShipmentsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedReviewRevision, shipments]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedReviewRevision: { type: integer, format: int64, minimum: 0 }
+        shipments:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/InventoryShipmentInput' }
+    InventoryCabinDispositionCandidate:
+      type: object
+      additionalProperties: false
+      required: [findingId, findingRevision, assetId, assetVersion, cabinNumber, candidateKind, dispositionKind, dispositionDetails]
+      properties:
+        findingId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 0 }
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        candidateKind: { type: string, enum: [RETURN, MISSING] }
+        dispositionKind:
+          oneOf: [{ $ref: '#/components/schemas/InventoryCabinDispositionKind' }, { type: 'null' }]
+        dispositionDetails:
+          oneOf: [{ type: object, additionalProperties: true }, { type: 'null' }]
+    InventoryCabinDispositionReview:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, reviewRevision, phase, returnCandidates, missingCandidates]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        reviewRevision: { type: integer, format: int64, minimum: 0 }
+        phase: { $ref: '#/components/schemas/InventoryCabinDispositionReviewPhase' }
+        returnCandidates:
+          type: array
+          items: { $ref: '#/components/schemas/InventoryCabinDispositionCandidate' }
+        missingCandidates:
+          type: array
+          items: { $ref: '#/components/schemas/InventoryCabinDispositionCandidate' }
+    FurnitureReviewCabinInput:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, observedQuantity]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        observedQuantity: { type: integer, format: int64, minimum: 0 }
+    FurnitureReviewItemInput:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, catalogVersion, observedStockQuantity, cabins]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        catalogVersion: { type: integer, format: int64, minimum: 0 }
+        observedStockQuantity: { type: integer, format: int64, minimum: 0 }
+        cabins:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/FurnitureReviewCabinInput' }
+    SaveFurnitureReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, assetSnapshotSha256, items]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        assetSnapshotSha256: { $ref: '#/components/schemas/Sha256' }
+        items:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/FurnitureReviewItemInput' }
+    PlanningSettingsUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSettingsRevision, holidays]
+      properties:
+        expectedSettingsRevision: { type: integer, format: int64, minimum: 0 }
+        holidays:
+          type: array
+          maxItems: 3660
+          uniqueItems: true
+          items: { type: string, format: date }
+    PlanningSettings:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, settingsRevision, updatedAt, holidays]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        settingsRevision: { type: integer, format: int64, minimum: 0 }
+        updatedAt: { type: [string, 'null'], format: date-time }
+        holidays:
+          type: array
+          maxItems: 3660
+          uniqueItems: true
+          items: { type: string, format: date }
+    FinalPlanScheduleMode: { type: string, enum: [AUTO, MANUAL] }
+    FinalPlanState: { type: string, enum: [DRAFT, STALE, COMPLETED] }
+    FinalPlanTargetKind: { type: string, enum: [ESTIMATE, REPAIR] }
+    FinalPlanReconciliationStrategy: { type: string, enum: [CREATE, REPLACE, MERGE] }
+    PrepareFinalPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedSettingsRevision, movementScheduleMode, repairScheduleMode]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedSettingsRevision: { type: integer, format: int64, minimum: 0 }
+        movementScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        repairScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+    FinalPlanReconciliationDecision:
+      type: object
+      description: >-
+        CREATE is valid only when preflight has no active candidate. A selected existing target
+        must be active; a started active target requires MERGE (which maintenance applies by
+        subtracting the current work/material lines and creating a successor after current work).
+      additionalProperties: false
+      required: [strategy, selectedTargetKind, selectedTargetId]
+      properties:
+        strategy: { $ref: '#/components/schemas/FinalPlanReconciliationStrategy' }
+        selectedTargetKind:
+          oneOf: [{ $ref: '#/components/schemas/FinalPlanTargetKind' }, { type: 'null' }]
+        selectedTargetId: { $ref: '#/components/schemas/NullableUuid' }
+    FinalPlanEntryUpdate:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, reconciliationDecision]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        order: { type: integer, minimum: 0 }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        movementToRepair: { type: boolean }
+        movementScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        repairScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        reconciliationDecision:
+          oneOf: [{ $ref: '#/components/schemas/FinalPlanReconciliationDecision' }, { type: 'null' }]
+    FinalPlanUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedFinalPlanVersion, movementScheduleMode, repairScheduleMode, entries]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedFinalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        movementScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        repairScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        entries:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/FinalPlanEntryUpdate' }
+    FinalPlanSummary:
+      type: object
+      additionalProperties: false
+      required: [workLineCount, materialLineCount, grandTotalMinor]
+      properties:
+        workLineCount: { type: integer, minimum: 0 }
+        materialLineCount: { type: integer, minimum: 0 }
+        grandTotalMinor: { type: integer, format: int64, minimum: 0 }
+    FinalPlanCandidate:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary, forceCapitalRepair]
+      properties:
+        targetKind: { $ref: '#/components/schemas/FinalPlanTargetKind' }
+        targetId: { type: string, format: uuid }
+        estimateId: { $ref: '#/components/schemas/NullableUuid' }
+        repairId: { $ref: '#/components/schemas/NullableUuid' }
+        version: { type: integer, format: int64, minimum: 0 }
+        state: { type: string, minLength: 1, maxLength: 64 }
+        started: { type: boolean }
+        active: { type: boolean }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        sourceParty: { type: [string, 'null'], maxLength: 128 }
+        planFingerprintSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
+        planSummary: { $ref: '#/components/schemas/FinalPlanSummary' }
+        forceCapitalRepair: { type: boolean }
+    FinalPlanEntry:
+      type: object
+      additionalProperties: false
+      required: [findingId, findingRevision, planFingerprintSha256, hasWork, targetKind, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, collisionCandidates, reconciliationDecision, forceCapitalRepair, dispositionKind, dispositionDetails]
+      properties:
+        findingId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 0 }
+        planFingerprintSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
+        hasWork: { type: boolean }
+        targetKind: { oneOf: [{ $ref: '#/components/schemas/FinalPlanTargetKind' }, { type: 'null' }] }
+        order: { type: integer, minimum: 0 }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        movementToRepair: { type: boolean }
+        movementScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        repairScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        collisionCandidates: { type: array, items: { $ref: '#/components/schemas/FinalPlanCandidate' } }
+        reconciliationDecision:
+          oneOf: [{ $ref: '#/components/schemas/FinalPlanReconciliationDecision' }, { type: 'null' }]
+        forceCapitalRepair: { type: boolean }
+        dispositionKind: { $ref: '#/components/schemas/InventoryCabinDispositionKind' }
+        dispositionDetails: { type: object, additionalProperties: true }
+    FinalPlan:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, planningSettingsRevision, state, movementScheduleMode, repairScheduleMode, entries]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        planningSettingsRevision: { type: integer, format: int64, minimum: 0 }
+        state: { $ref: '#/components/schemas/FinalPlanState' }
+        movementScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        repairScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        entries: { type: array, items: { $ref: '#/components/schemas/FinalPlanEntry' } }
+    CompletionPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, finalPlanVersion, finalPlanSha256, findingRevisions]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        findingRevisions: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/RevisionExpectation' } }
+    CompleteSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, finalPlanVersion, finalPlanSha256, findingRevisions, acknowledgementSha256, validationSha256]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        findingRevisions: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/RevisionExpectation' } }
+        acknowledgementSha256: { $ref: '#/components/schemas/Sha256' }
+        validationSha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256' }]
+          description: >-
+            Digest of the business-significant registry validation facts from the preview.
+            A rental item's technical asset version is intentionally excluded.
+    CancelSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, reason]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    PublicationExpectation:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedPublicationRevision]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedPublicationRevision: { type: integer, format: int64, minimum: 0 }
+    PublishFindingsRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [expectedSessionRevision, allEligible, findings]
+          properties:
+            expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+            allEligible: { type: boolean, const: true }
+            findings: { type: array, maxItems: 0 }
+        - type: object
+          additionalProperties: false
+          required: [expectedSessionRevision, allEligible, findings]
+          properties:
+            expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+            allEligible: { type: boolean, const: false }
+            findings:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items: { $ref: '#/components/schemas/PublicationExpectation' }
+    RecalculateInventoryOutcomeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, finalPlanVersion, finalPlanSha256]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+    RetryPublicationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedPublicationRevision, reconcileReason, currentPreconditionSha256]
+      properties:
+        expectedPublicationRevision: { type: integer, format: int64, minimum: 0 }
+        reconcileReason: { oneOf: [{ type: string, minLength: 1, maxLength: 2000 }, { type: 'null' }] }
+        currentPreconditionSha256: { $ref: '#/components/schemas/NullableSha256' }
+    ClosePublicationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedPublicationRevision, reason]
+      properties:
+        expectedPublicationRevision: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    FurnitureReview:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, stage, assetSnapshotSha256, reviewSha256, confirmed, items]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        stage: { $ref: '#/components/schemas/InventoryReviewStage' }
+        assetSnapshotSha256: { $ref: '#/components/schemas/Sha256' }
+        reviewSha256: { $ref: '#/components/schemas/NullableSha256' }
+        confirmed: { type: boolean }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FurnitureReviewItem' }
+    FurnitureReviewItem:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, catalogVersion, equipmentName, currentStockQuantity, observedStockQuantity, cabins]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        catalogVersion: { type: integer, format: int64, minimum: 0 }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        currentStockQuantity: { type: integer, format: int64, minimum: 0 }
+        observedStockQuantity: { type: integer, format: int64, minimum: 0 }
+        cabins:
+          type: array
+          items: { $ref: '#/components/schemas/FurnitureReviewCabin' }
+    FurnitureReviewCabin:
+      type: object
+      additionalProperties: false
+      required: [findingId, assetId, cabinNumber, status, currentQuantity, observedQuantity]
+      properties:
+        findingId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        currentQuantity: { type: integer, format: int64, minimum: 0 }
+        observedQuantity: { type: integer, format: int64, minimum: 0 }
+    SessionSummary:
+      type: object
+      additionalProperties: false
+      required: [id, sessionRevision, warehouseId, warehouseVersion, warehouseTimeZone, author, businessDate, lifecycle, reviewStage, furnitureReconciliationState, expectedCount, findingCount, inspectedCount, startedAt, terminalAt, publicationState]
+      properties:
+        id: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseTimeZone: { type: string, minLength: 1, maxLength: 64 }
+        author: { $ref: '#/components/schemas/InventoryActor' }
+        businessDate: { type: string, format: date }
+        lifecycle: { $ref: '#/components/schemas/SessionLifecycle' }
+        reviewStage: { $ref: '#/components/schemas/InventoryReviewStage' }
+        furnitureReconciliationState: { $ref: '#/components/schemas/FurnitureReconciliationState' }
+        expectedCount: { type: integer, minimum: 0 }
+        findingCount: { type: integer, format: int64, minimum: 0 }
+        inspectedCount: { type: integer, format: int64, minimum: 0 }
+        startedAt: { type: string, format: date-time }
+        terminalAt: { $ref: '#/components/schemas/NullableDateTime' }
+        publicationState: { $ref: '#/components/schemas/AggregatePublicationState' }
+    SessionDetail:
+      type: object
+      additionalProperties: false
+      required: [id, sessionRevision, warehouseId, warehouseVersion, warehouseTimeZone, author, businessDate, lifecycle, reviewStage, furnitureReconciliationState, expectedCount, findingCount, inspectedCount, startedAt, terminalAt, publicationState, membershipMovements, statistics, cancellation]
+      properties:
+        id: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseTimeZone: { type: string, minLength: 1, maxLength: 64 }
+        author: { $ref: '#/components/schemas/InventoryActor' }
+        businessDate: { type: string, format: date }
+        lifecycle: { $ref: '#/components/schemas/SessionLifecycle' }
+        reviewStage: { $ref: '#/components/schemas/InventoryReviewStage' }
+        furnitureReconciliationState: { $ref: '#/components/schemas/FurnitureReconciliationState' }
+        expectedCount: { type: integer, minimum: 0 }
+        findingCount: { type: integer, format: int64, minimum: 0 }
+        inspectedCount: { type: integer, format: int64, minimum: 0 }
+        startedAt: { type: string, format: date-time }
+        terminalAt: { $ref: '#/components/schemas/NullableDateTime' }
+        publicationState: { $ref: '#/components/schemas/AggregatePublicationState' }
+        membershipMovements:
+          type: array
+          description: >-
+            Warehouse movements during this session, excluding every ADDED_NEW
+            and ADDED_USED finding created through inventory. Their registration
+            is not an arrival. Previously stored movements with these origins
+            are also excluded; the findings and inspection evidence are retained.
+          items: { $ref: '#/components/schemas/MembershipMovement' }
+        statistics: { oneOf: [{ $ref: '#/components/schemas/FrozenStatistics' }, { type: 'null' }] }
+        cancellation: { oneOf: [{ $ref: '#/components/schemas/CancellationAudit' }, { type: 'null' }] }
+    CancellationAudit:
+      type: object
+      additionalProperties: false
+      required: [reason, cancelledAt]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        cancelledAt: { type: string, format: date-time }
+    MembershipMovement:
+      type: object
+      additionalProperties: false
+      required: [id, type, assetId, displayCanonicalNumber, origin, fromWarehouseId, toWarehouseId, status, tenantSnapshot, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [DEPARTED, TRANSFERRED, ARRIVED] }
+        assetId: { type: string, format: uuid }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        origin: { $ref: '#/components/schemas/FindingOrigin' }
+        fromWarehouseId: { $ref: '#/components/schemas/NullableUuid' }
+        toWarehouseId: { $ref: '#/components/schemas/NullableUuid' }
+        status:
+          oneOf:
+            - { $ref: '#/components/schemas/RentalItemStatus' }
+            - { type: 'null' }
+        tenantSnapshot:
+          oneOf:
+            - { type: string, maxLength: 512 }
+            - { type: 'null' }
+        occurredAt: { type: string, format: date-time }
+    InventoryActor:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string, minLength: 1, maxLength: 255 }
+    Finding:
+      type: object
+      additionalProperties: false
+      required: [id, inventoryId, findingRevision, origin, inspection, inspectionSource, preserveOperationalState, reconciliation, assetId, assetVersion, displayCanonicalNumber, identityMatchKey, passportObservation, equipmentObservation, mutationState, planFingerprintSha256, comment, expectedSnapshot, inspectionBaseline, currentSnapshot, conflicts, conflictResolution, frozenPlan, coverMediaId, media, publication]
+      properties:
+        id: { type: string, format: uuid }
+        inventoryId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 0 }
+        origin: { $ref: '#/components/schemas/FindingOrigin' }
+        inspection: { $ref: '#/components/schemas/InspectionState' }
+        inspectionSource:
+          oneOf:
+            - { $ref: '#/components/schemas/InspectionSource' }
+            - { type: 'null' }
+        preserveOperationalState:
+          type: boolean
+          description: >-
+            This finding retains historical inventory evidence or a completed logistics return
+            inspection. Completion may publish inventory passport/photo observations, but never
+            changes live status, warehouse, leases, contents, logistics or maintenance work.
+        reconciliation: { $ref: '#/components/schemas/ReconciliationState' }
+        assetId: { $ref: '#/components/schemas/NullableUuid' }
+        assetVersion: { oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }] }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        identityMatchKey: { type: string, minLength: 1, maxLength: 128 }
+        passportObservation: { $ref: '#/components/schemas/PassportObservation' }
+        equipmentObservation: { $ref: '#/components/schemas/EquipmentObservation' }
+        mutationState: { type: string, enum: [IDLE, SOURCE_CREATE_PENDING, SOURCE_CREATED, PLAN_RESOLVE_PENDING] }
+        planFingerprintSha256: { $ref: '#/components/schemas/NullableSha256' }
+        comment: { type: string, maxLength: 2000 }
+        expectedSnapshot: { oneOf: [{ $ref: '#/components/schemas/ExpectedItemSnapshot' }, { type: 'null' }] }
+        inspectionBaseline: { oneOf: [{ $ref: '#/components/schemas/CurrentItemSnapshot' }, { type: 'null' }] }
+        currentSnapshot: { oneOf: [{ $ref: '#/components/schemas/CurrentItemSnapshot' }, { type: 'null' }] }
+        conflicts: { type: array, items: { $ref: '#/components/schemas/InventoryConflict' } }
+        conflictResolution: { oneOf: [{ $ref: '#/components/schemas/ConflictResolution' }, { type: 'null' }] }
+        frozenPlan: { oneOf: [{ $ref: '#/components/schemas/FrozenPlan' }, { type: 'null' }] }
+        coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+        media: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+        publication: { oneOf: [{ $ref: '#/components/schemas/PublicationIntent' }, { type: 'null' }] }
+    ExpectedItemSnapshot:
+      type: object
+      additionalProperties: false
+      required: [assetId, assetVersion, warehouseId, status, displayCanonicalNumber, tenantSnapshot, passportSnapshot, contentsSnapshot]
+      properties:
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        status: { type: string, enum: [BOOKED, REPAIR, WAITING_REPAIR_CHECK, CAPITAL_REPAIR, AFTER_RENT, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS] }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        passportSnapshot:
+          type: object
+          additionalProperties: true
+          description: Safe structured capture snapshot; the service rejects persisted JSON over 65536 characters.
+        contentsSnapshot:
+          description: Safe structured capture snapshot; the service rejects persisted JSON over 65536 characters.
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: array, items: {} }
+    CurrentItemSnapshot:
+      type: object
+      additionalProperties: false
+      required: [assetId, assetVersion, warehouseId, status, displayCanonicalNumber, tenantSnapshot, passportSnapshot, contentsSnapshot, repairsSnapshot]
+      properties:
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        passportSnapshot:
+          type: object
+          additionalProperties: true
+          description: Inventory-safe registry passport without local comments or notes.
+        contentsSnapshot:
+          type: array
+          items: {}
+          description: Inventory-safe cabin contents ordered by asset-service.
+        repairsSnapshot:
+          type: array
+          items: { $ref: '#/components/schemas/RepairRegistryFact' }
+          description: Active maintenance facts relevant to the inspected cabin.
+    RepairRegistryFact:
+      type: object
+      additionalProperties: false
+      required: [repairId, rootRepairId, origin, kind, executionState, acceptanceState, planFingerprintSha256]
+      properties:
+        repairId: { type: string, format: uuid }
+        rootRepairId: { type: string, format: uuid }
+        origin: { type: string, minLength: 1, maxLength: 48 }
+        kind: { type: string, minLength: 1, maxLength: 48 }
+        executionState: { type: string, minLength: 1, maxLength: 48 }
+        acceptanceState: { type: string, minLength: 1, maxLength: 48 }
+        planFingerprintSha256: { $ref: '#/components/schemas/Sha256' }
+    InventoryConflict:
+      type: object
+      additionalProperties: false
+      required: [code, message, expected, actual]
+      properties:
+        code:
+          type: string
+          enum: [WAREHOUSE_CHANGED, STATUS_CHANGED, TENANT_CHANGED, RENTED, WRITTEN_OFF, OTHER_WAREHOUSE, ADDED_AFTER_START, RENTAL_ITEM_MISSING, ASSET_CHANGED, NUMBER_CHANGED, PASSPORT_CHANGED, CONTENTS_CHANGED, REPAIRS_CHANGED]
+        message: { type: string, minLength: 1, maxLength: 1000 }
+        expected: { type: [string, 'null'] }
+        actual: { type: [string, 'null'] }
+    ConflictResolution:
+      type: object
+      additionalProperties: false
+      required: [strategy, reason, resolvedAt]
+      properties:
+        strategy: { $ref: '#/components/schemas/ConflictResolutionStrategy' }
+        reason:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 2000 }
+            - { type: 'null' }
+        resolvedAt: { type: string, format: date-time }
+    FrozenPlan:
+      type: object
+      additionalProperties: false
+      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages, forceCapitalRepair]
+      properties:
+        mode: { type: string, enum: [AUTO, MANUAL] }
+        catalogVersionId: { type: string, format: uuid }
+        fingerprintSha256: { $ref: '#/components/schemas/Sha256' }
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 5
+        coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+        movementToRepair: { type: boolean }
+        forceCapitalRepair: { type: boolean }
+        logisticsPlanningMode:
+          oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
+        logisticsScheduledDate:
+          oneOf: [{ type: string, format: date }, { type: 'null' }]
+          description: Required only for inbound FIXED_DATE and null otherwise.
+        lines: { type: array, minItems: 1, maxItems: 2000, items: { $ref: '#/components/schemas/FrozenPlanLine' } }
+        stages: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/FrozenPlanStage' } }
+      allOf:
+        - oneOf:
+            - properties:
+                movementToRepair: { const: false }
+                logisticsPlanningMode: { type: 'null' }
+                logisticsScheduledDate: { type: 'null' }
+            - properties:
+                movementToRepair: { const: true }
+                logisticsPlanningMode: { const: AUTO }
+                logisticsScheduledDate: { type: 'null' }
+            - properties:
+                movementToRepair: { const: true }
+                logisticsPlanningMode: { const: FIXED_DATE }
+                logisticsScheduledDate: { type: string, format: date }
+        - not:
+            required: [movementToRepair, forceCapitalRepair]
+            properties:
+              movementToRepair: { const: true }
+              forceCapitalRepair: { const: true }
+    FrozenPlanLine:
+      type: object
+      additionalProperties: false
+      required: [id, sourceKind, lineType, catalogVersionId, catalogNodeId, routingQueueId, routingQueueName, routingQueueType, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, groupComment, mediaReferences]
+      properties:
+        id: { type: string, format: uuid }
+        sourceKind: { type: string, enum: [CATALOG, MANUAL] }
+        lineType: { type: string, enum: [WORK, MATERIAL] }
+        catalogVersionId: { $ref: '#/components/schemas/NullableUuid' }
+        catalogNodeId: { $ref: '#/components/schemas/NullableUuid' }
+        routingQueueId:
+          $ref: '#/components/schemas/NullableUuid'
+          description: Frozen global queue identity for this exact line; null only for legacy snapshots without line routing evidence.
+        routingQueueName:
+          type: [string, 'null']
+          maxLength: 255
+        routingQueueType:
+          type: [string, 'null']
+          maxLength: 64
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        normalizedDescription: { oneOf: [{ type: string, minLength: 1, maxLength: 1000 }, { type: 'null' }] }
+        unit: { type: string, minLength: 1, maxLength: 32 }
+        quantity: { $ref: '#/components/schemas/DecimalQuantity' }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        normativeMinutes: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$' }
+        groupComment: { type: [string, 'null'], maxLength: 2000 }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    FrozenPlanStage:
+      type: object
+      additionalProperties: false
+      required: [id, order, catalogNodeId, catalogNodeName, kind, routingQueueId, routingQueueName, routingQueueType, photoRequired, normativeDurationMinutes]
+      properties:
+        id: { type: string, format: uuid }
+        order: { type: integer, minimum: 0 }
+        catalogNodeId: { type: string, format: uuid }
+        catalogNodeName: { type: string, minLength: 1, maxLength: 255 }
+        kind: { type: string, const: REPAIR_WORK }
+        routingQueueId: { type: string, format: uuid }
+        routingQueueName: { type: string, minLength: 1, maxLength: 255 }
+        routingQueueType: { type: string, minLength: 1, maxLength: 64 }
+        photoRequired: { type: boolean }
+        normativeDurationMinutes: { type: integer, minimum: 0 }
+    NumberResolution:
+      type: object
+      additionalProperties: false
+      required: [displayCanonicalNumber, identityMatchKey, outcome, finding]
+      properties:
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        identityMatchKey: { type: string, minLength: 1, maxLength: 128 }
+        outcome: { type: string, enum: [MATCHED, CROSS_WAREHOUSE_CONFLICT, EXCLUDED_STATUS_CONFLICT, MISSING_CONFLICT, NOT_FOUND] }
+        finding: { oneOf: [{ $ref: '#/components/schemas/Finding' }, { type: 'null' }] }
+    FrozenStatistics:
+      type: object
+      additionalProperties: false
+      required: [expectedCount, inspectedCount, missingCount, readyCount, withWorkCount, addedCount, unexpectedExistingCount, conflictCount, workLineCount, materialLineCount, workTotalMinor, materialTotalMinor, grandTotalMinor, roundingAdjustmentMinor, normativeMinutes, durationSeconds, aggregateLines]
+      properties:
+        expectedCount: { type: integer, minimum: 0 }
+        inspectedCount: { type: integer, minimum: 0 }
+        missingCount: { type: integer, minimum: 0 }
+        readyCount: { type: integer, minimum: 0 }
+        withWorkCount: { type: integer, minimum: 0 }
+        addedCount: { type: integer, minimum: 0 }
+        unexpectedExistingCount: { type: integer, minimum: 0 }
+        conflictCount: { type: integer, minimum: 0 }
+        workLineCount: { type: integer, minimum: 0 }
+        materialLineCount: { type: integer, minimum: 0 }
+        workTotalMinor: { type: integer, format: int64, minimum: 0 }
+        materialTotalMinor: { type: integer, format: int64, minimum: 0 }
+        grandTotalMinor: { type: integer, format: int64, minimum: 0 }
+        roundingAdjustmentMinor: { type: integer, minimum: -1, maximum: 1 }
+        normativeMinutes: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$' }
+        durationSeconds: { type: integer, format: int64, minimum: 0 }
+        aggregateLines: { type: array, items: { $ref: '#/components/schemas/StatisticsLine' } }
+    StatisticsLine:
+      type: object
+      additionalProperties: false
+      required: [aggregationKind, catalogVersionId, catalogNodeId, normalizedDescription, type, unit, unitPriceMinor, quantity, rowTotalMinor]
+      properties:
+        aggregationKind: { type: string, enum: [CATALOG, MANUAL] }
+        catalogVersionId: { $ref: '#/components/schemas/NullableUuid' }
+        catalogNodeId: { $ref: '#/components/schemas/NullableUuid' }
+        normalizedDescription: { oneOf: [{ type: string, minLength: 1, maxLength: 1000 }, { type: 'null' }] }
+        type: { type: string, enum: [WORK, MATERIAL] }
+        unit: { type: string, minLength: 1, maxLength: 32 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        quantity: { $ref: '#/components/schemas/DecimalQuantity' }
+        rowTotalMinor: { type: integer, format: int64, minimum: 0 }
+    CompletionRisk:
+      type: object
+      additionalProperties: false
+      required: [findingId, code]
+      properties:
+        findingId: { type: string, format: uuid }
+        code:
+          type: string
+          enum: [NOT_INSPECTED, MISSING, CONFLICT, ASSET_CHANGED, MEDIA_NOT_READY, PLAN_STALE, MUTATION_IN_FLIGHT]
+          description: >-
+            Active previews report semantic registry differences as CONFLICT.
+    CompletionPreview:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, findingRevisions, validationSha256, validatedAt, acknowledgementSha256, statistics, risks, validatedFindings]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        findingRevisions: { type: array, items: { $ref: '#/components/schemas/RevisionExpectation' } }
+        validationSha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256' }]
+          description: >-
+            Digest of business-significant registry facts. Technical asset versions are
+            excluded so a version-only update cannot invalidate completion.
+        validatedAt: { type: string, format: date-time }
+        acknowledgementSha256: { $ref: '#/components/schemas/Sha256' }
+        statistics: { $ref: '#/components/schemas/FrozenStatistics' }
+        risks: { type: array, items: { $ref: '#/components/schemas/CompletionRisk' } }
+        validatedFindings: { type: array, items: { $ref: '#/components/schemas/ValidatedFinding' } }
+    ValidatedFinding:
+      type: object
+      additionalProperties: false
+      required: [findingId, currentSnapshot, conflicts]
+      properties:
+        findingId: { type: string, format: uuid }
+        currentSnapshot: { oneOf: [{ $ref: '#/components/schemas/CurrentItemSnapshot' }, { type: 'null' }] }
+        conflicts: { type: array, items: { $ref: '#/components/schemas/InventoryConflict' } }
+    RegistryReview:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, findingRevisions, validatedAt, validatedFindings]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        findingRevisions:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RevisionExpectation' }
+        validatedAt: { type: string, format: date-time }
+        validatedFindings:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/ValidatedFinding' }
+    PublicationIntent:
+      type: object
+      additionalProperties: false
+      required: [id, inventoryId, findingId, publicationRevision, state, sourceRevision, attemptCount, finalPlanVersion, targetKind, targetId, maintenanceEstimateId, maintenanceRepairId, desiredAssetStatus, effectiveAssetVersion, assetOutcomeResult, maintenanceOutcome, maintenanceResult, failureCode]
+      properties:
+        id: { type: string, format: uuid }
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        publicationRevision: { type: integer, format: int64, minimum: 0 }
+        state: { $ref: '#/components/schemas/PublicationState' }
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        attemptCount: { type: integer, minimum: 0 }
+        finalPlanVersion: { oneOf: [{ type: integer, format: int64, minimum: 1 }, { type: 'null' }] }
+        targetKind: { oneOf: [{ $ref: '#/components/schemas/FinalPlanTargetKind' }, { type: 'null' }] }
+        targetId: { $ref: '#/components/schemas/NullableUuid' }
+        maintenanceEstimateId: { $ref: '#/components/schemas/NullableUuid' }
+        maintenanceRepairId: { $ref: '#/components/schemas/NullableUuid' }
+        desiredAssetStatus:
+          description: Null for a passport/photo-only PRESERVE outcome; no operational status is requested.
+          oneOf: [{ $ref: '#/components/schemas/InventoryAssetOutcomeStatus' }, { type: 'null' }]
+        effectiveAssetVersion:
+          oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
+        assetOutcomeResult:
+          description: Canonical response from asset-service; null before the asset outcome applies.
+          oneOf: [{ type: object, additionalProperties: true }, { type: 'null' }]
+        maintenanceOutcome:
+          oneOf: [{ $ref: '#/components/schemas/MaintenancePublicationOutcome' }, { type: 'null' }]
+        maintenanceResult:
+          description: >-
+            Immutable raw result returned by maintenance for a final-plan reconciliation,
+            including its source, outcome, delta and successor facts. Null for legacy repair
+            publications and before reconciliation succeeds.
+          oneOf: [{ type: object, additionalProperties: true }, { type: 'null' }]
+        failureCode: { oneOf: [{ type: string, minLength: 1, maxLength: 64 }, { type: 'null' }] }
+      allOf:
+        - if:
+            properties:
+              maintenanceOutcome: { type: 'null' }
+          then:
+            properties:
+              maintenanceResult: { type: 'null' }
+          else:
+            properties:
+              maintenanceResult: { type: object, additionalProperties: true }
+        - if:
+            properties:
+              maintenanceOutcome: { const: MATCHED }
+          then:
+            properties:
+              targetKind: { type: 'null' }
+              targetId: { type: 'null' }
+              maintenanceEstimateId: { type: 'null' }
+              maintenanceRepairId: { type: 'null' }
+        - if:
+            properties:
+              maintenanceOutcome: { const: SUCCESSOR }
+          then:
+            properties:
+              targetKind: { const: REPAIR }
+              targetId: { type: string, format: uuid }
+              maintenanceEstimateId: { type: 'null' }
+              maintenanceRepairId: { type: string, format: uuid }
+        - if:
+            properties:
+              maintenanceOutcome: { const: CREATED }
+          then:
+            oneOf:
+              - properties:
+                  targetKind: { const: ESTIMATE }
+                  targetId: { type: string, format: uuid }
+                  maintenanceEstimateId: { type: string, format: uuid }
+                  maintenanceRepairId: { type: 'null' }
+              - properties:
+                  targetKind: { const: REPAIR }
+                  targetId: { type: string, format: uuid }
+                  maintenanceEstimateId: { type: 'null' }
+                  maintenanceRepairId: { type: string, format: uuid }
+    PublicationBatch:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, aggregateState, intents]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        aggregateState: { $ref: '#/components/schemas/AggregatePublicationState' }
+        intents: { type: array, items: { $ref: '#/components/schemas/PublicationIntent' } }
+    OutcomeRecalculation:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, furnitureReconciliationState, createdPublicationCount, requeuedPublicationCount]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        furnitureReconciliationState: { $ref: '#/components/schemas/FurnitureReconciliationState' }
+        createdPublicationCount: { type: integer, minimum: 0 }
+        requeuedPublicationCount: { type: integer, minimum: 0 }
+    ReturnEstimateInspection:
+      type: object
+      additionalProperties: false
+      required: [state, inventoryId, findingId, cabinNumber]
+      properties:
+        state: { type: string, enum: [CONFIRMED, PENDING, NOT_REQUIRED] }
+        inventoryId: { $ref: '#/components/schemas/NullableUuid' }
+        findingId: { $ref: '#/components/schemas/NullableUuid' }
+        cabinNumber:
+          oneOf: [ { type: string, minLength: 1, maxLength: 128 }, { type: 'null' } ]
+      allOf:
+        - if:
+            properties:
+              state: { const: CONFIRMED }
+          then:
+            properties:
+              inventoryId: { type: string, format: uuid }
+              findingId: { type: string, format: uuid }
+              cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        - if:
+            properties:
+              state: { enum: [PENDING, NOT_REQUIRED] }
+          then:
+            properties:
+              inventoryId: { type: 'null' }
+              findingId: { type: 'null' }
+              cabinNumber: { type: 'null' }
+    SessionStatistics:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, warehouseId, businessDate, startedAt, completedAt, statistics]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        businessDate: { type: string, format: date }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        statistics: { $ref: '#/components/schemas/FrozenStatistics' }
+    StatisticsSummary:
+      type: object
+      additionalProperties: false
+      required: [sessionCount, statistics]
+      properties:
+        sessionCount: { type: integer, format: int64, minimum: 0 }
+        statistics: { $ref: '#/components/schemas/FrozenStatistics' }
+    PageMetadata:
+      type: object
+      additionalProperties: false
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 200 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    SessionPage:
+      type: object
+      additionalProperties: false
+      required: [content, page]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/SessionSummary' } }
+        page: { $ref: '#/components/schemas/PageMetadata' }
+    FindingPage:
+      type: object
+      additionalProperties: false
+      required: [content, page]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+        page: { $ref: '#/components/schemas/PageMetadata' }
+    StatisticsPage:
+      type: object
+      additionalProperties: false
+      required: [content, page]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/SessionStatistics' } }
+        page: { $ref: '#/components/schemas/PageMetadata' }
+    CorrelationContext:
+      type: object
+      additionalProperties: false
+      required: [correlationId, causationId]
+      properties:
+        correlationId: { type: string, format: uuid }
+        causationId: { $ref: '#/components/schemas/NullableUuid' }
+    FieldViolation:
+      type: object
+      additionalProperties: false
+      required: [field, code, message]
+      properties:
+        field: { type: string }
+        code: { type: string }
+        message: { type: string }
+    ProblemDetail:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, instance, code, violations, correlation]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        code:
+          type: string
+          enum:
+            - INVENTORY_VALIDATION_FAILED
+            - INVENTORY_NOT_FOUND
+            - INVENTORY_VERSION_CONFLICT
+            - INVENTORY_IDEMPOTENCY_CONFLICT
+            - INVENTORY_ACTIVE_SESSION_CONFLICT
+            - INVENTORY_NUMBER_CONFLICT
+            - INVENTORY_ACKNOWLEDGEMENT_STALE
+            - INVENTORY_FINAL_PLAN_INCOMPLETE
+            - INVENTORY_MEDIA_NOT_READY
+            - INVENTORY_PUBLICATION_CONFLICT
+            - INVENTORY_DEPENDENCY_UNAVAILABLE
+            - INVENTORY_FORBIDDEN
+        violations: { type: array, items: { $ref: '#/components/schemas/FieldViolation' } }
+        correlation: { $ref: '#/components/schemas/CorrelationContext' }

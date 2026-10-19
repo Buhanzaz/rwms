@@ -1,0 +1,237 @@
+server:
+  port: ${LOGISTICS_SERVICE_PORT:8090}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: logistics-service
+  tracing:
+    sampling:
+      probability: ${LOGISTICS_TRACING_SAMPLING_PROBABILITY:0.1}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+spring:
+  application:
+    name: logistics-service
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  datasource:
+    url: ${LOGISTICS_DB_URL}
+    username: ${LOGISTICS_DB_USERNAME}
+    password: ${LOGISTICS_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        type:
+          json_format_mapper: jackson3
+    open-in-view: false
+  cloud:
+    function:
+      definition: ${LOGISTICS_KAFKA_FUNCTION_DEFINITION:}
+    stream:
+      bindings:
+        logisticsInbound-in-0:
+          destination: rwms.asset.rental-item.v1,rwms.asset.operation-lease.v1,rwms.asset.equipment-allocation-hold.v1,rwms.task-board.board-task.v1,rwms.maintenance.estimate.v1,rwms.media.media.v1
+          group: logistics-service-inbox-v1
+          consumer:
+            max-attempts: 1
+            multiplex: true
+      kafka:
+        bindings:
+          logisticsInbound-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+              common-error-handler-bean-name: logisticsFailClosedConsumerErrorHandler
+        binder:
+          brokers: ${LOGISTICS_KAFKA_BROKERS:}
+          auto-create-topics: false
+          configuration:
+            acks: all
+            enable.idempotence: true
+            compression.type: zstd
+            request.timeout.ms: 5000
+            delivery.timeout.ms: 15000
+            max.block.ms: 5000
+            metadata.recovery.rebootstrap.trigger.ms: 1000
+        default:
+          producer:
+            sync: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER}
+          audiences: ${AUTH_AUDIENCE:rwms-services}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${LOGISTICS_KAFKA_ENABLED}
+      destinations:
+        - rwms.logistics.return.v1
+        - rwms.logistics.shipment.v1
+        - rwms.logistics.transfer.v1
+        - rwms.logistics.rental-inquiry.events.v1
+  logistics:
+    idempotency:
+      retention: ${LOGISTICS_IDEMPOTENCY_RETENTION:7d}
+    retention:
+      business-audit-proof: ${LOGISTICS_BUSINESS_AUDIT_PROOF_RETENTION:P1825D}
+      event-online: ${LOGISTICS_EVENT_ONLINE_RETENTION:P90D}
+      event-archive: ${LOGISTICS_EVENT_ARCHIVE_RETENTION:P365D}
+      gps-telemetry: ${LOGISTICS_GPS_TELEMETRY_RETENTION:P30D}
+      deletion-enabled: ${LOGISTICS_RETENTION_DELETION_ENABLED:false}
+    dependencies:
+      enabled: ${LOGISTICS_DEPENDENCIES_ENABLED:false}
+      token-uri: ${AUTH_TOKEN_URI:}
+      client-id: ${LOGISTICS_CLIENT_ID:logistics-service}
+      client-secret: ${LOGISTICS_CLIENT_SECRET:}
+      asset-base-url: ${ASSET_SERVICE_URL:}
+      warehouse-base-url: ${WAREHOUSE_SERVICE_URL:}
+      task-board-base-url: ${TASK_BOARD_SERVICE_URL:}
+      maintenance-base-url: ${MAINTENANCE_SERVICE_URL:}
+      media-base-url: ${MEDIA_SERVICE_URL:}
+      connect-timeout: ${LOGISTICS_DEPENDENCY_CONNECT_TIMEOUT:2s}
+      read-timeout: ${LOGISTICS_DEPENDENCY_READ_TIMEOUT:5s}
+    return-registration:
+      relay-enabled: ${LOGISTICS_RETURN_REGISTRATION_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_RETURN_REGISTRATION_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_RETURN_REGISTRATION_RELAY_INITIAL_DELAY:1s}
+    return-completion:
+      relay-enabled: ${LOGISTICS_RETURN_COMPLETION_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_RETURN_COMPLETION_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_RETURN_COMPLETION_RELAY_INITIAL_DELAY:1s}
+    shipment:
+      relay-enabled: ${LOGISTICS_SHIPMENT_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_SHIPMENT_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_SHIPMENT_RELAY_INITIAL_DELAY:1s}
+    transfer:
+      relay-enabled: ${LOGISTICS_TRANSFER_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_TRANSFER_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_TRANSFER_RELAY_INITIAL_DELAY:1s}
+      plan-workflow:
+        reservation-grace: ${LOGISTICS_TRANSFER_RESERVATION_GRACE:24h}
+        resource-arrival-buffer: ${LOGISTICS_TRANSFER_RESOURCE_ARRIVAL_BUFFER:40m}
+    owner-proof:
+      relay-enabled: ${LOGISTICS_OWNER_PROOF_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_OWNER_PROOF_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_OWNER_PROOF_RELAY_INITIAL_DELAY:1s}
+    external-attempt-claim:
+      lease-duration: ${LOGISTICS_EXTERNAL_ATTEMPT_LEASE_DURATION:30s}
+      maximum-page-size: ${LOGISTICS_EXTERNAL_ATTEMPT_MAXIMUM_PAGE_SIZE:64}
+      blocked-work-delay: ${LOGISTICS_EXTERNAL_ATTEMPT_BLOCKED_WORK_DELAY:1s}
+      worker-pool-size: ${LOGISTICS_EXTERNAL_ATTEMPT_WORKER_POOL_SIZE:8}
+      worker-queue-capacity: ${LOGISTICS_EXTERNAL_ATTEMPT_WORKER_QUEUE_CAPACITY:32}
+      worker-shutdown-timeout: ${LOGISTICS_EXTERNAL_ATTEMPT_WORKER_SHUTDOWN_TIMEOUT:30s}
+      return-registration-budget: ${LOGISTICS_RETURN_REGISTRATION_WORKER_BUDGET:4}
+      return-completion-budget: ${LOGISTICS_RETURN_COMPLETION_WORKER_BUDGET:4}
+      shipment-budget: ${LOGISTICS_SHIPMENT_WORKER_BUDGET:4}
+      transfer-budget: ${LOGISTICS_TRANSFER_WORKER_BUDGET:4}
+      media-owner-proof-budget: ${LOGISTICS_MEDIA_OWNER_PROOF_WORKER_BUDGET:2}
+    equipment-movement:
+      relay-enabled: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_INITIAL_DELAY:1s}
+    driver-queue:
+      relay-enabled: ${LOGISTICS_DRIVER_QUEUE_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_DRIVER_QUEUE_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_DRIVER_QUEUE_RELAY_INITIAL_DELAY:1s}
+    eventing:
+      outbox:
+        relay-delay: ${LOGISTICS_KAFKA_OUTBOX_RELAY_DELAY:1s}
+        lease-duration: ${LOGISTICS_KAFKA_OUTBOX_LEASE_DURATION:30s}
+        instance-id: ${LOGISTICS_KAFKA_INSTANCE_ID:logistics-service}
+    security:
+      dev-auth-bypass: ${LOGISTICS_DEV_AUTH_BYPASS:false}
+    client-presentation:
+      token-secret: ${CLIENT_PRESENTATION_TOKEN_SECRET:rwms-local-client-presentation-secret-change-me}
+    customer:
+      test-change-payment-enabled: ${LOGISTICS_CUSTOMER_TEST_CHANGE_PAYMENT_ENABLED:true}
+      booking-reconcile-delay: ${LOGISTICS_CUSTOMER_BOOKING_RECONCILE_DELAY:2s}
+      booking-reconcile-initial-delay: ${LOGISTICS_CUSTOMER_BOOKING_RECONCILE_INITIAL_DELAY:3s}
+      delivery:
+        enabled: ${LOGISTICS_CUSTOMER_DELIVERY_ENABLED:false}
+        depots:
+          - enabled: ${LOGISTICS_CUSTOMER_DEPOT_0_ENABLED:false}
+            warehouse-id: ${LOGISTICS_CUSTOMER_DEPOT_0_WAREHOUSE_ID:00000000-0000-0000-0000-000000000000}
+            depot-latitude: ${LOGISTICS_CUSTOMER_DEPOT_0_LATITUDE:0}
+            depot-longitude: ${LOGISTICS_CUSTOMER_DEPOT_0_LONGITUDE:0}
+          - enabled: ${LOGISTICS_CUSTOMER_DEPOT_1_ENABLED:false}
+            warehouse-id: ${LOGISTICS_CUSTOMER_DEPOT_1_WAREHOUSE_ID:00000000-0000-0000-0000-000000000000}
+            depot-latitude: ${LOGISTICS_CUSTOMER_DEPOT_1_LATITUDE:0}
+            depot-longitude: ${LOGISTICS_CUSTOMER_DEPOT_1_LONGITUDE:0}
+        valhalla-base-url: ${LOGISTICS_CUSTOMER_VALHALLA_URL:http://127.0.0.1:8002}
+        routing-data-version: ${LOGISTICS_CUSTOMER_ROUTING_DATA_VERSION:}
+        routing-cache-ttl: ${LOGISTICS_CUSTOMER_ROUTING_CACHE_TTL:15m}
+        connect-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_CONNECT_TIMEOUT:2s}
+        read-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_READ_TIMEOUT:10s}
+        depot-reload-minutes: ${LOGISTICS_CUSTOMER_DEPOT_RELOAD_MINUTES:30}
+        service-minutes: ${LOGISTICS_CUSTOMER_SERVICE_MINUTES:60}
+        earliest-delivery-days: ${LOGISTICS_CUSTOMER_EARLIEST_DELIVERY_DAYS:2}
+        booking-horizon-days: ${LOGISTICS_CUSTOMER_BOOKING_HORIZON_DAYS:14}
+        offer-lifetime: ${LOGISTICS_CUSTOMER_OFFER_LIFETIME:10m}
+        hold-lifetime: ${LOGISTICS_CUSTOMER_HOLD_LIFETIME:10m}
+        travel-time-multiplier: ${LOGISTICS_CUSTOMER_TRAVEL_TIME_MULTIPLIER:1.15}
+        fixed-travel-buffer-minutes: ${LOGISTICS_CUSTOMER_FIXED_TRAVEL_BUFFER_MINUTES:5}
+        driver-work-start: ${LOGISTICS_CUSTOMER_DRIVER_WORK_START:08:00}
+        customer-delivery-start: ${LOGISTICS_CUSTOMER_DELIVERY_START:09:00}
+        customer-delivery-end: ${LOGISTICS_CUSTOMER_DELIVERY_END:18:00}
+        driver-shift-end: ${LOGISTICS_CUSTOMER_DRIVER_SHIFT_END:20:00}
+        delivery-slot-minutes: ${LOGISTICS_CUSTOMER_DELIVERY_SLOT_MINUTES:180}
+        pickup-service-minutes: ${LOGISTICS_CUSTOMER_PICKUP_SERVICE_MINUTES:60}
+        warehouse-load-one-minutes: ${LOGISTICS_CUSTOMER_WAREHOUSE_LOAD_ONE_MINUTES:30}
+        warehouse-load-two-minutes: ${LOGISTICS_CUSTOMER_WAREHOUSE_LOAD_TWO_MINUTES:45}
+        warehouse-unload-minutes: ${LOGISTICS_CUSTOMER_WAREHOUSE_UNLOAD_MINUTES:30}
+        delivery-window-semantics: ${LOGISTICS_CUSTOMER_DELIVERY_WINDOW_SEMANTICS:START_WITHIN_SLOT}
+        pickup-policy: ${LOGISTICS_CUSTOMER_PICKUP_POLICY:RETURN_LEG_ONLY}
+        solo-truck-height-meters: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_HEIGHT_METERS:4.0}
+        solo-truck-width-meters: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_WIDTH_METERS:2.55}
+        solo-truck-length-meters: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_LENGTH_METERS:10.5}
+        solo-truck-weight-tons: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_WEIGHT_TONS:12.0}
+        solo-truck-axle-load-tons: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_AXLE_LOAD_TONS:11.5}
+        solo-truck-axle-count: ${LOGISTICS_CUSTOMER_SOLO_TRUCK_AXLE_COUNT:2}
+        truck-height-meters: ${LOGISTICS_CUSTOMER_TRUCK_HEIGHT_METERS:4.0}
+        truck-width-meters: ${LOGISTICS_CUSTOMER_TRUCK_WIDTH_METERS:2.55}
+        truck-length-meters: ${LOGISTICS_CUSTOMER_TRUCK_LENGTH_METERS:18.1}
+        truck-weight-tons: ${LOGISTICS_CUSTOMER_TRUCK_WEIGHT_TONS:18.0}
+        truck-axle-load-tons: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_LOAD_TONS:11.5}
+        truck-axle-count: ${LOGISTICS_CUSTOMER_TRUCK_AXLE_COUNT:4}
+    rental-inquiry:
+      outbox-enabled: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_ENABLED:true}
+      outbox-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_DELAY:1s}
+      outbox-initial-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_INITIAL_DELAY:1s}
+      max-attempts: ${LOGISTICS_RENTAL_INQUIRY_MAX_ATTEMPTS:4}
+      max-per-run: ${LOGISTICS_RENTAL_INQUIRY_MAX_PER_RUN:50}
+      booking-retry-delay: ${LOGISTICS_RENTAL_BOOKING_RETRY_DELAY:2s}
+      booking-retry-initial-delay: ${LOGISTICS_RENTAL_BOOKING_RETRY_INITIAL_DELAY:2s}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN}

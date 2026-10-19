@@ -1,0 +1,17 @@
+spring:
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  sql:
+    init:
+      mode: never
+
+rwms:
+  platform:
+    kafka:
+      enabled: false
+  security:
+    dev-auth-bypass: false

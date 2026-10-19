@@ -1,0 +1,26 @@
+spring:
+  cloud:
+    function:
+      definition: ""
+    stream:
+      function:
+        autodetect: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  sql:
+    init:
+      mode: never
+
+rwms:
+  platform:
+    kafka:
+      enabled: false
+  inventory:
+    dependencies:
+      enabled: false
+    security:
+      dev-auth-bypass: false

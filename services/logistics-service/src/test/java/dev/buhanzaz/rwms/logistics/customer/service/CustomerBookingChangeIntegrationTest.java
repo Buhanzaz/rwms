@@ -1,0 +1,1125 @@
+package dev.buhanzaz.rwms.logistics.customer.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerBookingChangeApiModels.CreateCustomerBookingChangeQuoteRequest;
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerBookingChangeApiModels.CustomerBookingChangeQuoteResponse;
+import dev.buhanzaz.rwms.logistics.customer.domain.*;
+import dev.buhanzaz.rwms.logistics.customer.repository.*;
+import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseIdentity;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderReceiptData;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderReceiptData.Kind;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderReceiptData.Line;
+import dev.buhanzaz.rwms.logistics.order.api.ConfirmOrderPaymentRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderPaymentResponse;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
+import java.math.BigDecimal;
+import java.time.*;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.databind.ObjectMapper;
+
+/** Real HTTP/JPA/PostgreSQL proof of quote recovery, per-manager access and atomic settlement. */
+@SpringBootTest(
+    properties = {
+      "spring.jpa.hibernate.ddl-auto=validate", "spring.task.scheduling.enabled=false",
+      "rwms.platform.kafka.enabled=false", "rwms.logistics.rental-inquiry.outbox-enabled=false",
+      "AUTH_ISSUER=http://auth.test", "PANEL_ORIGIN=http://panel.test"
+    })
+@ActiveProfiles("test")
+@Testcontainers
+@AutoConfigureMockMvc
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+class CustomerBookingChangeIntegrationTest {
+  @Container @ServiceConnection
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+  private static final Instant NOW = Instant.parse("2026-09-05T08:00:00Z");
+  private static final String ALERTS = "/api/logistics/v1/rental-booking-change-alerts";
+  private static final String PENDING = "/api/logistics/v1/rental-booking-change-quotes";
+  @Autowired MockMvc mvc;
+  @Autowired JdbcTemplate jdbc;
+  @Autowired ObjectMapper json;
+  @Autowired RentalOrderPaymentService initialPayments;
+
+  @Autowired
+  dev.buhanzaz.rwms.logistics.order.service.RentalOrderMutationRecoveryService
+      paymentExpiryRecovery;
+
+  @Autowired
+  dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationTokenService presentationTokens;
+
+  @Autowired CustomerRentalSessionStore checkoutSessions;
+  @Autowired CustomerCheckoutService customerCheckout;
+  @Autowired dev.buhanzaz.rwms.logistics.order.service.RentalOrderService rentalOrders;
+  @Autowired LogisticsTransactionLock paymentCommandLock;
+  @Autowired CustomerBookingChangeService service;
+  @Autowired CustomerBookingChangeChargeStore store;
+  @Autowired CustomerRentalSessionRepository sessions;
+  @Autowired CustomerDeliverySlotRepository slots;
+  @Autowired CustomerBookingMutationRepository mutations;
+  @Autowired CustomerBookingChangeChargeRepository charges;
+  @Autowired PlatformTransactionManager transactions;
+  @MockitoBean LogisticsDependencyGateway dependencies;
+  @MockitoBean Clock clock;
+  private UUID subject, client, inquiry, order, warehouse, booking, oldSlot;
+
+  @BeforeEach
+  void seedOwnedBooking() {
+    when(clock.instant()).thenReturn(NOW);
+    when(clock.getZone()).thenReturn(ZoneOffset.UTC);
+    jdbc.execute("truncate table order_client cascade");
+    jdbc.update(
+        "update rental_settings set version=7, late_change_notice_days=2,"
+            + " late_change_fee_mode='FIXED', late_change_fee_value=1500,"
+            + " rental_support_phone='+74951234567'");
+    subject = UUID.randomUUID();
+    client = UUID.randomUUID();
+    inquiry = UUID.randomUUID();
+    order = UUID.randomUUID();
+    warehouse = UUID.randomUUID();
+    booking = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,phone,normalized_phone,responsible_manager_id,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Test customer',?,?,?,?,'+79990000001','+79990000001',?,clock_timestamp(),clock_timestamp())
+        """,
+        client,
+        "test-" + client,
+        subject,
+        UUID.randomUUID(),
+        "a".repeat(64),
+        subject);
+    jdbc.update(
+        """
+        insert into rental_order(id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,creation_idempotency_key,
+          creation_request_sha256,created_at,updated_at)
+        values (?,0,?,'DRAFT',?,?,'Customer',?,'Customer','CUSTOMER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        order,
+        "ORD-%019d".formatted(order.getMostSignificantBits() & Long.MAX_VALUE),
+        client,
+        subject,
+        subject,
+        warehouse,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_inquiry(id,version,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,creation_idempotency_key,created_at,updated_at)
+        values (?,0,?,?,'Customer','CUSTOMER',?,'ACTIVE',?,clock_timestamp(),clock_timestamp())
+        """,
+        inquiry,
+        client,
+        subject,
+        warehouse,
+        UUID.randomUUID());
+    oldSlot = offer(LocalDate.of(2026, 9, 6)).getId();
+    jdbc.update(
+        "update customer_delivery_slot set state='CONFIRMED',booking_id=?,order_id=? where id=?",
+        booking,
+        order,
+        oldSlot);
+    UUID presentation = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into client_presentation(id,version,inquiry_id,revision,warehouse_id,state,expires_at,view_until,
+          booked_order_id,last_publish_idempotency_key,last_publish_request_sha256,created_at,updated_at,booked_at)
+        values (?,3,?,1,?,'BOOKED',clock_timestamp()+interval '1 hour',clock_timestamp()+interval '2 hours',
+          ?,?,?,clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        presentation,
+        inquiry,
+        warehouse,
+        order,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into presentation_booking(id,version,presentation_id,presentation_revision,idempotency_key,order_id,
+          selected_item_ids_json,state,attempt_count,created_at,updated_at,completed_at)
+        values (?,5,?,1,?,?,'["00000000-0000-0000-0000-000000000001"]'::jsonb,
+          'COMPLETED',1,clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        booking,
+        presentation,
+        UUID.randomUUID(),
+        order);
+    jdbc.update(
+        """
+        insert into customer_rental_session(id,version,inquiry_id,customer_subject_id,warehouse_id,state,
+          delivery_slot_id,booking_id,order_id,presentation_token,created_at,updated_at)
+        values (?,4,?,?,?,'BOOKED',?,?,?,'test-receipt',clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        inquiry,
+        subject,
+        warehouse,
+        oldSlot,
+        booking,
+        order);
+    when(dependencies.readWarehouseIdentity(warehouse))
+        .thenReturn(new WarehouseIdentity(warehouse, 3, true, "Europe/Moscow"));
+  }
+
+  @Test
+  void receiptDeliveryQuoteFollowsExactSelectedSlotBeforeSessionOrderAttachment() {
+    jdbc.update(
+        """
+        update customer_rental_session set state='ACTIVE',order_id=null,booking_id=null,presentation_token=null
+        where inquiry_id=?
+        """,
+        inquiry);
+    var quote = slots.findCheckoutQuoteByOrderId(order).orElseThrow();
+    assertThat(quote.getId()).isEqualTo(oldSlot);
+    assertThat(quote.getDeliveryPriceRubles()).isEqualTo(10_000L);
+    assertThat(slots.findCheckoutQuoteByOrderId(UUID.randomUUID())).isEmpty();
+    var anotherOffer = offer(quote.getDeliveryDate().plusDays(1));
+    assertThat(slots.findCheckoutQuoteByOrderId(order).orElseThrow().getId()).isEqualTo(oldSlot);
+    jdbc.update(
+        "update customer_rental_session set delivery_slot_id=? where inquiry_id=?",
+        anotherOffer.getId(),
+        inquiry);
+    assertThat(slots.findCheckoutQuoteByOrderId(order).orElseThrow().getId())
+        .isEqualTo(anotherOffer.getId());
+  }
+
+  @Test
+  void unattachedCheckoutCanReadItsOwnedPaymentAndWaitWithoutConsumingFailureAttempts() {
+    seedPendingInitialBill();
+    UUID key = UUID.randomUUID();
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',order_id=null,pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,recovery_next_attempt_at=? where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        NOW.atOffset(ZoneOffset.UTC),
+        inquiry);
+    jdbc.update("update customer_delivery_slot set state='CHECKOUT_PENDING' where id=?", oldSlot);
+    var identity = new CustomerIdentity(subject, "Customer");
+    assertThat(initialPayments.getCustomer(identity, booking).orderId()).isEqualTo(order);
+    var claim = checkoutSessions.claimPendingBooking(subject, inquiry).orElseThrow();
+    var waiting =
+        checkoutSessions.awaitPayment(subject, inquiry, booking, order, claim.leaseToken());
+    assertThat(waiting.getOrderId()).isEqualTo(order);
+    assertThat(waiting.getState()).isEqualTo(CustomerSessionState.CHECKOUT_PENDING);
+    assertThat(waiting.getRecoveryAttemptCount()).isZero();
+    assertThat(waiting.getRecoveryLeaseToken()).isNull();
+    assertThat(waiting.getRecoveryQuarantinedAt()).isNull();
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.CHECKOUT_PENDING);
+    assertThat(
+            initialPayments
+                .confirmCustomer(
+                    identity, booking, UUID.randomUUID(), new ConfirmOrderPaymentRequest(0L))
+                .state())
+        .isEqualTo(RentalOrderPaymentState.CONFIRMED);
+  }
+
+  @Test
+  void firstCustomerSaveIssuesDeliveryBillAndOnlyConfirmedPaymentCompletesCheckout() {
+    UUID cabin = UUID.randomUUID();
+    UUID key =
+        jdbc.queryForObject(
+            "select idempotency_key from presentation_booking where id=?", UUID.class, booking);
+    UUID presentation =
+        jdbc.queryForObject(
+            "select presentation_id from presentation_booking where id=?", UUID.class, booking);
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,presentation_token=?,recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        presentationTokens.issue(presentation, 1),
+        inquiry);
+    jdbc.update("update customer_delivery_slot set state='CHECKOUT_PENDING' where id=?", oldSlot);
+    jdbc.update(
+        "update rental_order set contact_phone='+79990000001',delivery_address='Москва' where id=?",
+        order);
+    jdbc.update(
+        "insert into rental_order_unit_term(id,version,order_id,rental_item_id,rental_months,pricing_version,monthly_price_rubles,created_at,updated_at)"
+            + " values (?,0,?,?,2,7,1000,clock_timestamp(),clock_timestamp())",
+        UUID.randomUUID(),
+        order,
+        cabin);
+    var timestamp = OffsetDateTime.now(ZoneOffset.UTC);
+    var unit =
+        new LogisticsDependencyGateway.OrderRentalItem(
+            cabin,
+            1,
+            warehouse,
+            "CUSTOMER-1",
+            "READY",
+            "CABIN",
+            "6×2.4",
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            timestamp,
+            timestamp);
+    var reservation =
+        new LogisticsDependencyGateway.OrderUnitReservation(
+            UUID.randomUUID(),
+            1,
+            order,
+            cabin,
+            warehouse,
+            "ACTIVE",
+            subject,
+            "CUSTOMER",
+            timestamp,
+            null,
+            false,
+            unit);
+    when(dependencies.readOrderUnits(order)).thenReturn(List.of(reservation));
+    when(dependencies.reserveOrderUnit(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq(order),
+            org.mockito.ArgumentMatchers.eq(warehouse),
+            org.mockito.ArgumentMatchers.eq(cabin),
+            org.mockito.ArgumentMatchers.eq(client),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.eq(subject),
+            org.mockito.ArgumentMatchers.eq("CUSTOMER")))
+        .thenReturn(reservation);
+    var identity = new CustomerIdentity(subject, "Customer");
+    var actor =
+        new dev.buhanzaz.rwms.logistics.customer.security.CustomerAuthorizer()
+            .orderActor(identity, warehouse);
+    rentalOrders.save(actor, order, 0L, UUID.randomUUID(), booking);
+    var payment = initialPayments.getCustomer(identity, booking);
+    assertThat(payment.state()).isEqualTo(RentalOrderPaymentState.PENDING);
+    assertThat(payment.receipt().totalRubles()).isEqualTo("12000");
+    assertThat(payment.receipt().deliveryIncluded()).isTrue();
+    assertThat(payment.expiresAt()).isEqualTo(payment.startedAt().plusMinutes(5));
+    var pending = customerCheckout.bookings(identity).getFirst();
+    assertThat(pending.status()).isEqualTo("PENDING");
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.CHECKOUT_PENDING);
+    assertThat(sessions.findByInquiryId(inquiry).orElseThrow().getRecoveryAttemptCount()).isZero();
+    initialPayments.confirmCustomer(
+        identity,
+        booking,
+        UUID.randomUUID(),
+        new ConfirmOrderPaymentRequest(payment.orderVersion()));
+    jdbc.update(
+        "update customer_rental_session set recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        inquiry);
+    var completed = customerCheckout.bookings(identity).getFirst();
+    assertThat(completed.status()).isEqualTo("COMPLETED");
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.CONFIRMED);
+    assertThat(sessions.findByInquiryId(inquiry).orElseThrow().getState())
+        .isEqualTo(CustomerSessionState.BOOKED);
+    assertThat(initialPayments.getCustomer(identity, booking).receipt())
+        .isEqualTo(payment.receipt());
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void paymentExpiryReleasesCapacityAndNotifiesExactlyOnceEvenAfterLostCheckoutResponse(
+      boolean lostResponse) {
+    seedPendingInitialBill();
+    UUID key =
+        jdbc.queryForObject(
+            "select idempotency_key from presentation_booking where id=?", UUID.class, booking);
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        inquiry);
+    jdbc.update("update customer_delivery_slot set state='CHECKOUT_PENDING' where id=?", oldSlot);
+    if (lostResponse) {
+      jdbc.update(
+          "update customer_rental_session set booking_id=null,order_id=null,presentation_token=null,recovery_next_attempt_at=null where inquiry_id=?",
+          inquiry);
+      jdbc.update(
+          "update customer_delivery_slot set booking_id=?,order_id=null where id=?", key, oldSlot);
+    }
+    jdbc.update(
+        "update rental_order set payment_started_at=current_timestamp-interval '6 minutes',"
+            + " payment_expires_at=current_timestamp-interval '1 minute' where id=?",
+        order);
+    var unrelated = offer(LocalDate.of(2026, 9, 7));
+    paymentExpiryRecovery.recoverPending();
+    assertThat(jdbc.queryForMap("select payment_state,status from rental_order where id=?", order))
+        .containsEntry("payment_state", "EXPIRED")
+        .containsEntry("status", "CANCELLED");
+    var ended = sessions.findByInquiryId(inquiry).orElseThrow();
+    assertThat(ended.getState()).isEqualTo(CustomerSessionState.CANCELLED);
+    assertThat(ended.getBookingId()).isEqualTo(booking);
+    assertThat(ended.getOrderId()).isEqualTo(order);
+    assertThat(ended.getRecoveryNextAttemptAt()).isNull();
+    if (lostResponse) {
+      var proof = presentationTokens.verify(ended.getPresentationToken());
+      assertThat(proof.presentationId())
+          .isEqualTo(
+              jdbc.queryForObject(
+                  "select presentation_id from presentation_booking where id=?",
+                  UUID.class,
+                  booking));
+    }
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.RELEASED);
+    assertThat(slots.findById(unrelated.getId()).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.OFFERED);
+    assertThat(
+            jdbc.queryForMap(
+                "select customer_subject_id,booking_id,kind,read_at from customer_notification where order_id=?",
+                order))
+        .containsEntry("customer_subject_id", subject)
+        .containsEntry("booking_id", booking)
+        .containsEntry("kind", "PAYMENT_EXPIRED")
+        .containsEntry("read_at", null);
+    paymentExpiryRecovery.recoverPending();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_notification where order_id=?",
+                Integer.class,
+                order))
+        .isEqualTo(1);
+    assertThat(checkoutSessions.claimPendingBooking(subject, inquiry)).isEmpty();
+  }
+
+  @Test
+  void
+      failedCustomerExpiryFinalizationRollsBackOrderAndNotificationThenRecoversWithoutRepeatingEffects() {
+    seedPendingInitialBill();
+    UUID key = UUID.randomUUID();
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        inquiry);
+    jdbc.update(
+        "update customer_delivery_slot set state='CHECKOUT_PENDING',booking_id=? where id=?",
+        UUID.randomUUID(),
+        oldSlot);
+    jdbc.update(
+        "update rental_order set payment_started_at=current_timestamp-interval '6 minutes',"
+            + " payment_expires_at=current_timestamp-interval '1 minute' where id=?",
+        order);
+    paymentExpiryRecovery.recoverPending();
+    assertThat(jdbc.queryForMap("select payment_state,status from rental_order where id=?", order))
+        .containsEntry("payment_state", "EXPIRING")
+        .containsEntry("status", "SAVED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_notification where order_id=?",
+                Integer.class,
+                order))
+        .isZero();
+    assertThat(
+            jdbc.queryForMap(
+                "select step,state,attempt_count from rental_order_mutation_command where order_id=?",
+                order))
+        .containsEntry("step", "FINALIZE_LOCAL")
+        .containsEntry("state", "PENDING")
+        .containsEntry("attempt_count", 1);
+    jdbc.update("update customer_delivery_slot set booking_id=? where id=?", booking, oldSlot);
+    jdbc.update(
+        "update rental_order_mutation_command set next_attempt_at=clock_timestamp() where order_id=?",
+        order);
+    paymentExpiryRecovery.recoverPending();
+    assertThat(
+            jdbc.queryForObject(
+                "select payment_state from rental_order where id=?", String.class, order))
+        .isEqualTo("EXPIRED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_notification where order_id=?",
+                Integer.class,
+                order))
+        .isEqualTo(1);
+    org.mockito.Mockito.verify(dependencies, org.mockito.Mockito.times(1))
+        .releaseAllOrderUnits(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq(order),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("LOGISTICS_SERVICE"));
+  }
+
+  @Test
+  void customerInboxHttpIsSubjectOwnedAndAcknowledgementPersistsOnlyOnce() throws Exception {
+    UUID own = UUID.randomUUID();
+    UUID foreign = UUID.randomUUID();
+    UUID otherSubject = UUID.randomUUID();
+    for (var entry : Map.of(own, subject, foreign, otherSubject).entrySet()) {
+      jdbc.update(
+          "insert into customer_notification(id,customer_subject_id,order_id,booking_id,kind,message,created_at)"
+              + " values (?,?,?,?,'PAYMENT_EXPIRED','Резерв снят',clock_timestamp())",
+          entry.getKey(),
+          entry.getValue(),
+          order,
+          booking);
+    }
+    String path = "/api/logistics/customer/v1/notifications";
+    mvc.perform(get(path).with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].id").value(own.toString()))
+        .andExpect(jsonPath("$[0].customerSubjectId").doesNotExist());
+    mvc.perform(get(path).with(manager(UUID.randomUUID(), warehouse, "EDIT")))
+        .andExpect(status().isForbidden());
+    mvc.perform(post(path + "/" + foreign + "/read").with(customer(subject)))
+        .andExpect(status().isNotFound());
+    mvc.perform(post(path + "/" + own + "/read").with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.readAt").isNotEmpty());
+    var first = jdbc.queryForMap("select * from customer_notification where id=?", own);
+    mvc.perform(post(path + "/" + own + "/read").with(customer(subject)))
+        .andExpect(status().isOk());
+    assertThat(jdbc.queryForMap("select * from customer_notification where id=?", own))
+        .isEqualTo(first);
+    mvc.perform(get(path).with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(0));
+    mvc.perform(get(path).with(customer(otherSubject)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].id").value(foreign.toString()));
+  }
+
+  @Test
+  void customerInitialPaymentIsOwnedFencedAndIdempotentWithoutManagerAuthority() throws Exception {
+    seedPendingInitialBill();
+    String path = "/api/logistics/customer/v1/bookings/" + booking + "/payment";
+    mvc.perform(get(path)).andExpect(status().isUnauthorized());
+    mvc.perform(get(path).with(customer(UUID.randomUUID()))).andExpect(status().isNotFound());
+    mvc.perform(get(path).with(manager(subject, warehouse, "EDIT")))
+        .andExpect(status().isForbidden());
+    mvc.perform(get(path).with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.state").value("PENDING"))
+        .andExpect(jsonPath("$.canConfirm").value(true))
+        .andExpect(jsonPath("$.receipt.totalRubles").value("12000"))
+        .andExpect(jsonPath("$.receipt.deliveryIncluded").value(true))
+        .andExpect(jsonPath("$.receipt.lines[0].rentalMonths").value(2));
+    UUID key = UUID.randomUUID();
+    mvc.perform(
+            post(path + "/confirm-test")
+                .with(customer(UUID.randomUUID()))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0}"))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            post(path + "/confirm-test")
+                .with(customer(subject))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_VERSION_CONFLICT"));
+    mvc.perform(
+            post(path + "/confirm-test")
+                .with(customer(subject))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0,\"source\":\"MANAGER_CONFIRMATION\"}"))
+        .andExpect(status().isBadRequest());
+    for (int attempt = 0; attempt < 2; attempt++) {
+      mvc.perform(
+              post(path + "/confirm-test")
+                  .with(customer(subject))
+                  .header("Idempotency-Key", key)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"expectedVersion\":0}"))
+          .andExpect(status().isOk())
+          .andExpect(header().string("Cache-Control", "no-store"))
+          .andExpect(jsonPath("$.state").value("CONFIRMED"))
+          .andExpect(jsonPath("$.source").value("CUSTOMER_TEST"))
+          .andExpect(jsonPath("$.orderVersion").value(1))
+          .andExpect(jsonPath("$.canConfirm").value(false))
+          .andExpect(jsonPath("$.receipt.totalRubles").value("12000"));
+    }
+    mvc.perform(
+            post(path + "/confirm-test")
+                .with(customer(subject))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+    assertThat(
+            jdbc.queryForMap(
+                "select payment_confirmed_by_subject_id,payment_confirmed_by_booking_id from rental_order where id=?",
+                order))
+        .containsEntry("payment_confirmed_by_subject_id", subject)
+        .containsEntry("payment_confirmed_by_booking_id", null);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_audit_event where order_id=? and subject_type='ORDER_PAYMENT'",
+                Long.class,
+                order))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select actor_role from rental_order_audit_event where order_id=? and subject_type='ORDER_PAYMENT'",
+                String.class,
+                order))
+        .isEqualTo("CUSTOMER");
+  }
+
+  @Test
+  void managerInitialPaymentRequiresAnActualManagerRoleAndKeepsCustomerProvenanceSeparate()
+      throws Exception {
+    seedPendingInitialBill();
+    String path = "/api/logistics/v1/orders/" + order + "/payment";
+    UUID key = UUID.randomUUID();
+    mvc.perform(
+            post(path + "/confirm")
+                .with(customer(subject))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0}"))
+        .andExpect(status().isForbidden());
+    var viewer =
+        jwt()
+            .jwt(
+                token ->
+                    token
+                        .subject(subject.toString())
+                        .claim("principal_type", "USER")
+                        .claim("global_role", "VIEWER")
+                        .claim("rentalAccess", true)
+                        .claim("scope", "rwms.read rwms.write")
+                        .claim(
+                            "warehouse_access",
+                            List.of(Map.of("warehouseId", warehouse.toString(), "level", "EDIT"))));
+    mvc.perform(
+            post(path + "/confirm")
+                .with(viewer)
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0}"))
+        .andExpect(status().isForbidden());
+    UUID admin = UUID.randomUUID();
+    var administrator =
+        jwt()
+            .jwt(
+                token ->
+                    token
+                        .subject(admin.toString())
+                        .claim("principal_type", "USER")
+                        .claim("global_role", "SYSTEM_ADMIN")
+                        .claim("rentalAccess", true)
+                        .claim("scope", "rwms.read rwms.write"));
+    mvc.perform(
+            post(path + "/confirm")
+                .with(administrator)
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post(path + "/confirm")
+                .with(administrator)
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.source").value("MANAGER_CONFIRMATION"));
+    mvc.perform(get(path).with(administrator))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("CONFIRMED"));
+    assertThat(
+            jdbc.queryForObject(
+                "select payment_confirmed_by_subject_id from rental_order where id=?",
+                UUID.class,
+                order))
+        .isEqualTo(admin);
+  }
+
+  @Test
+  void concurrentInitialPaymentReplayReadsTheCommittedOrderAfterTheCommandLock() throws Exception {
+    seedPendingInitialBill();
+    UUID key = UUID.randomUUID();
+    var responses = new java.util.ArrayList<java.util.concurrent.Future<OrderPaymentResponse>>();
+    try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+      new TransactionTemplate(transactions)
+          .executeWithoutResult(
+              status -> {
+                paymentCommandLock.acquire(
+                    "rental-order:command:" + subject + ":CONFIRM_PAYMENT_CUSTOMER_TEST:" + key);
+                for (int attempt = 0; attempt < 2; attempt++) {
+                  responses.add(
+                      executor.submit(
+                          () ->
+                              initialPayments.confirmCustomer(
+                                  new CustomerIdentity(subject, "Customer"),
+                                  booking,
+                                  key,
+                                  new ConfirmOrderPaymentRequest(0L))));
+                }
+                long deadline =
+                    System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+                int waiting = 0;
+                while (waiting < 2 && System.nanoTime() < deadline) {
+                  waiting =
+                      jdbc.queryForObject(
+                          "select count(*) from pg_locks where locktype='advisory' and not granted",
+                          Integer.class);
+                  if (waiting < 2) {
+                    try {
+                      Thread.sleep(20);
+                    } catch (InterruptedException exception) {
+                      Thread.currentThread().interrupt();
+                      throw new IllegalStateException(exception);
+                    }
+                  }
+                }
+                assertThat(waiting).isGreaterThanOrEqualTo(2);
+              });
+      for (var future : responses) {
+        var response = future.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(response.state()).isEqualTo(RentalOrderPaymentState.CONFIRMED);
+        assertThat(response.orderVersion()).isEqualTo(1);
+        assertThat(response.canConfirm()).isFalse();
+      }
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_audit_event where order_id=? and subject_type='ORDER_PAYMENT'",
+                Long.class,
+                order))
+        .isEqualTo(1);
+  }
+
+  private void seedPendingInitialBill() {
+    OffsetDateTime issuedAt = jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
+    RentalOrderReceiptData receipt =
+        new RentalOrderReceiptData(
+            1,
+            order,
+            jdbc.queryForObject(
+                "select order_number from rental_order where id=?", String.class, order),
+            issuedAt,
+            "RUB",
+            true,
+            List.of(
+                new Line(
+                    Kind.CABIN,
+                    UUID.randomUUID(),
+                    null,
+                    "Бытовка № 1",
+                    "1",
+                    2L,
+                    "1000",
+                    "2000",
+                    3L),
+                new Line(Kind.DELIVERY, null, null, "Доставка", "1", null, "10000", "10000", null)),
+            "12000");
+    jdbc.update(
+        "insert into rental_order_payment_receipt(id,order_id,issued_at,receipt_json) values (?,?,?,?)",
+        UUID.randomUUID(),
+        order,
+        issuedAt,
+        json.writeValueAsString(receipt));
+    jdbc.update(
+        "update rental_order set status='SAVED',payment_state='PENDING',payment_started_at=?,payment_expires_at=? where id=?",
+        issuedAt,
+        issuedAt.plusMinutes(5),
+        order);
+  }
+
+  @Test
+  void exactCustomerQuoteIsStringMoneyReplayableAndDoesNotAcceptMissingFields() throws Exception {
+    UUID key = UUID.randomUUID();
+    String path = customerPath() + "/change-quotes";
+    String body =
+        "{\"expectedVersion\":4,\"operation\":\"CANCEL\",\"slotId\":null,\"slotVersion\":null}";
+    mvc.perform(
+            post(path)
+                .with(customer(subject))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.amountRubles").value("1500"))
+        .andExpect(jsonPath("$.applicationState").value("OFFERED"))
+        .andExpect(jsonPath("$.targetDeliveryDate").isEmpty());
+    var charge = charges.findByCustomerSubjectIdAndIdempotencyKey(subject, key).orElseThrow();
+    mvc.perform(get(path + "/" + charge.getId()).with(customer(UUID.randomUUID())))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            post(path)
+                .with(customer(subject))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.quoteId").value(charge.getId().toString()));
+    mvc.perform(
+            post(path)
+                .with(customer(subject))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":4,\"operation\":\"CANCEL\"}"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post(customerPath() + "/cancel")
+                .with(customer(subject))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":4}"))
+        .andExpect(status().isBadRequest());
+    assertThat(charges.count()).isOne();
+  }
+
+  @Test
+  void unknownPolicyAndCanonicalTimezoneFailureAreExplicit() throws Exception {
+    jdbc.update("update rental_settings set late_change_fee_mode=null,late_change_fee_value=null");
+    var quote = quote();
+    mvc.perform(get(customerPath() + "/change-quotes/" + quote.quoteId()).with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.settlement").value("POLICY_UNCONFIGURED"))
+        .andExpect(jsonPath("$.amountRubles").isEmpty());
+    when(dependencies.readWarehouseIdentity(warehouse))
+        .thenReturn(new WarehouseIdentity(warehouse, 3, true, "Not/AZone"));
+    assertThatThrownBy(this::quote)
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            error -> assertThat(error.code()).isEqualTo("CUSTOMER_CHANGE_TIME_ZONE_UNAVAILABLE"));
+  }
+
+  @Test
+  void bindingAndSettlementRollBackTogetherAndCompletionIsNotJustAClick() {
+    var quote = quote();
+    var tx = new TransactionTemplate(transactions);
+    assertThatThrownBy(
+            () ->
+                tx.executeWithoutResult(
+                    status -> {
+                      bind(quote);
+                      throw new IllegalStateException("Owner failed before commit");
+                    }))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(charges.findById(quote.quoteId()).orElseThrow().getApplicationState())
+        .isEqualTo(CustomerChangeApplicationState.OFFERED);
+    assertThat(mutations.count()).isZero();
+    UUID mutation = tx.execute(status -> bind(quote));
+    assertThat(service.get(identity(), booking, quote.quoteId()).settlement())
+        .isEqualTo(CustomerChangeSettlement.PAYMENT_REQUIRED);
+    tx.executeWithoutResult(
+        status -> {
+          var change = mutations.findForUpdate(mutation).orElseThrow();
+          UUID lease = UUID.randomUUID();
+          assertThat(change.claim(lease, now(), now().plusMinutes(1))).isTrue();
+          change.complete(lease, now());
+          mutations.saveAndFlush(change);
+          store.complete(mutation);
+        });
+    var result = service.get(identity(), booking, quote.quoteId());
+    assertThat(result.applicationState()).isEqualTo(CustomerChangeApplicationState.APPLIED);
+    assertThat(result.settlement()).isEqualTo(CustomerChangeSettlement.TEST_PAID);
+    assertThat(result.version()).isGreaterThan(quote.version());
+    assertThat(
+            jdbc.queryForObject(
+                "select new_values->>'amountRubles' from rental_order_audit_event where"
+                    + " subject_type='CUSTOMER_BOOKING_CHANGE_CHARGE'",
+                String.class))
+        .isEqualTo("1500");
+  }
+
+  @Test
+  void rentalStaffHaveIndependentReadReceiptsWithRoleBasedOrderVisibility() throws Exception {
+    var replacement = offer(LocalDate.of(2026, 9, 8));
+    var change =
+        mutations.saveAndFlush(
+            CustomerBookingMutation.completedReschedule(
+                subject,
+                booking,
+                inquiry,
+                order,
+                UUID.randomUUID(),
+                "c".repeat(64),
+                4,
+                0,
+                oldSlot,
+                replacement.getId(),
+                "CUSTOMER_AGREED",
+                subject,
+                null,
+                "{}",
+                now()));
+    UUID first = UUID.randomUUID(), second = UUID.randomUUID(), key = UUID.randomUUID();
+    for (UUID manager : List.of(first, second)) {
+      String role = manager.equals(first) ? "RENTAL_MANAGER" : "SYSTEM_ADMIN";
+      mvc.perform(get(ALERTS).with(manager(manager, warehouse, "VIEW", role)))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.length()").value(1))
+          .andExpect(jsonPath("$[0].canOpenOrder").value(role.equals("SYSTEM_ADMIN")));
+    }
+    String ack = ALERTS + "/" + change.getId() + "/acknowledgement";
+    for (int retry = 0; retry < 2; retry++) {
+      mvc.perform(
+              post(ack)
+                  .with(manager(first, warehouse, "VIEW"))
+                  .header("Idempotency-Key", key)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"expectedVersion\":0}"))
+          .andExpect(status().isNoContent());
+    }
+    mvc.perform(get(ALERTS).with(manager(first, warehouse, "VIEW")))
+        .andExpect(jsonPath("$.length()").value(0));
+    mvc.perform(get(ALERTS).with(manager(second, warehouse, "VIEW", "SYSTEM_ADMIN")))
+        .andExpect(jsonPath("$.length()").value(1));
+    mvc.perform(
+            get(ALERTS)
+                .with(manager(second, UUID.randomUUID(), "VIEW", "SYSTEM_ADMIN")))
+        .andExpect(jsonPath("$.length()").value(0));
+    mvc.perform(
+            post(ack)
+                .with(manager(second, UUID.randomUUID(), "VIEW", "SYSTEM_ADMIN"))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0}"))
+        .andExpect(status().isNotFound());
+    mvc.perform(get(ALERTS).with(customer(subject))).andExpect(status().isForbidden());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_booking_change_alert_ack",
+                Integer.class))
+        .isOne();
+  }
+
+  @Test
+  void warehouseEditAllowsReasonedWaiverButNeverOpensTheCustomerOrder() throws Exception {
+    var quote = quote();
+    UUID manager = UUID.randomUUID(), key = UUID.randomUUID();
+    String path =
+        "/api/logistics/v1/orders/"
+            + order
+            + "/booking-change-quotes/"
+            + quote.quoteId()
+            + "/waiver";
+    mvc.perform(get(PENDING).with(manager(manager, warehouse, "VIEW")))
+        .andExpect(jsonPath("$.length()").value(0));
+    mvc.perform(get(PENDING).with(manager(manager, warehouse, "EDIT")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].quote.quoteId").value(quote.quoteId().toString()));
+    String body = "{\"expectedVersion\":0,\"reason\":\"  Форс-мажор  \"}";
+    mvc.perform(
+            post(path)
+                .with(manager(manager, warehouse, "VIEW"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            post(path)
+                .with(manager(manager, warehouse, "EDIT"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0,\"reason\":\" \"}"))
+        .andExpect(status().isBadRequest());
+    for (int retry = 0; retry < 2; retry++) {
+      mvc.perform(
+              post(path)
+                  .with(manager(manager, warehouse, "EDIT"))
+                  .header("Idempotency-Key", key)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.settlement").value("WAIVED"))
+          .andExpect(jsonPath("$.amountRubles").value("0"));
+    }
+    mvc.perform(get(PENDING).with(manager(manager, warehouse, "EDIT")))
+        .andExpect(jsonPath("$.length()").value(0));
+    mvc.perform(get("/api/logistics/v1/orders/" + order).with(manager(manager, warehouse, "EDIT")))
+        .andExpect(status().isNotFound());
+    assertThat(charges.findById(quote.quoteId()).orElseThrow().getAmountRubles()).isEqualTo(1500);
+    assertThat(charges.findById(quote.quoteId()).orElseThrow().getWaiverReason())
+        .isEqualTo("Форс-мажор");
+  }
+
+  @Test
+  void rescheduleQuoteRetainsAuthoritativeTargetWindowAndRejectsMissingVersionAtDatabase() {
+    var replacement = offer(LocalDate.of(2026, 9, 8));
+    var quote =
+        service.create(
+            identity(),
+            booking,
+            UUID.randomUUID(),
+            new CreateCustomerBookingChangeQuoteRequest(
+                4L,
+                CustomerBookingMutationOperation.RESCHEDULE,
+                replacement.getId(),
+                replacement.getVersion()));
+    assertThat(quote.targetDeliveryDate()).isEqualTo(replacement.getDeliveryDate());
+    assertThat(quote.targetWindowStart()).isEqualTo(LocalTime.of(9, 0));
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update customer_booking_change_charge set slot_version=null where id=?",
+                    quote.quoteId()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  private UUID bind(CustomerBookingChangeQuoteResponse quote) {
+    var session = sessions.findByBookingIdForUpdate(booking).orElseThrow();
+    var original = slots.findById(oldSlot).orElseThrow();
+    var charge =
+        store.admit(
+            session,
+            original,
+            CustomerBookingMutationOperation.CANCEL,
+            null,
+            null,
+            quote.quoteId(),
+            quote.version(),
+            true);
+    var mutation =
+        mutations.saveAndFlush(
+            CustomerBookingMutation.cancel(
+                subject,
+                booking,
+                inquiry,
+                order,
+                UUID.randomUUID(),
+                "d".repeat(64),
+                4,
+                0,
+                oldSlot,
+                now()));
+    store.bind(charge, mutation.getId(), true);
+    return mutation.getId();
+  }
+
+  private CustomerDeliverySlot offer(LocalDate date) {
+    return slots.saveAndFlush(
+        CustomerDeliverySlot.offer(
+            subject,
+            inquiry,
+            warehouse,
+            date,
+            CustomerDeliverySlotKind.FIXED_WINDOW,
+            LocalTime.of(9, 0),
+            LocalTime.of(12, 0),
+            "Test address",
+            new BigDecimal("59.9"),
+            new BigDecimal("30.3"),
+            1,
+            1800,
+            1,
+            1,
+            1,
+            10_000L,
+            60,
+            true,
+            true,
+            4,
+            2.5,
+            8,
+            10,
+            5,
+            2,
+            now().plusHours(1)));
+  }
+
+  private CustomerBookingChangeQuoteResponse quote() {
+    return service.create(
+        identity(),
+        booking,
+        UUID.randomUUID(),
+        new CreateCustomerBookingChangeQuoteRequest(
+            4L, CustomerBookingMutationOperation.CANCEL, null, null));
+  }
+
+  private CustomerIdentity identity() {
+    return new CustomerIdentity(subject, "customer");
+  }
+
+  private OffsetDateTime now() {
+    return NOW.atOffset(ZoneOffset.UTC);
+  }
+
+  private String customerPath() {
+    return "/api/logistics/customer/v1/bookings/" + booking;
+  }
+
+  private JwtRequestPostProcessor customer(UUID id) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(id.toString())
+                    .claim("principal_type", "USER")
+                    .claim("global_role", "CUSTOMER")
+                    .claim("client_id", "rwms-customer-android")
+                    .claim("scope", "customer.rental"))
+        .authorities(new SimpleGrantedAuthority("SCOPE_customer.rental"));
+  }
+
+  private JwtRequestPostProcessor manager(UUID id, UUID warehouseId, String level) {
+    return manager(id, warehouseId, level, "RENTAL_MANAGER");
+  }
+
+  private JwtRequestPostProcessor manager(
+      UUID id, UUID warehouseId, String level, String role) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(id.toString())
+                    .claim("principal_type", "USER")
+                    .claim("global_role", role)
+                    .claim("client_id", "rwms-rental-manager-web")
+                    .claim("scope", "rental.manage")
+                    .claim("rentalAccess", true)
+                    .claim(
+                        "warehouse_access",
+                        List.of(Map.of("warehouseId", warehouseId.toString(), "level", level))))
+        .authorities(new SimpleGrantedAuthority("SCOPE_rental.manage"));
+  }
+}

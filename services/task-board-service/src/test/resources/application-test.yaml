@@ -1,0 +1,85 @@
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 4
+      minimum-idle: 0
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  sql:
+    init:
+      mode: never
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9000
+          audiences: rwms-services
+      client:
+        registration:
+          maintenance-task-requirements:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: maintenance.task-requirements
+          auth-service:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: worker-credentials.manage
+          warehouse-lifecycle-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.read
+          warehouse-lifecycle-confirm:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.confirm
+          warehouse-timezone-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: warehouse.timezone.read
+          worker-profile-media:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: media.task-board
+        provider:
+          auth-service:
+            token-uri: http://localhost:9000/oauth2/token
+
+rwms:
+  worker:
+    offline-lease-secret: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+  task-board:
+  auth:
+    worker-credentials-url: http://localhost:9000/api/internal/worker-credentials
+    connect-timeout: 250ms
+    read-timeout: 500ms
+    credential-operation-timeout: 1s
+  media:
+    base-url: http://localhost:9000
+  warehouse:
+    lifecycle:
+      base-url: http://localhost:9000
+      reconciliation:
+        enabled: false
+  cors:
+    allowed-origins: http://localhost:8080,http://localhost:8082

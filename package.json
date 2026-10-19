@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "shadcn": "^4.13.0"
+  },
+  "dependencies": {
+    "@google/design.md": "^0.3.0"
+  }
+}

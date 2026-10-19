@@ -1,0 +1,842 @@
+package dev.buhanzaz.rwms.auth.config;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
+import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * Reconciles declarative OAuth client configuration with the authorization-server database at startup.
+ *
+ * <p>The provisioner validates every client before entering its transaction, acquires a PostgreSQL
+ * advisory transaction lock when available, and then applies only the desired managed registrations.
+ * It uses a revision and a deterministic configuration fingerprint to make security-policy changes
+ * explicit. Removing a managed client declaration is rejected; disabling it is the deliberate,
+ * non-destructive way to stop new protocol use.</p>
+ */
+@Component
+public class OAuthClientProvisioner implements ApplicationRunner {
+
+    static final String MANAGED_SETTING = "rwms.client.managed";
+    static final String ENABLED_SETTING = "rwms.client.enabled";
+    static final String REVISION_SETTING = "rwms.client.revision";
+    static final String FINGERPRINT_SETTING = "rwms.client.configuration-fingerprint";
+    static final String REVOKED_REVISION_SETTING = "rwms.client.revoked-revision";
+    // The retired repository credential must not be reintroduced through external configuration.
+    private static final String RETIRED_TASK_BOARD_SECRET_SHA256 = "3a8630a2d33322005a12e4e5cd11521d5b11603835e70bb39abf899fa2fc12de";
+
+    private final RegisteredClientRepository clients;
+    private final PasswordEncoder passwordEncoder;
+    private final JdbcTemplate jdbc;
+    private final TransactionTemplate transactions;
+    private final Environment environment;
+    private final AuthProperties authProperties;
+    private final OAuthClientProperties properties;
+
+    /**
+     * Creates a provisioner over the unfiltered JDBC repository.
+     *
+     * <p>The direct repository is intentional: reconciliation must be able to inspect historical
+     * disabled rows, while runtime protocol lookups use the filtered repository exposed elsewhere in
+     * this configuration.</p>
+     *
+     * @param clients raw persistent client repository
+     * @param passwordEncoder encoder used to retain or safely replace a configured client secret
+     * @param jdbc database access used for the advisory lock and authorization revocation
+     * @param transactions transaction boundary for an all-or-nothing reconciliation
+     * @param environment environment containing service-client secrets
+     * @param authProperties auth profile settings that control development-only fallbacks
+     * @param properties declarative OAuth client registrations
+     */
+    public OAuthClientProvisioner(
+            @Qualifier("jdbcRegisteredClientRepository") RegisteredClientRepository clients,
+            PasswordEncoder passwordEncoder,
+            JdbcTemplate jdbc,
+            TransactionTemplate transactions,
+            Environment environment,
+            AuthProperties authProperties,
+            OAuthClientProperties properties) {
+        this.clients = clients;
+        this.passwordEncoder = passwordEncoder;
+        this.jdbc = jdbc;
+        this.transactions = transactions;
+        this.environment = environment;
+        this.authProperties = authProperties;
+        this.properties = properties;
+    }
+
+    /**
+     * Validates and reconciles every managed OAuth client before the application becomes available.
+     *
+     * <p>A requested authorization revocation is recorded at its revision and removes persisted
+     * grants/consents within the same transaction. This ensures a revision cannot silently leave
+     * previously authorized sessions active when the configuration explicitly requires revocation.</p>
+     *
+     * @param args startup arguments; they do not affect the managed client declarations
+     */
+    @Override
+    public void run(ApplicationArguments args) {
+        List<ValidatedClient> validated = validateConfiguration();
+        transactions.executeWithoutResult(status -> {
+            acquireProvisioningLock();
+            rejectOmittedManagedClients(validated);
+            validated.forEach(this::reconcile);
+        });
+    }
+
+    private void acquireProvisioningLock() {
+        String database = jdbc.execute(
+                (ConnectionCallback<String>) connection -> connection.getMetaData().getDatabaseProductName());
+        if (database != null && "PostgreSQL".equalsIgnoreCase(database.trim())) {
+            jdbc.queryForObject(
+                    "select pg_advisory_xact_lock(hashtextextended('rwms-auth:oauth-client-provisioning', 0))",
+                    Object.class);
+        }
+    }
+
+    private void rejectOmittedManagedClients(List<ValidatedClient> validated) {
+        Set<String> configuredIds = validated.stream()
+                .map(value -> value.configuration().clientId())
+                .collect(java.util.stream.Collectors.toSet());
+        List<String> managedIds = jdbc.queryForList(
+                "select client_id from oauth2_registered_client "
+                        + "where client_settings like '%\"rwms.client.managed\":true%'",
+                String.class);
+        managedIds.stream()
+                .filter(clientId -> !configuredIds.contains(clientId))
+                .findFirst()
+                .ifPresent(clientId -> {
+                    throw new IllegalStateException(
+                            "Managed OAuth client is omitted; configure enabled=false explicitly: " + clientId);
+                });
+    }
+
+    private void reconcile(ValidatedClient validated) {
+        OAuthClientProperties.Client configured = validated.configuration();
+        RegisteredClient existing = clients.findByClientId(configured.clientId());
+        Long existingRevision = settingAsLong(existing, REVISION_SETTING);
+        String existingFingerprint = settingAsString(existing, FINGERPRINT_SETTING);
+
+        if (configured.revokeAuthorizations() && existing == null) {
+            throw new IllegalStateException(
+                    "OAuth authorization revocation requires an existing client: " + configured.clientId());
+        }
+
+        if (existingRevision != null && configured.revision() < existingRevision) {
+            throw new IllegalStateException("OAuth client revision rollback is forbidden: " + configured.clientId());
+        }
+        if (existingRevision != null
+                && configured.revision() == existingRevision
+                && existingFingerprint != null
+                && !existingFingerprint.equals(validated.fingerprint())) {
+            throw new IllegalStateException(
+                    "OAuth client configuration changed without revision increment: " + configured.clientId());
+        }
+
+        String encodedSecret = encodedSecret(existing, validated);
+        if (existingRevision != null
+                && configured.revision() == existingRevision
+                && existing != null
+                && existing.getClientSecret() != null
+                && encodedSecret != null
+                && !existing.getClientSecret().equals(encodedSecret)) {
+            throw new IllegalStateException(
+                    "OAuth client secret changed without revision increment: " + configured.clientId());
+        }
+
+        Long revokedRevision = settingAsLong(existing, REVOKED_REVISION_SETTING);
+        if (configured.revokeAuthorizations()
+                && existing != null
+                && !Objects.equals(revokedRevision, configured.revision())
+                && existingRevision != null
+                && configured.revision() <= existingRevision) {
+            throw new IllegalStateException(
+                    "OAuth authorization revocation requires a new client revision: " + configured.clientId());
+        }
+        boolean taskBoardSecretRotation = configured.taskBoardServiceClient()
+                && configured.enabled()
+                && existing != null
+                && !Objects.equals(existing.getClientSecret(), encodedSecret);
+        // Retire persisted grants together with this exposed machine credential, exactly once.
+        boolean revoke = taskBoardSecretRotation
+                || (configured.revokeAuthorizations()
+                        && !Objects.equals(revokedRevision, configured.revision()));
+        if (revoke && existing != null) {
+            revoke(existing.getId());
+            revokedRevision = configured.revision();
+        }
+
+        RegisteredClient desired = buildClient(
+                existing, validated, encodedSecret, revokedRevision);
+        if (!equivalent(existing, desired)) {
+            clients.save(desired);
+        }
+    }
+
+    private RegisteredClient buildClient(
+            RegisteredClient existing,
+            ValidatedClient validated,
+            String encodedSecret,
+            Long revokedRevision) {
+        OAuthClientProperties.Client configured = validated.configuration();
+        RegisteredClient.Builder builder = existing == null
+                ? RegisteredClient.withId(UUID.randomUUID().toString())
+                        .clientId(configured.clientId())
+                        .clientIdIssuedAt(Instant.now())
+                : RegisteredClient.from(existing);
+        ClientSettings.Builder clientSettings = ClientSettings.builder()
+                .requireProofKey(configured.requireProofKey())
+                .requireAuthorizationConsent(false)
+                .setting(MANAGED_SETTING, true)
+                .setting(ENABLED_SETTING, configured.enabled())
+                .setting(REVISION_SETTING, Long.toString(configured.revision()))
+                .setting(FINGERPRINT_SETTING, validated.fingerprint());
+        if (revokedRevision != null) {
+            clientSettings.setting(REVOKED_REVISION_SETTING, Long.toString(revokedRevision));
+        }
+        builder.clientName(configured.clientName())
+                .clientSecret(encodedSecret)
+                .clientAuthenticationMethods(methods -> replace(methods, validated.authenticationMethods()))
+                .authorizationGrantTypes(types -> replace(types, validated.grantTypes()))
+                .redirectUris(uris -> replace(uris, configured.redirectUris()))
+                .postLogoutRedirectUris(uris -> replace(uris, configured.postLogoutRedirectUris()))
+                .scopes(scopes -> replace(scopes, configured.scopes()))
+                .clientSettings(clientSettings.build());
+        TokenSettings.Builder tokenSettings =
+                TokenSettings.builder().accessTokenTimeToLive(configured.accessTokenTtl());
+        if (validated.grantTypes().contains(AuthorizationGrantType.REFRESH_TOKEN)) {
+            tokenSettings
+                    .refreshTokenTimeToLive(configured.refreshTokenTtl())
+                    .reuseRefreshTokens(configured.reuseRefreshTokens());
+        }
+        builder.tokenSettings(tokenSettings.build());
+        return builder.build();
+    }
+
+    private String encodedSecret(RegisteredClient existing, ValidatedClient validated) {
+        if (!validated.configuration().enabled()) {
+            return existing == null ? null : existing.getClientSecret();
+        }
+        String rawSecret = validated.rawSecret();
+        if (rawSecret == null) {
+            return null;
+        }
+        if (existing != null
+                && existing.getClientSecret() != null
+                && passwordEncoder.matches(rawSecret, existing.getClientSecret())) {
+            return existing.getClientSecret();
+        }
+        return passwordEncoder.encode(rawSecret);
+    }
+
+    private void revoke(String registeredClientId) {
+        jdbc.update(
+                "delete from oauth2_authorization_consent where registered_client_id = ?", registeredClientId);
+        jdbc.update("delete from oauth2_authorization where registered_client_id = ?", registeredClientId);
+    }
+
+    private List<ValidatedClient> validateConfiguration() {
+        if (properties.clients().isEmpty()) {
+            throw new IllegalStateException("At least one OAuth client must be configured");
+        }
+        Set<String> ids = new HashSet<>();
+        List<ValidatedClient> validated = new ArrayList<>();
+        for (OAuthClientProperties.Client client : properties.clients()) {
+            requireText(client.clientId(), "client-id");
+            requireText(client.clientName(), "client-name");
+            if (!ids.add(client.clientId())) {
+                throw new IllegalStateException("Duplicate OAuth client-id: " + client.clientId());
+            }
+            if (client.revision() < 1) {
+                throw new IllegalStateException("OAuth client revision must be positive: " + client.clientId());
+            }
+            Set<ClientAuthenticationMethod> authenticationMethods = client.authenticationMethods().stream()
+                    .map(this::authenticationMethod)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            Set<AuthorizationGrantType> grantTypes = client.grantTypes().stream()
+                    .map(this::grantType)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            validateGrantContract(client, authenticationMethods, grantTypes);
+            validateUris(client);
+            String rawSecret = resolveSecret(client, authenticationMethods);
+            validated.add(new ValidatedClient(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    rawSecret,
+                    fingerprint(client)));
+        }
+        return List.copyOf(validated);
+    }
+
+    private void validateGrantContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        if (client.assetServiceClient()) {
+            validateAssetClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.inventoryServiceClient()) {
+            validateInventoryClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.taskBoardServiceClient()) {
+            validateExactServiceClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.TASK_BOARD_SCOPES,
+                    OAuthClientProperties.TASK_BOARD_AUDIENCE,
+                    OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT);
+        }
+        if (client.logisticsServiceClient()) {
+            validateLogisticsClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.logisticsPlannerClient()) {
+            validateLogisticsPlannerClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.managerAndroidClient()) {
+            validateManagerAndroidClientContract(
+                    client, authenticationMethods, grantTypes);
+        }
+        if (client.cadClient()) {
+            validateCadClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.rentalManagerWebClient()) {
+            validateDedicatedUserClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.RENTAL_MANAGER_SCOPES,
+                    "/manager/auth/callback");
+        }
+        if (client.rentalManagerAndroidClient()) {
+            validateDedicatedUserClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.RENTAL_MANAGER_SCOPES,
+                    "/auth/rental-manager/callback");
+        }
+        if (client.adminWebClient()) {
+            validateDedicatedUserClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.ADMIN_WEB_SCOPES,
+                    "/admin/auth/callback");
+        }
+        if (client.customerAndroidClient()) {
+            validateCustomerAndroidClientContract(
+                    client, authenticationMethods, grantTypes);
+        }
+        if (!client.enabled()) {
+            return;
+        }
+        if (client.scopes().isEmpty() || client.audiences().isEmpty()) {
+            throw new IllegalStateException("OAuth scopes and audiences are required: " + client.clientId());
+        }
+        if (client.accessTokenTtl().isZero() || client.accessTokenTtl().isNegative()) {
+            throw new IllegalStateException("OAuth access token TTL must be positive: " + client.clientId());
+        }
+        boolean authorizationCode = grantTypes.contains(AuthorizationGrantType.AUTHORIZATION_CODE);
+        boolean clientCredentials = grantTypes.contains(AuthorizationGrantType.CLIENT_CREDENTIALS);
+        boolean refreshToken = grantTypes.contains(AuthorizationGrantType.REFRESH_TOKEN);
+        if (authorizationCode == clientCredentials) {
+            throw new IllegalStateException("OAuth client must use exactly one supported grant: " + client.clientId());
+        }
+        if (authorizationCode) {
+            if (!authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                    || !client.requireProofKey()
+                    || client.allowedPrincipalTypes().size() != 1
+                    || client.redirectUris().isEmpty()) {
+                throw new IllegalStateException(
+                        "Authorization-code client must be public PKCE with one principal type: "
+                                + client.clientId());
+            }
+            if (refreshToken
+                    && (!client.scopes().contains("offline_access")
+                            || client.refreshTokenTtl().isZero()
+                            || client.refreshTokenTtl().isNegative()
+                            || client.reuseRefreshTokens())) {
+                throw new IllegalStateException(
+                        "Refresh-token clients must request offline_access and use positive rotating tokens: "
+                                + client.clientId());
+            }
+            if (!refreshToken && client.scopes().contains("offline_access")) {
+                throw new IllegalStateException(
+                        "offline_access requires the refresh_token grant: " + client.clientId());
+            }
+        } else if (!authenticationMethods.equals(Set.of(ClientAuthenticationMethod.CLIENT_SECRET_BASIC))
+                || !client.allowedPrincipalTypes().isEmpty()
+                || !client.redirectUris().isEmpty()
+                || !client.postLogoutRedirectUris().isEmpty()
+                || client.scopes().contains("openid")
+                || client.scopes().contains("profile")) {
+            throw new IllegalStateException("Client-credentials contract is invalid: " + client.clientId());
+        }
+    }
+
+    private void validateAssetClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.ASSET_SCOPES,
+                OAuthClientProperties.ASSET_AUDIENCE,
+                OAuthClientProperties.ASSET_SECRET_ENVIRONMENT);
+    }
+
+    private void validateInventoryClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.INVENTORY_SCOPES,
+                OAuthClientProperties.INVENTORY_AUDIENCE,
+                OAuthClientProperties.INVENTORY_SECRET_ENVIRONMENT);
+    }
+
+    private void validateLogisticsClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.LOGISTICS_SCOPES,
+                OAuthClientProperties.LOGISTICS_AUDIENCE,
+                OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT);
+    }
+
+    /**
+     * Rejects any planner declaration that broadens its one-scope machine-client boundary.
+     *
+     * @param client configured planner declaration
+     * @param authenticationMethods normalized client authentication methods
+     * @param grantTypes normalized authorization grants
+     */
+    private void validateLogisticsPlannerClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.LOGISTICS_PLANNER_SCOPES,
+                OAuthClientProperties.LOGISTICS_PLANNER_AUDIENCE,
+                OAuthClientProperties.LOGISTICS_PLANNER_SECRET_ENVIRONMENT);
+    }
+
+    private void validateManagerAndroidClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        boolean exactPublicContract =
+                authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                        && grantTypes.equals(Set.of(
+                                AuthorizationGrantType.AUTHORIZATION_CODE,
+                                AuthorizationGrantType.REFRESH_TOKEN))
+                        && client.scopes().equals(
+                                OAuthClientProperties.MANAGER_ANDROID_SCOPES)
+                        && client.allowedPrincipalTypes().equals(Set.of(
+                                dev.buhanzaz.rwms.auth.domain.PrincipalType.USER))
+                        && client.audiences().equals(Set.of("rwms-services"))
+                        && client.requireProofKey()
+                        && client.redirectUris().size() == 1
+                        && client.allowedOrigins().size() == 1
+                        && client.secretEnvironment() == null
+                        && client.developmentSecret() == null;
+        if (!exactPublicContract) {
+            throw new IllegalStateException(
+                    "rwms-manager-android must use its exact public USER PKCE contract");
+        }
+        URI redirect = URI.create(client.redirectUris().iterator().next());
+        URI origin = URI.create(client.allowedOrigins().iterator().next());
+        if (!"/auth/manager/callback".equals(redirect.getPath())
+                || redirect.getQuery() != null
+                || !sameOrigin(origin, redirect)) {
+            throw new IllegalStateException(
+                    "rwms-manager-android redirect must use the same-origin "
+                            + "/auth/manager/callback path");
+        }
+    }
+
+    /**
+     * Rejects privilege, redirect, or token-policy drift for a dedicated interactive application.
+     *
+     * <p>The role restriction is enforced against the authoritative subject during token issuance;
+     * this startup check ensures the client itself cannot request panel or another application's
+     * scopes.</p>
+     */
+    private void validateDedicatedUserClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes,
+            Set<String> expectedScopes,
+            String expectedCallbackPath) {
+        boolean exactPublicContract =
+                authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                        && grantTypes.equals(Set.of(
+                                AuthorizationGrantType.AUTHORIZATION_CODE,
+                                AuthorizationGrantType.REFRESH_TOKEN))
+                        && client.scopes().equals(expectedScopes)
+                        && client.allowedPrincipalTypes().equals(Set.of(
+                                dev.buhanzaz.rwms.auth.domain.PrincipalType.USER))
+                        && client.audiences().equals(Set.of("rwms-services"))
+                        && client.requireProofKey()
+                        && client.redirectUris().size() == 1
+                        && client.postLogoutRedirectUris().size() == 1
+                        && client.allowedOrigins().size() == 1
+                        && client.accessTokenTtl().equals(Duration.ofMinutes(5))
+                        && client.refreshTokenTtl().equals(Duration.ofDays(30))
+                        && !client.reuseRefreshTokens()
+                        && client.secretEnvironment() == null
+                        && client.developmentSecret() == null;
+        if (!exactPublicContract) {
+            throw new IllegalStateException(
+                    client.clientId() + " must use its exact isolated USER PKCE contract");
+        }
+        URI redirect = URI.create(client.redirectUris().iterator().next());
+        URI postLogout = URI.create(client.postLogoutRedirectUris().iterator().next());
+        URI origin = URI.create(client.allowedOrigins().iterator().next());
+        if (!expectedCallbackPath.equals(redirect.getPath())
+                || redirect.getQuery() != null
+                || !sameOrigin(origin, redirect)
+                || !sameOrigin(origin, postLogout)) {
+            throw new IllegalStateException(
+                    client.clientId() + " redirect and logout URI must use its declared origin");
+        }
+    }
+
+    /**
+     * Rejects CAD client drift before registration can broaden its browser or token boundary.
+     *
+     * <p>CAD project membership is deliberately not an OAuth role. The client therefore admits
+     * USER subjects and carries only {@code cad.project}; cad-service authorizes each project
+     * member after validating the token.</p>
+     *
+     * @param client configured CAD declaration
+     * @param authenticationMethods normalized client authentication methods
+     * @param grantTypes normalized authorization grants
+     */
+    private void validateCadClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateDedicatedUserClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.CAD_SCOPES,
+                "/cabin-cad/auth/callback");
+        URI postLogout = URI.create(client.postLogoutRedirectUris().iterator().next());
+        if (!"/cabin-cad/".equals(postLogout.getPath()) || postLogout.getQuery() != null) {
+            throw new IllegalStateException(
+                    "rwms-cad post-logout URI must use the exact /cabin-cad/ path");
+        }
+    }
+
+    /**
+     * Rejects customer-client configuration that broadens its single-purpose native boundary.
+     *
+     * <p>The callback is a query-free HTTPS endpoint on the declared customer origin. Tokens are
+     * short lived, refresh tokens rotate, and the client receives no manager or warehouse scopes.
+     *
+     * @param client configured customer Android declaration
+     * @param authenticationMethods normalized client authentication methods
+     * @param grantTypes normalized authorization grants
+     */
+    private void validateCustomerAndroidClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        boolean exactPublicContract =
+                authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                        && grantTypes.equals(Set.of(
+                                AuthorizationGrantType.AUTHORIZATION_CODE,
+                                AuthorizationGrantType.REFRESH_TOKEN))
+                        && client.scopes().equals(OAuthClientProperties.CUSTOMER_ANDROID_SCOPES)
+                        && client.allowedPrincipalTypes().equals(Set.of(
+                                dev.buhanzaz.rwms.auth.domain.PrincipalType.USER))
+                        && client.audiences().equals(Set.of("rwms-services"))
+                        && client.requireProofKey()
+                        && client.redirectUris().size() == 1
+                        && client.postLogoutRedirectUris().isEmpty()
+                        && client.allowedOrigins().size() == 1
+                        && client.accessTokenTtl().equals(Duration.ofMinutes(5))
+                        && client.refreshTokenTtl().equals(Duration.ofDays(30))
+                        && !client.reuseRefreshTokens()
+                        && client.secretEnvironment() == null
+                        && client.developmentSecret() == null;
+        if (!exactPublicContract) {
+            throw new IllegalStateException(
+                    "rwms-customer-android must use its exact CUSTOMER USER PKCE contract");
+        }
+        URI redirect = URI.create(client.redirectUris().iterator().next());
+        URI origin = URI.create(client.allowedOrigins().iterator().next());
+        boolean safeHttpsOrigin = "https".equalsIgnoreCase(origin.getScheme())
+                && origin.getHost() != null
+                && origin.getUserInfo() == null
+                && origin.getQuery() == null
+                && origin.getFragment() == null;
+        if (!safeHttpsOrigin
+                || !"/auth/customer/callback".equals(redirect.getPath())
+                || redirect.getUserInfo() != null
+                || redirect.getQuery() != null
+                || redirect.getFragment() != null
+                || !sameOrigin(origin, redirect)) {
+            throw new IllegalStateException(
+                    "rwms-customer-android redirect must use the same-origin HTTPS "
+                            + "/auth/customer/callback path");
+        }
+    }
+
+    private void validateExactServiceClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes,
+            Set<String> expectedScopes,
+            String expectedAudience,
+            String expectedSecretEnvironment) {
+        boolean repositorySecret = client.developmentSecret() != null && !client.developmentSecret().isBlank();
+        if (!authenticationMethods.equals(Set.of(ClientAuthenticationMethod.CLIENT_SECRET_BASIC))
+                || !grantTypes.equals(Set.of(AuthorizationGrantType.CLIENT_CREDENTIALS))
+                || !client.scopes().equals(expectedScopes)
+                || !client.audiences().equals(Set.of(expectedAudience))
+                || !client.allowedPrincipalTypes().isEmpty()
+                || !client.redirectUris().isEmpty()
+                || !client.postLogoutRedirectUris().isEmpty()
+                || !client.allowedOrigins().isEmpty()
+                || client.requireProofKey()
+                || client.revokeAuthorizations()
+                || client.accessTokenTtl().isZero()
+                || client.accessTokenTtl().isNegative()
+                || !expectedSecretEnvironment.equals(client.secretEnvironment())
+                || repositorySecret) {
+            throw new IllegalStateException(
+                    client.clientId()
+                            + " OAuth client must use its exact SERVICE scopes, audience, and external secret");
+        }
+    }
+
+    private void validateUris(OAuthClientProperties.Client client) {
+        client.redirectUris().forEach(value -> validateUri(client.clientId(), value, false));
+        client.postLogoutRedirectUris().forEach(value -> validateUri(client.clientId(), value, false));
+        client.allowedOrigins().forEach(value -> validateUri(client.clientId(), value, true));
+    }
+
+    private void validateUri(String clientId, String value, boolean originOnly) {
+        URI uri;
+        try {
+            uri = URI.create(value);
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException("OAuth URI is invalid for " + clientId, exception);
+        }
+        if (!uri.isAbsolute() || uri.getHost() == null || uri.getFragment() != null || uri.getUserInfo() != null) {
+            throw new IllegalStateException("OAuth URI must be absolute and safe for " + clientId);
+        }
+        if (originOnly
+                && ((uri.getPath() != null && !uri.getPath().isEmpty() && !"/".equals(uri.getPath()))
+                        || uri.getQuery() != null)) {
+            throw new IllegalStateException("OAuth CORS origin cannot contain path or query: " + clientId);
+        }
+        if (!authProperties.devDefaultCredentials() && !"https".equalsIgnoreCase(uri.getScheme())) {
+            throw new IllegalStateException("OAuth URI must use HTTPS outside dev/test: " + clientId);
+        }
+    }
+
+    private boolean sameOrigin(URI expected, URI actual) {
+        int expectedPort = expected.getPort() < 0
+                ? defaultPort(expected.getScheme())
+                : expected.getPort();
+        int actualPort = actual.getPort() < 0
+                ? defaultPort(actual.getScheme())
+                : actual.getPort();
+        return expected.getScheme().equalsIgnoreCase(actual.getScheme())
+                && expected.getHost().equalsIgnoreCase(actual.getHost())
+                && expectedPort == actualPort;
+    }
+
+    private int defaultPort(String scheme) {
+        return "https".equalsIgnoreCase(scheme) ? 443 : 80;
+    }
+
+    private String resolveSecret(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods) {
+        if (!authenticationMethods.contains(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)) {
+            return null;
+        }
+        if (!client.enabled()) {
+            return null;
+        }
+        String secret = client.secretEnvironment() == null
+                ? null
+                : environment.getProperty(client.secretEnvironment());
+        if ((secret == null || secret.isBlank()) && authProperties.devDefaultCredentials()) {
+            secret = client.developmentSecret();
+        }
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "OAuth client secret environment is required for " + client.clientId());
+        }
+        if (client.taskBoardServiceClient() && retiredTaskBoardSecret(secret)) {
+            throw new IllegalStateException(
+                    "TASK_BOARD_CLIENT_SECRET must replace the retired development credential");
+        }
+        if (!authProperties.devDefaultCredentials()
+                && client.developmentSecret() != null
+                && !client.developmentSecret().isBlank()) {
+            throw new IllegalStateException("Development OAuth secret is forbidden outside dev/test");
+        }
+        return secret;
+    }
+
+    private boolean retiredTaskBoardSecret(String secret) {
+        try {
+            return RETIRED_TASK_BOARD_SECRET_SHA256.equals(HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8))));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private String fingerprint(OAuthClientProperties.Client client) {
+        String canonical = String.join(
+                "|",
+                client.clientId(),
+                client.clientName(),
+                Boolean.toString(client.enabled()),
+                sorted(client.authenticationMethods()),
+                sorted(client.grantTypes()),
+                sorted(client.redirectUris()),
+                sorted(client.postLogoutRedirectUris()),
+                sorted(client.scopes()),
+                sorted(client.allowedPrincipalTypes().stream()
+                        .map(Enum::name)
+                        .collect(java.util.stream.Collectors.toSet())),
+                sorted(client.audiences()),
+                sorted(client.allowedOrigins()),
+                Boolean.toString(client.requireProofKey()),
+                client.accessTokenTtl().toString(),
+                Objects.toString(client.secretEnvironment(), ""));
+        if (client.grantTypes().contains("refresh_token")) {
+            canonical = String.join(
+                    "|",
+                    canonical,
+                    client.refreshTokenTtl().toString(),
+                    client.reuseRefreshTokens().toString());
+        }
+        try {
+            return java.util.HexFormat.of()
+                    .formatHex(MessageDigest.getInstance("SHA-256")
+                            .digest(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private String sorted(Set<String> values) {
+        return values.stream().sorted(Comparator.naturalOrder()).collect(java.util.stream.Collectors.joining(","));
+    }
+
+    private boolean equivalent(RegisteredClient left, RegisteredClient right) {
+        return left != null
+                && Objects.equals(left.getId(), right.getId())
+                && Objects.equals(left.getClientId(), right.getClientId())
+                && Objects.equals(left.getClientIdIssuedAt(), right.getClientIdIssuedAt())
+                && Objects.equals(left.getClientSecret(), right.getClientSecret())
+                && Objects.equals(left.getClientName(), right.getClientName())
+                && Objects.equals(left.getClientAuthenticationMethods(), right.getClientAuthenticationMethods())
+                && Objects.equals(left.getAuthorizationGrantTypes(), right.getAuthorizationGrantTypes())
+                && Objects.equals(left.getRedirectUris(), right.getRedirectUris())
+                && Objects.equals(left.getPostLogoutRedirectUris(), right.getPostLogoutRedirectUris())
+                && Objects.equals(left.getScopes(), right.getScopes())
+                && Objects.equals(left.getClientSettings().getSettings(), right.getClientSettings().getSettings())
+                && Objects.equals(left.getTokenSettings().getSettings(), right.getTokenSettings().getSettings());
+    }
+
+    private Long settingAsLong(RegisteredClient client, String name) {
+        Object value = client == null ? null : client.getClientSettings().getSetting(name);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return value == null ? null : Long.valueOf(value.toString());
+    }
+
+    private String settingAsString(RegisteredClient client, String name) {
+        Object value = client == null ? null : client.getClientSettings().getSetting(name);
+        return value == null ? null : value.toString();
+    }
+
+    private ClientAuthenticationMethod authenticationMethod(String value) {
+        return switch (value) {
+            case "none" -> ClientAuthenticationMethod.NONE;
+            case "client_secret_basic" -> ClientAuthenticationMethod.CLIENT_SECRET_BASIC;
+            default -> throw new IllegalStateException("Unsupported OAuth authentication method: " + value);
+        };
+    }
+
+    private AuthorizationGrantType grantType(String value) {
+        return switch (value) {
+            case "authorization_code" -> AuthorizationGrantType.AUTHORIZATION_CODE;
+            case "refresh_token" -> AuthorizationGrantType.REFRESH_TOKEN;
+            case "client_credentials" -> AuthorizationGrantType.CLIENT_CREDENTIALS;
+            default -> throw new IllegalStateException("Unsupported OAuth grant type: " + value);
+        };
+    }
+
+    private <T> void replace(Set<T> target, Set<T> values) {
+        target.clear();
+        target.addAll(values);
+    }
+
+    private void requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("OAuth " + field + " must not be blank");
+        }
+    }
+
+    private record ValidatedClient(
+            OAuthClientProperties.Client configuration,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes,
+            String rawSecret,
+            String fingerprint) {
+    }
+}

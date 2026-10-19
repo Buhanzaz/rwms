@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "applicationId": "dev.buhanzaz.rwms.client",
+  "artifactNamePrefix": "rwms-customer",
+  "productionSignerSha256Allowlist": [
+    "3d1a6c3ddcd7cdea0c8d0508557c1684c945ea4ee0aeb349a800e9bdc7968839"
+  ],
+  "internalTestSignerSha256Allowlist": []
+}

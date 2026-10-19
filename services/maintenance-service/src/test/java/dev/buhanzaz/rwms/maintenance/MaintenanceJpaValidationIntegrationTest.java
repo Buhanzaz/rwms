@@ -1,0 +1,123 @@
+package dev.buhanzaz.rwms.maintenance;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import jakarta.persistence.EntityManagerFactory;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+@SpringBootTest(properties = {
+    "spring.jpa.hibernate.ddl-auto=validate",
+    "rwms.platform.kafka.enabled=false",
+    "AUTH_ISSUER=http://auth.test",
+    "PANEL_ORIGIN=http://panel.test"
+})
+@ActiveProfiles("test")
+@Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+class MaintenanceJpaValidationIntegrationTest {
+  @Container
+  @ServiceConnection
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+  @Autowired EntityManagerFactory entityManagerFactory;
+  @Autowired JdbcTemplate jdbc;
+
+  @Test
+  void latestFlywayPassesHibernateValidationForEveryBusinessProjection() {
+    assertThat(entityManagerFactory.isOpen()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where version='46' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from information_schema.columns
+                where table_schema='public'
+                  and table_name in ('maintenance_estimate','estimate_revision','maintenance_repair')
+                  and column_name='force_capital_repair'
+                  and is_nullable='NO'
+                """,
+                Integer.class))
+        .isEqualTo(3);
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='estimate_line' and column_name='unit'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.tables
+        where table_schema='public' and table_name='estimate_creation_window_settings'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='logistics_return_shortage'
+          and column_name='arrived_at'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public'
+          and table_name='repair_capacity_settings'
+          and column_name='automatic_refill_delay_minutes'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.tables
+        where table_schema='public' and table_name='repair_capacity_settings'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='catalog_node' and column_name='photo_required'
+        """,
+        Integer.class)).isZero();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='catalog_node' and column_name='display_color'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public'
+          and table_name in ('maintenance_estimate','maintenance_repair')
+          and column_name='cover_media_id'
+        """,
+        Integer.class)).isEqualTo(2);
+    assertThat(entityManagerFactory.getMetamodel().getEntities())
+        .extracting(value -> value.getJavaType().getSimpleName())
+        .contains(
+            "CatalogVersion", "CatalogNode", "CatalogLink", "MaintenanceEstimate",
+            "EstimateRevision", "EstimateLine", "EstimatePlanStage", "MaintenanceRepair",
+            "RepairStage", "MaintenanceMediaReference", "MediaFactProjection",
+            "RentalItemFactProjection", "OperationLeaseFactProjection");
+    assertThat(entityManagerFactory.getMetamodel().getEntities())
+        .extracting(value -> value.getJavaType().getSimpleName())
+        .contains(
+            "InventoryRepairSource", "LogisticsReturnShortage", "RepairCapacitySettings",
+            "EstimateCreationWindowSettings",
+            "RepairTaskEvidence", "RepairComplexitySettings", "RepairPlaceAllocation",
+            "InventoryPublicationSource", "InventoryPublicationSourceOperation",
+            "InventoryAuthoritativeOutcome", "InventoryAuthoritativeOutcomeReceipt",
+            "InventoryAuthoritativeOutcomeWatermark", "InventoryAuthoritativeOutcomeTarget");
+  }
+}

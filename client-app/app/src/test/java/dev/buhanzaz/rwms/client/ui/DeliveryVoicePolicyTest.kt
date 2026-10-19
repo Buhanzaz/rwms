@@ -1,0 +1,27 @@
+package dev.buhanzaz.rwms.client.ui
+
+import com.google.common.truth.Truth.assertThat
+import org.junit.Test
+
+/** Covers safe normalization of optional Android speech-recognition results. */
+class DeliveryVoicePolicyTest {
+    @Test
+    fun `first non blank voice phrase becomes address`() {
+        assertThat(DeliveryVoicePolicy.recognizedAddress(listOf(" ", " Невский проспект, 1 ")))
+            .isEqualTo("Невский проспект, 1")
+    }
+
+    @Test
+    fun `missing voice result does not fabricate address`() {
+        assertThat(DeliveryVoicePolicy.recognizedAddress(null)).isNull()
+        assertThat(DeliveryVoicePolicy.recognizedAddress(listOf(" "))).isNull()
+    }
+
+    @Test
+    fun `voice provider policy accepts yandex and rejects google fallback`() {
+        assertThat(isYandexSpeechRecognizerPackage("ru.yandex.searchplugin")).isTrue()
+        assertThat(isYandexSpeechRecognizerPackage("com.google.android.googlequicksearchbox")).isFalse()
+        assertThat(isYandexSpeechRecognizerPackage("com.android.speech.service")).isFalse()
+        assertThat(isYandexSpeechRecognizerPackage("example.yandex.fake")).isFalse()
+    }
+}

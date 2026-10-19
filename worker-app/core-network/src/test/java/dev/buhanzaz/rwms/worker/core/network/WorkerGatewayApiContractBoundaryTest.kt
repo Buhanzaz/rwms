@@ -1,0 +1,598 @@
+package dev.buhanzaz.rwms.worker.core.network
+
+import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
+import java.lang.reflect.Method
+import java.lang.reflect.Proxy
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.junit.Assert.assertThrows
+import org.junit.Test
+import retrofit2.Retrofit
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
+import retrofit2.http.DELETE
+import retrofit2.http.GET
+import retrofit2.http.Headers
+import retrofit2.http.POST
+import retrofit2.http.PUT
+import retrofit2.http.Url
+
+/**
+ * Pins every worker Retrofit operation to the public operations in
+ * `contracts/openapi/task-board-service.yaml` and `contracts/openapi/media-service.yaml`.
+ * All active JSON request/response roots have current canonical fixtures. Binary media bodies,
+ * `ResponseBody`, and the `Unit` unregister response are converter-checked but intentionally are
+ * not represented as JSON fixtures.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+class WorkerGatewayApiContractBoundaryTest {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        encodeDefaults = true
+    }
+
+    @Test
+    fun `all declared routes remain exact public gateway operations`() {
+        val expected = expectedWorkerRoutes()
+        val methods = WorkerGatewayApi::class.java.declaredMethods
+            .filterNot(Method::isSynthetic)
+            .associateBy(Method::getName)
+
+        assertThat(expected).hasSize(16)
+        assertWithMessage(
+            "WorkerGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
+        ).that(methods.keys)
+            .containsExactlyElementsIn(expected.keys)
+
+        expected.forEach { (methodName, contractRoute) ->
+            val method = checkNotNull(methods[methodName])
+            val (actualVerb, actualPath) = workerHttpRoute(method)
+            assertWithMessage("$methodName verb must match ${contractRoute.canonicalSource}")
+                .that(actualVerb)
+                .isEqualTo(contractRoute.verb)
+            assertWithMessage(
+                "$methodName gateway path must match ${contractRoute.canonicalSource}; " +
+                    "only placeholder names are normalized",
+            ).that(normalizeWorkerPlaceholderNames(actualPath))
+                .isEqualTo(normalizeWorkerPlaceholderNames(contractRoute.gatewayPath))
+
+            val hasDynamicUrl = method.parameterAnnotations
+                .any { annotations -> annotations.any { annotation -> annotation is Url } }
+            assertWithMessage("$methodName dynamic URL policy comes from ${contractRoute.canonicalSource}")
+                .that(hasDynamicUrl)
+                .isEqualTo(contractRoute.gatewayPath.isEmpty())
+
+            if (actualPath.isNotEmpty()) {
+                assertWorkerPublicGatewayPath(methodName, actualPath, contractRoute.canonicalSource)
+            }
+        }
+
+        val dynamicMethods = expected
+            .filterValues { route -> route.gatewayPath.isEmpty() }
+            .keys
+        assertThat(dynamicMethods).containsExactly("uploadMediaContent", "mediaContent")
+    }
+
+    @Test
+    fun `requirement restore uses its exact four-field fenced command`() {
+        val request = WorkerRequirementRestoreRequestDto(
+            operationId = "11111111-1111-1111-1111-111111111111",
+            expectedVersion = 9,
+            occurredAt = "2026-09-11T10:00:00Z",
+            offlineLeaseId = "22222222-2222-2222-2222-222222222222",
+        )
+        val encoded = json.encodeToString(request)
+        assertThat(json.parseToJsonElement(encoded).jsonObject.keys)
+            .containsExactly("operationId", "expectedVersion", "occurredAt", "offlineLeaseId")
+        assertThat(json.decodeFromString<WorkerRequirementRestoreRequestDto>(encoded)).isEqualTo(request)
+    }
+
+    @Test
+    fun `production kotlinx serializer resolves every Retrofit shape eagerly`() {
+        val api = Retrofit.Builder()
+            .baseUrl("https://gateway.example.test/")
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .validateEagerly(true)
+            .build()
+            .create(WorkerGatewayApi::class.java)
+
+        assertThat(api).isNotNull()
+    }
+
+    @Test
+    fun `media content explicitly requests an image response`() {
+        val method = WorkerGatewayApi::class.java.declaredMethods
+            .single { candidate -> candidate.name == "mediaContent" && !candidate.isSynthetic }
+        val headers = method.getAnnotation(Headers::class.java)?.value?.toList().orEmpty()
+
+        assertThat(headers).contains("Accept: image/*")
+    }
+
+    @Test
+    fun `context and feed fixtures decode current task board projections`() {
+        val context = json.decodeFromString<WorkerContextDto>(
+            """
+            {
+              "worker":{
+                "id":"11111111-1111-1111-1111-111111111111",
+                "warehouseId":"22222222-2222-2222-2222-222222222222",
+                "login":"worker-1",
+                "displayName":"Worker One"
+              },
+              "currentGroup":null,
+              "operationalAvailability":"AVAILABLE",
+              "groups":[],
+              "qualifications":[],
+              "categories":[],
+              "kpiPalette":null,
+              "serverTime":"2026-08-09T08:00:00Z",
+              "revision":7,
+              "offlineLease":{
+                "id":"33333333-3333-3333-3333-333333333333",
+                "issuedAt":"2026-08-09T08:00:00Z",
+                "expiresAt":"2026-08-10T08:00:00Z",
+                "syncRevision":7
+              }
+            }
+            """.trimIndent(),
+        )
+        val feed = json.decodeFromString<WorkerFeedDto>(
+            """
+            {
+              "revision":8,
+              "serverTime":"2026-08-09T08:01:00Z",
+              "categories":[],
+              "nextCursor":null
+            }
+            """.trimIndent(),
+        )
+
+        assertThat(context.worker.warehouseId).isEqualTo("22222222-2222-2222-2222-222222222222")
+        assertThat(context.operationalAvailability).isEqualTo("AVAILABLE")
+        assertThat(feed.revision).isEqualTo(8)
+        assertThat(feed.nextCursor).isNull()
+    }
+
+    @Test
+    fun `detail action and evidence fixtures preserve exact task transition fields`() {
+        val detailFixture = canonicalWorkerTaskDetailFixture()
+        val detail = json.decodeFromString<WorkerTaskDetailDto>(detailFixture)
+        val actionResult = json.decodeFromString<WorkerActionResultDto>(
+            """
+            {
+              "outcome":"APPLIED",
+              "currentVersion":9,
+              "entry":$detailFixture
+            }
+            """.trimIndent(),
+        )
+        val evidence = json.decodeFromString<TaskEvidenceDto>(
+            """
+            {
+              "evidenceId":"66666666-6666-6666-6666-666666666666",
+              "version":1,
+              "entryId":"44444444-4444-4444-4444-444444444444",
+              "routeIndex":0,
+              "workerId":"11111111-1111-1111-1111-111111111111",
+              "workerGroupId":null,
+              "capturedAt":"2026-08-09T08:02:00Z",
+              "recordedAt":"2026-08-09T08:02:01Z",
+              "state":"RESERVED",
+              "mediaId":null,
+              "mediaGeneration":null,
+              "reviewReason":null,
+              "contentType":"image/jpeg",
+              "readPath":null,
+              "thumbnailPath":null
+            }
+            """.trimIndent(),
+        )
+        val actionRequest = WorkerActionRequestDto(
+            operationId = "77777777-7777-7777-7777-777777777777",
+            action = "PAUSE",
+            expectedVersion = 9,
+            workerGroupId = null,
+            evidenceId = null,
+            occurredAt = "2026-08-09T08:03:00Z",
+            offlineLeaseId = "33333333-3333-3333-3333-333333333333",
+        )
+        val evidenceRequest = EvidenceReservationRequestDto(
+            operationId = "88888888-8888-8888-8888-888888888888",
+            evidenceId = evidence.evidenceId,
+            routeIndex = 0,
+            capturedAt = evidence.capturedAt,
+            offlineLeaseId = "33333333-3333-3333-3333-333333333333",
+            sizeBytes = 128,
+            sha256 = "a".repeat(64),
+        )
+        val actionJson = json.encodeToString(actionRequest)
+        val evidenceJson = json.encodeToString(evidenceRequest)
+
+        assertThat(detail.entryId).isEqualTo("44444444-4444-4444-4444-444444444444")
+        assertThat(detail.routeIndex).isEqualTo(41)
+        assertThat(detail.routeStepIndex).isEqualTo(1)
+        assertThat(detail.routeStepCount).isEqualTo(3)
+        assertThat(actionResult.entry).isEqualTo(detail)
+        assertThat(evidence.state).isEqualTo("RESERVED")
+        assertThat(json.parseToJsonElement(actionJson).jsonObject.keys).containsExactly(
+            "operationId",
+            "action",
+            "expectedVersion",
+            "workerGroupId",
+            "evidenceId",
+            "occurredAt",
+            "offlineLeaseId",
+        )
+        assertThat(actionJson).contains("\"workerGroupId\":null")
+        assertThat(actionJson).contains("\"evidenceId\":null")
+        assertThat(evidenceJson).contains("\"contentType\":\"image/webp\"")
+        assertThat(evidenceJson).contains("\"sha256\":\"${"a".repeat(64)}\"")
+        assertThrows(SerializationException::class.java) {
+            json.decodeFromString<WorkerTaskDetailDto>(
+                detailFixture.replace("  \"routeStepIndex\":1,\n", ""),
+            )
+        }
+        assertThrows(SerializationException::class.java) {
+            json.decodeFromString<WorkerTaskDetailDto>(
+                detailFixture.replace("  \"routeStepCount\":3,\n", ""),
+            )
+        }
+    }
+
+    @Test
+    fun `problem report fixtures preserve atomic attachments and author owned refresh shape`() {
+        val attachment = EvidenceReservationRequestDto(
+            operationId = "88888888-8888-8888-8888-888888888888",
+            evidenceId = "66666666-6666-6666-6666-666666666666",
+            routeIndex = 0,
+            capturedAt = "2026-08-09T08:02:00Z",
+            offlineLeaseId = "33333333-3333-3333-3333-333333333333",
+            sizeBytes = 128,
+            sha256 = "a".repeat(64),
+        )
+        val request = WorkerProblemReportRequestDto(
+            operationId = "99999999-9999-9999-9999-999999999999",
+            comment = "Broken light",
+            occurredAt = "2026-08-09T08:03:00Z",
+            offlineLeaseId = attachment.offlineLeaseId,
+            attachments = listOf(attachment),
+        )
+        val response = json.decodeFromString<WorkerProblemReportDto>(
+            """
+            {
+              "reportId":"99999999-9999-9999-9999-999999999999",
+              "entryId":"44444444-4444-4444-4444-444444444444",
+              "taskId":"55555555-5555-5555-5555-555555555555",
+              "routeIndex":0,
+              "entryTitle":"Inspect cabin",
+              "comment":"Broken light",
+              "occurredAt":"2026-08-09T08:03:00Z",
+              "recordedAt":"2026-08-09T08:03:01Z",
+              "attachments":[{
+                "evidenceId":"66666666-6666-6666-6666-666666666666",
+                "version":1,
+                "entryId":"44444444-4444-4444-4444-444444444444",
+                "routeIndex":0,
+                "workerId":"11111111-1111-1111-1111-111111111111",
+                "workerGroupId":null,
+                "capturedAt":"2026-08-09T08:02:00Z",
+                "recordedAt":"2026-08-09T08:03:01Z",
+                "state":"READY",
+                "mediaId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "mediaGeneration":1,
+                "reviewReason":null,
+                "contentType":"image/webp",
+                "readPath":"/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/original?generation=1",
+                "thumbnailPath":"/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/variants/SMALL/content?generation=1"
+              }]
+            }
+            """.trimIndent(),
+        )
+        val requestJson = json.encodeToString(request)
+
+        assertThat(json.parseToJsonElement(requestJson).jsonObject.keys).containsExactly(
+            "operationId",
+            "comment",
+            "occurredAt",
+            "offlineLeaseId",
+            "attachments",
+        )
+        assertThat(requestJson).contains("\"evidenceId\":\"${attachment.evidenceId}\"")
+        assertThat(response.reportId).isEqualTo(request.operationId)
+        assertThat(response.attachments.single().state).isEqualTo("READY")
+        assertThat(response.attachments.single().readPath).startsWith("/api/media/")
+    }
+
+    @Test
+    fun `missing requirement report preserves fenced idempotent wire fields`() {
+        val request = WorkerProblemReportRequestDto(
+            operationId = "99999999-9999-9999-9999-999999999999",
+            comment = "Нет материала: Герметик",
+            occurredAt = "2026-08-09T08:03:00Z",
+            offlineLeaseId = "33333333-3333-3333-3333-333333333333",
+            attachments = emptyList(),
+            expectedVersion = 42,
+            missingItemIds = listOf("77777777-7777-7777-7777-777777777777"),
+        )
+
+        val encoded = json.encodeToString(request)
+
+        assertThat(encoded).contains("\"expectedVersion\":42")
+        assertThat(encoded).contains("\"missingItemIds\":[\"77777777-7777-7777-7777-777777777777\"]")
+        assertThat(encoded).contains("\"attachments\":[]")
+    }
+
+    @Test
+    fun `device fixtures encode and decode the public registration shape`() {
+        val registration = json.decodeFromString<WorkerDeviceRegistrationDto>(
+            """
+            {
+              "installationId":"installation-1",
+              "provider":"FCM",
+              "status":"ACTIVE",
+              "registeredAt":"2026-08-09T08:00:00Z",
+              "updatedAt":"2026-08-09T08:05:00Z"
+            }
+            """.trimIndent(),
+        )
+        val request = WorkerDeviceRegistrationRequestDto(
+            targetKind = "FID",
+            token = "firebase-installation-id",
+            appVersion = "0.3.0",
+            sdkInt = 36,
+            locale = "ru-RU",
+        )
+        val encoded = json.encodeToString(request)
+
+        assertThat(registration.status).isEqualTo("ACTIVE")
+        assertThat(encoded).contains("\"provider\":\"FCM\"")
+        assertThat(encoded).contains("\"targetKind\":\"FID\"")
+        assertThat(encoded).contains("\"token\":\"firebase-installation-id\"")
+        assertThat(encoded).contains("\"sdkInt\":36")
+    }
+
+    @Test
+    fun `media fixtures expose only opaque metadata and public same-origin paths`() {
+        val session = json.decodeFromString<UploadSessionDto>(
+            """
+            {
+              "uploadSessionId":"99999999-9999-9999-9999-999999999999",
+              "mediaId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "expiresAt":"2026-08-09T09:00:00Z",
+              "contentUploadUrl":null,
+              "variantUploadUrls":[
+                {"kind":"SMALL","contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/SMALL/content"},
+                {"kind":"MEDIUM","contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/MEDIUM/content"},
+                {"kind":"LARGE","contentUploadUrl":"/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/LARGE/content"}
+              ]
+            }
+            """.trimIndent(),
+        )
+        val uploaded = json.decodeFromString<UploadedObjectDto>(
+            """
+            {
+              "objectVersionId":"opaque-object-version",
+              "etag":"opaque-etag",
+              "checksumSha256":"${"b".repeat(64)}"
+            }
+            """.trimIndent(),
+        )
+        val asset = json.decodeFromString<MediaAssetDto>(
+            """
+            {
+              "id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "folderId":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+              "clientReferenceId":"66666666-6666-6666-6666-666666666666",
+              "fileName":"evidence.jpg",
+              "contentType":"image/jpeg",
+              "kind":"IMAGE",
+              "status":"READY",
+              "version":2,
+              "generation":1,
+              "rotationDegrees":0,
+              "sortOrder":0,
+              "sizeBytes":128,
+              "createdAt":"2026-08-09T08:00:00Z",
+              "variants":[{
+                "kind":"SMALL",
+                "contentType":"image/webp",
+                "contentPath":"/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/variants/SMALL/content?generation=1",
+                "width":320,
+                "height":180
+              }]
+            }
+            """.trimIndent(),
+        )
+        val createRequest = CreateUploadSessionRequestDto(
+            ownerId = "44444444-4444-4444-4444-444444444444",
+            warehouseId = "22222222-2222-2222-2222-222222222222",
+            clientReferenceId = "66666666-6666-6666-6666-666666666666",
+            fileName = "evidence.webp",
+            imageVariants = listOf(
+                ImageVariantUploadRequestDto("SMALL", 32, "a".repeat(64), 320, 180),
+                ImageVariantUploadRequestDto("MEDIUM", 40, "b".repeat(64), 960, 540),
+                ImageVariantUploadRequestDto("LARGE", 56, "c".repeat(64), 1_600, 900),
+            ),
+        )
+        val finalizeRequest = FinalizeUploadRequestDto(
+            variants = listOf("SMALL", "MEDIUM", "LARGE").map { kind ->
+                FinalizeImageVariantDto(
+                    kind = kind,
+                    objectVersionId = uploaded.objectVersionId,
+                    etag = uploaded.etag,
+                    checksumSha256 = uploaded.checksumSha256,
+                )
+            },
+        )
+        val createJson = json.encodeToString(createRequest)
+        val finalizeJson = json.encodeToString(finalizeRequest)
+
+        assertThat(session.contentUploadUrl).isNull()
+        assertThat(session.variantUploadUrls.map { it.kind })
+            .containsExactly("SMALL", "MEDIUM", "LARGE").inOrder()
+        assertThat(asset.variants.single().contentPath).startsWith("/api/media/v1/assets/")
+        assertThat(createJson).contains("\"ownerType\":\"TASK_BOARD_ENTRY\"")
+        assertThat(createJson).contains("\"context\":\"WORK_RESULT\"")
+        assertThat(createJson).contains("\"imageVariants\"")
+        assertThat(json.parseToJsonElement(createJson).jsonObject.keys)
+            .containsNoneOf("contentType", "contentLength", "checksumSha256")
+        assertThat(finalizeJson).contains("\"variants\"")
+        assertThat(requireNotNull(finalizeRequest.variants).map { it.kind })
+            .containsExactly("SMALL", "MEDIUM", "LARGE").inOrder()
+        assertThat(finalizeJson).contains("\"objectVersionId\":\"opaque-object-version\"")
+    }
+
+    @Test
+    fun `dynamic media client calls reject private and foreign paths before Retrofit`() = runTest {
+        val uploadPath =
+            "/api/media/v1/upload-sessions/99999999-9999-9999-9999-999999999999/variants/LARGE/content"
+        val originalPath =
+            "/api/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/original?generation=1"
+        assertThat(requireSameOriginApiPath(uploadPath)).isEqualTo(uploadPath)
+        assertThat(requireSameOriginMediaReadPath(originalPath)).isEqualTo(originalPath)
+
+        val calls = mutableListOf<String>()
+        val api = proxyWorkerApi { method ->
+            calls += method.name
+            error("Unsafe dynamic URL must be rejected before ${method.name}")
+        }
+        val client = WorkerGatewayClient(api, json)
+        val uploadFailure = runCatching {
+            client.uploadMediaContent(
+                sameOriginContentPath = "https://media-service:8080/private/object",
+                idempotencyKey = "77777777-7777-7777-7777-777777777777",
+                content = byteArrayOf(1).toRequestBody("image/webp".toMediaType()),
+            )
+        }.exceptionOrNull()
+        val readFailure = runCatching {
+            client.mediaContent(
+                "/api/internal/media/v1/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/original",
+            )
+        }.exceptionOrNull()
+
+        assertThat(uploadFailure).isInstanceOf(IllegalArgumentException::class.java)
+        assertThat(readFailure).isInstanceOf(IllegalArgumentException::class.java)
+        assertThat(calls).isEmpty()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun proxyWorkerApi(result: (Method) -> Any?): WorkerGatewayApi =
+        Proxy.newProxyInstance(
+            WorkerGatewayApi::class.java.classLoader,
+            arrayOf(WorkerGatewayApi::class.java),
+        ) { _, method, _ -> result(method) } as WorkerGatewayApi
+}
+
+/** One worker gateway operation and the canonical OpenAPI location that authorizes it. */
+private data class WorkerContractRoute(
+    val verb: String,
+    val gatewayPath: String,
+    val canonicalSource: String,
+)
+
+private fun workerHttpRoute(method: Method): Pair<String, String> {
+    val annotations = listOfNotNull(
+        method.getAnnotation(GET::class.java)?.let { annotation -> "GET" to annotation.value },
+        method.getAnnotation(POST::class.java)?.let { annotation -> "POST" to annotation.value },
+        method.getAnnotation(PUT::class.java)?.let { annotation -> "PUT" to annotation.value },
+        method.getAnnotation(DELETE::class.java)?.let { annotation -> "DELETE" to annotation.value },
+    )
+    assertWithMessage("${method.name} must declare exactly one supported Retrofit HTTP annotation")
+        .that(annotations)
+        .hasSize(1)
+    return annotations.single()
+}
+
+private fun normalizeWorkerPlaceholderNames(path: String): String =
+    path.replace(Regex("\\{[^/{}]+}"), "{parameter}")
+
+private fun assertWorkerPublicGatewayPath(
+    methodName: String,
+    path: String,
+    canonicalSource: String,
+) {
+    assertWithMessage("$methodName must stay relative to the public gateway: $canonicalSource")
+        .that(path.startsWith("/api/"))
+        .isTrue()
+    listOf("://", "localhost", "127.0.0.1", "/internal/", "/private/", "\\", "\n", "\r")
+        .forEach { forbidden ->
+            assertWithMessage("$methodName must not expose '$forbidden': $canonicalSource")
+                .that(path.lowercase())
+                .doesNotContain(forbidden)
+        }
+}
+
+private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
+    val taskBoard = "contracts/openapi/task-board-service.yaml"
+    val media = "contracts/openapi/media-service.yaml"
+    fun route(verb: String, gatewayPath: String, source: String): WorkerContractRoute =
+        WorkerContractRoute(verb, gatewayPath, source)
+
+    return linkedMapOf(
+        "workerContext" to route("GET", "/api/task-board/worker/v1/context", "$taskBoard /worker/v1/context"),
+        "prepareWorkerProfileAvatarScope" to route("POST", "/api/task-board/worker/v1/profile/avatar-scope", "$taskBoard /worker/v1/profile/avatar-scope"),
+        "workerFeed" to route("GET", "/api/task-board/worker/v1/feed", "$taskBoard /worker/v1/feed"),
+        "workerTaskDetail" to route("GET", "/api/task-board/worker/v1/entries/{entryId}", "$taskBoard /worker/v1/entries/{entryId}"),
+        "applyAction" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/actions", "$taskBoard /worker/v1/entries/{entryId}/actions"),
+        "reserveEvidence" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/evidence-reservations", "$taskBoard /worker/v1/entries/{entryId}/evidence-reservations"),
+        "createProblemReport" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/problem-reports", "$taskBoard /worker/v1/entries/{entryId}/problem-reports"),
+        "restoreRequirement" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/requirements/{itemId}/restore", "$taskBoard /worker/v1/entries/{entryId}/requirements/{itemId}/restore"),
+        "workerProblemReport" to route("GET", "/api/task-board/worker/v1/problem-reports/{reportId}", "$taskBoard /worker/v1/problem-reports/{reportId}"),
+        "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
+        "unregisterDevice" to route("DELETE", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
+        "createUploadSession" to route("POST", "/api/media/v1/upload-sessions", "$media /api/media/v1/upload-sessions"),
+        "mediaAssets" to route("GET", "/api/media/v1/assets", "$media /api/media/v1/assets"),
+        "uploadMediaContent" to route(
+            "PUT",
+            "",
+            "$media /api/media/v1/upload-sessions/{uploadSessionId}/variants/{kind}/content via guarded @Url",
+        ),
+        "finalizeUploadSession" to route("POST", "/api/media/v1/upload-sessions/{uploadSessionId}/complete", "$media /api/media/v1/upload-sessions/{uploadSessionId}/complete"),
+        "mediaContent" to route("GET", "", "$media /api/media/v1/assets/{mediaId}/(original|variants/{variant}/content) via guarded @Url"),
+    )
+}
+
+private fun canonicalWorkerTaskDetailFixture(): String =
+    """
+    {
+      "entryId":"44444444-4444-4444-4444-444444444444",
+      "version":9,
+      "taskId":"55555555-5555-5555-5555-555555555555",
+      "source":null,
+      "routeIndex":41,
+      "routeStepIndex":1,
+      "routeStepCount":3,
+      "title":"Inspect cabin",
+      "description":null,
+      "object":null,
+      "taskText":null,
+      "scheduledDate":"2026-08-09",
+      "deadlineAt":null,
+      "priority":3,
+      "queuePosition":0,
+      "status":"WAITING",
+      "availabilityMode":"AVAILABLE",
+      "plannedDurationMinutes":null,
+      "activeStartedAt":null,
+      "activeWorkSeconds":0,
+      "timerSnapshot":null,
+      "audienceSelectors":[],
+      "assignments":[],
+      "works":[],
+      "materials":[],
+      "comments":[],
+      "sourceMedia":[],
+      "evidence":[],
+      "relatedSteps":[],
+      "resultPhotoMinCount":0,
+      "completionAllowed":true
+    }
+    """.trimIndent()

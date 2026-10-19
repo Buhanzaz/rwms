@@ -1,0 +1,843 @@
+package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
+
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PlannerTaskLineageDto;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueBindingRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.DriverTaskAudienceDto;
+import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
+import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
+import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
+import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
+import dev.buhanzaz.rwms.taskboard.service.RegistryService;
+import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.yaml.snakeyaml.Yaml;
+import tools.jackson.databind.ObjectMapper;
+
+@SpringBootTest
+@ActiveProfiles("test")
+@AutoConfigureMockMvc
+class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport {
+  private static final UUID WAREHOUSE =
+      UUID.fromString("00000000-0000-0000-0000-000000000601");
+  private static final com.fasterxml.jackson.databind.ObjectMapper SCHEMA_JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
+  private static final JsonSchemaFactory SCHEMAS =
+      JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+
+  @Autowired RegistryService registry;
+  @Autowired TaskBoardService board;
+  @Autowired JdbcTemplate jdbc;
+  @Autowired MockMvc mvc;
+  @Autowired ObjectMapper objectMapper;
+
+  private UUID queueDefinitionId;
+  private UUID verificationQueueDefinitionId;
+  private UUID workQueueId;
+  private UUID verificationWorkQueueId;
+
+  @BeforeEach
+  void setUp() {
+    cleanTaskBoardFixtures(jdbc);
+    var definition =
+        registry.createQueueDefinition(
+            QueueRegistryTestFixtures.globalDefinition(0L, "Maintenance", null, QueueType.REPAIR));
+    var queue =
+        QueueRegistryTestFixtures.create(registry, jdbc,
+            WAREHOUSE,
+            new QueueFixtureRequest(
+                0L,
+                definition.id(),
+                true,
+                false,
+                false,
+                null,
+                null,
+                false,
+                null,
+                List.<QueueBindingRequest>of()));
+    queueDefinitionId = definition.id();
+    workQueueId = queue.id();
+    var verificationDefinition =
+        registry.createQueueDefinition(
+            QueueRegistryTestFixtures.globalDefinition(
+                0L, "Maintenance check", null, QueueType.REPAIR));
+    var verificationQueue =
+        QueueRegistryTestFixtures.create(registry, jdbc,
+            WAREHOUSE,
+            new QueueFixtureRequest(
+                0L,
+                verificationDefinition.id(),
+                true,
+                false,
+                false,
+                null,
+                null,
+                false,
+                null,
+                List.<QueueBindingRequest>of()));
+    verificationQueueDefinitionId = verificationDefinition.id();
+    verificationWorkQueueId = verificationQueue.id();
+  }
+
+  @Test
+  void sourceOwnedRegistrationReplayUpdateReconciliationAndCancelStayFenced() throws Exception {
+    UUID externalTaskId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    RegisterExternalTaskRequest registration = registration(externalTaskId, repairId);
+
+    String first =
+        mvc.perform(
+                post("/api/internal/task-board/v1/tasks")
+                    .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(registration)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.externalTaskId").value(externalTaskId.toString()))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    String replay =
+        mvc.perform(
+                post("/api/internal/task-board/v1/tasks")
+                    .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(registration)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(objectMapper.readTree(replay).required("taskId").textValue())
+        .isEqualTo(objectMapper.readTree(first).required("taskId").textValue());
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        registration(externalTaskId, UUID.randomUUID()))))
+        .andExpect(status().isConflict());
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registration(externalTaskId))))
+        .andExpect(status().isConflict());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.BOARD_TASK_CREATED))
+        .isOne();
+    assertThat(jdbc.queryForObject("select count(*) from task_sync_source", Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select source_type from task_sync_source", String.class))
+        .isEqualTo("MAINTENANCE_REPAIR");
+    assertThat(
+            jdbc.queryForObject(
+                "select source_id from task_sync_source", UUID.class))
+        .isEqualTo(repairId);
+
+    UUID oldEntryId =
+        jdbc.queryForObject(
+            "select id from queue_entry where task_id=(select board_task_id from task_sync_source)",
+            UUID.class);
+    PreStartUpdateTaskRequest update =
+        new PreStartUpdateTaskRequest(
+            0L,
+            "Updated maintenance task",
+            "CABIN-1",
+            "Updated before work starts",
+            25,
+            null,
+            List.of(
+                new RouteStepRequest(queueDefinitionId, "Repair", 15),
+                new RouteStepRequest(verificationQueueDefinitionId, "Check", 10)));
+    mvc.perform(
+            put("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(update)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.taskVersion").value(1))
+        .andExpect(jsonPath("$.route.length()").value(2));
+    assertThat(
+            jdbc.queryForObject(
+                "select payload->>'deleted' from domain_event where aggregate_type='QUEUE_ENTRY' "
+                    + "and aggregate_id=? order by aggregate_version desc limit 1",
+                String.class,
+                oldEntryId.toString()))
+        .isEqualTo("true");
+    assertThat(jdbc.queryForObject("select count(*) from queue_entry", Integer.class)).isEqualTo(2);
+    assertThat(
+            jdbc.queryForList(
+                """
+                select board_fact.envelope_body->'payload'->>'externalTaskId' external_task_id,
+                       (queue_fact.envelope_body->'payload'->>'routeIndex')::integer route_index,
+                       jsonb_exists(
+                         queue_fact.envelope_body->'payload', 'externalTaskId') queue_has_external_task_id
+                  from queue_entry entry
+                  join outbox_event queue_fact
+                    on queue_fact.aggregate_type='QUEUE_ENTRY'
+                   and queue_fact.aggregate_id=entry.id::text
+                   and queue_fact.event_type=?
+                  join outbox_event board_fact
+                    on board_fact.aggregate_type='BOARD_TASK'
+                   and board_fact.aggregate_id=entry.task_id::text
+                   and board_fact.event_type=?
+                 order by route_index
+                """,
+                TaskBoardEventTypes.QUEUE_ENTRY_CREATED,
+                TaskBoardEventTypes.BOARD_TASK_CREATED))
+        .extracting(
+            row -> row.get("external_task_id"),
+            row -> row.get("route_index"),
+            row -> row.get("queue_has_external_task_id"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(externalTaskId.toString(), 0, false),
+            org.assertj.core.groups.Tuple.tuple(externalTaskId.toString(), 1, false));
+
+    assertThatThrownBy(() -> board.externalTask("other-service", externalTaskId))
+        .isInstanceOf(NotFoundException.class);
+    assertThatThrownBy(
+            () ->
+                board.cancelExternalTask(
+                    "other-service", externalTaskId, new CancelTaskRequest(1L, "not owner")))
+        .isInstanceOf(NotFoundException.class);
+
+    mvc.perform(
+            get("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.title").value("Updated maintenance task"));
+    mvc.perform(
+            put("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(update)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.taskVersion").value(1))
+        .andExpect(jsonPath("$.route.length()").value(2));
+    assertThat(jdbc.queryForObject("select count(*) from queue_entry", Integer.class)).isEqualTo(2);
+
+    CancelTaskRequest cancel = new CancelTaskRequest(1L, "amended");
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks/{externalTaskId}/cancel", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(cancel)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED"));
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks/{externalTaskId}/cancel", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(cancel)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.BOARD_TASK_CANCELLED))
+        .isOne();
+    mvc.perform(
+            get("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED"));
+  }
+
+  @Test
+  void plannerLineageHttpRegistrationMatchesCanonicalSchemaAndFencesEveryFieldOnReplay()
+      throws Exception {
+    var driverDefinition =
+        QueueRegistryTestFixtures.ensureDriverDefinition(
+            registry, jdbc, "Planner lineage drivers", QueueType.MOVEMENT);
+    QueueRegistryTestFixtures.create(
+        registry,
+        jdbc,
+        WAREHOUSE,
+        new QueueFixtureRequest(
+            0L,
+            driverDefinition.id(),
+            true,
+            false,
+            false,
+            null,
+            null,
+            false,
+            1,
+            List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+    UUID sourceTaskId = UUID.randomUUID();
+    UUID sourcePlanId = UUID.randomUUID();
+    UUID sourcePlanWarehouseId = UUID.randomUUID();
+    LocalDate sourcePlanDate = LocalDate.of(2026, 9, 14);
+    RegisterExternalTaskRequest registration =
+        plannerRegistration(
+            externalTaskId,
+            sourceTaskId,
+            driverDefinition.id(),
+            sourcePlanDate,
+            sourcePlanId,
+            4,
+            sourcePlanWarehouseId,
+            sourcePlanDate);
+    String payload = objectMapper.writeValueAsString(registration);
+    JsonSchema schema = openApiSchema("RegisterExternalTaskRequest");
+    ObjectNode wire = (ObjectNode) SCHEMA_JSON.readTree(payload);
+
+    assertThat(sourcePlanWarehouseId).isNotEqualTo(WAREHOUSE);
+    assertThat(schema.validate(wire)).isEmpty();
+
+    ObjectNode withoutLineage = wire.deepCopy();
+    withoutLineage.remove("plannerLineage");
+    assertThat(schema.validate(withoutLineage)).isEmpty();
+    ObjectNode nullLineage = wire.deepCopy();
+    nullLineage.putNull("plannerLineage");
+    assertThat(schema.validate(nullLineage)).isEmpty();
+
+    for (String field :
+        List.of("sourcePlanId", "sourcePlanVersion", "sourcePlanWarehouseId", "sourcePlanDate")) {
+      ObjectNode missing = wire.deepCopy();
+      ((ObjectNode) missing.required("plannerLineage")).remove(field);
+      assertThat(schema.validate(missing)).as("missing plannerLineage.%s", field).isNotEmpty();
+      ObjectNode explicitNull = wire.deepCopy();
+      ((ObjectNode) explicitNull.required("plannerLineage")).putNull(field);
+      assertThat(schema.validate(explicitNull))
+          .as("null plannerLineage.%s", field)
+          .isNotEmpty();
+    }
+    ObjectNode zeroVersion = wire.deepCopy();
+    ((ObjectNode) zeroVersion.required("plannerLineage")).put("sourcePlanVersion", 0);
+    assertThat(schema.validate(zeroVersion)).isNotEmpty();
+
+    ObjectNode missingWarehouse = wire.deepCopy();
+    missingWarehouse.remove("warehouseId");
+    assertThat(schema.validate(missingWarehouse)).isNotEmpty();
+    ObjectNode extraTopLevel = wire.deepCopy();
+    extraTopLevel.put("audienceSelectors", "legacy");
+    assertThat(schema.validate(extraTopLevel)).isNotEmpty();
+    ObjectNode extraLineageField = wire.deepCopy();
+    ((ObjectNode) extraLineageField.required("plannerLineage")).put("legacyPlanKey", "legacy");
+    assertThat(schema.validate(extraLineageField)).isNotEmpty();
+
+    String first =
+        registerPlannerTask(registration)
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    String replay =
+        registerPlannerTask(registration)
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(objectMapper.readTree(replay).required("taskId").textValue())
+        .isEqualTo(objectMapper.readTree(first).required("taskId").textValue());
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_id from task_sync_source where external_task_id=?",
+                UUID.class,
+                externalTaskId))
+        .isEqualTo(sourcePlanId);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_version from task_sync_source where external_task_id=?",
+                Long.class,
+                externalTaskId))
+        .isEqualTo(4L);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_warehouse_id from task_sync_source where external_task_id=?",
+                UUID.class,
+                externalTaskId))
+        .isEqualTo(sourcePlanWarehouseId);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_date::text from task_sync_source where external_task_id=?",
+                String.class,
+                externalTaskId))
+        .isEqualTo(sourcePlanDate.toString());
+
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                UUID.randomUUID(),
+                4,
+                sourcePlanWarehouseId,
+                sourcePlanDate))
+        .andExpect(status().isConflict());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                sourcePlanId,
+                5,
+                sourcePlanWarehouseId,
+                sourcePlanDate))
+        .andExpect(status().isConflict());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                sourcePlanId,
+                4,
+                UUID.randomUUID(),
+                sourcePlanDate))
+        .andExpect(status().isConflict());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                sourcePlanId,
+                4,
+                sourcePlanWarehouseId,
+                sourcePlanDate.plusDays(1)))
+        .andExpect(status().isBadRequest());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate.plusDays(1),
+                sourcePlanId,
+                4,
+                sourcePlanWarehouseId,
+                sourcePlanDate.plusDays(1)))
+        .andExpect(status().isConflict());
+  }
+
+  @Test
+  void registrationCannotBackfillAPreviouslyMissingSourceReference() {
+    UUID externalTaskId = UUID.randomUUID();
+    board.registerExternalTask("maintenance-service", registration(externalTaskId));
+
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "maintenance-service",
+                    registration(externalTaskId, UUID.randomUUID())))
+        .isInstanceOf(dev.buhanzaz.rwms.taskboard.service.ConflictException.class);
+    assertThat(
+            jdbc.queryForMap(
+                "select source_type,source_id from task_sync_source where external_task_id=?",
+                externalTaskId))
+        .containsEntry("source_type", null)
+        .containsEntry("source_id", null);
+  }
+
+  @Test
+  void internalRegistrationPreservesRepeatedQueueStagesAndFencesReplay() throws Exception {
+    UUID externalTaskId = UUID.randomUUID();
+    RegisterExternalTaskRequest registration =
+        repeatedQueueRegistration(externalTaskId, "Перемещение");
+
+    String first =
+        mvc.perform(
+                post("/api/internal/task-board/v1/tasks")
+                    .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(registration)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.route.length()").value(3))
+            .andExpect(
+                jsonPath("$.route[0].queueDefinitionId")
+                    .value(queueDefinitionId.toString()))
+            .andExpect(jsonPath("$.route[0].workQueueId").value(workQueueId.toString()))
+            .andExpect(jsonPath("$.route[0].routeIndex").value(0))
+            .andExpect(jsonPath("$.route[0].taskText").value("Перемещение"))
+            .andExpect(
+                jsonPath("$.route[1].queueDefinitionId")
+                    .value(verificationQueueDefinitionId.toString()))
+            .andExpect(
+                jsonPath("$.route[1].workQueueId")
+                    .value(verificationWorkQueueId.toString()))
+            .andExpect(jsonPath("$.route[1].routeIndex").value(1))
+            .andExpect(jsonPath("$.route[1].taskText").value("Внутренние работы"))
+            .andExpect(
+                jsonPath("$.route[2].queueDefinitionId")
+                    .value(queueDefinitionId.toString()))
+            .andExpect(jsonPath("$.route[2].workQueueId").value(workQueueId.toString()))
+            .andExpect(jsonPath("$.route[2].routeIndex").value(2))
+            .andExpect(jsonPath("$.route[2].taskText").value("Перемещение"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    var firstResponse = objectMapper.readTree(first);
+    UUID taskId = UUID.fromString(firstResponse.required("taskId").textValue());
+    assertThat(
+            List.of(
+                firstResponse.required("route").get(0).required("entryId").textValue(),
+                firstResponse.required("route").get(1).required("entryId").textValue(),
+                firstResponse.required("route").get(2).required("entryId").textValue()))
+        .doesNotHaveDuplicates();
+    assertThat(
+            jdbc.queryForList(
+                "select queue_id,route_index,task_text from queue_entry where task_id=? "
+                    + "order by route_index",
+                taskId))
+        .extracting(
+            row -> row.get("queue_id"),
+            row -> row.get("route_index"),
+            row -> row.get("task_text"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(workQueueId, 0, "Перемещение"),
+            org.assertj.core.groups.Tuple.tuple(
+                verificationWorkQueueId, 1, "Внутренние работы"),
+            org.assertj.core.groups.Tuple.tuple(workQueueId, 2, "Перемещение"));
+
+    String replay =
+        mvc.perform(
+                post("/api/internal/task-board/v1/tasks")
+                    .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(registration)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(objectMapper.readTree(replay)).isEqualTo(firstResponse);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where external_task_id=?",
+                Integer.class,
+                externalTaskId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from queue_entry where task_id=?", Integer.class, taskId))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where aggregate_id=? and event_type=?",
+                Integer.class,
+                taskId.toString(),
+                TaskBoardEventTypes.BOARD_TASK_CREATED))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.QUEUE_ENTRY_CREATED))
+        .isEqualTo(3);
+
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        repeatedQueueRegistration(externalTaskId, "Изменённое перемещение"))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where external_task_id=?",
+                Integer.class,
+                externalTaskId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from queue_entry where task_id=?", Integer.class, taskId))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.QUEUE_ENTRY_CREATED))
+        .isEqualTo(3);
+  }
+
+  @Test
+  void preStartUpdateRejectsAStartedRoute() throws Exception {
+    UUID externalTaskId = UUID.randomUUID();
+    board.registerExternalTask("maintenance-service", registration(externalTaskId));
+    jdbc.update(
+        "update queue_entry set status='IN_PROGRESS',active_started_at=? where task_id="
+            + "(select board_task_id from task_sync_source where external_task_id=?)",
+        OffsetDateTime.now(),
+        externalTaskId);
+
+    PreStartUpdateTaskRequest update =
+        new PreStartUpdateTaskRequest(
+            0L,
+            "Too late",
+            null,
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(queueDefinitionId, null, null)));
+    mvc.perform(
+            put("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(update)))
+        .andExpect(status().isConflict());
+  }
+
+  @Test
+  void exactServiceScopeAndApprovedClientAreRequired() throws Exception {
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(
+                    taskSyncJwt(
+                        "maintenance-service", List.of("task-board.task-sync", "rwms.write")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registration(UUID.randomUUID()))))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("other-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registration(UUID.randomUUID()))))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(
+                    taskSyncJwt(
+                        "maintenance-service",
+                        "different-subject",
+                        List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registration(UUID.randomUUID()))))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void sourceCanCancelOnlyAStillWaitingTaskAndReconcileEveryOutcome() throws Exception {
+    UUID waitingExternalId = UUID.randomUUID();
+    board.registerExternalTask("logistics-service", registration(waitingExternalId));
+
+    CancelTaskRequest stale = new CancelTaskRequest(99L, "inventory replacement");
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    waitingExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(stale)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("VERSION_CONFLICT"))
+        .andExpect(jsonPath("$.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.cancelledAt").isEmpty());
+
+    CancelTaskRequest current = new CancelTaskRequest(0L, "inventory replacement");
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    waitingExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(current)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("CANCELLED"))
+        .andExpect(jsonPath("$.status").value("CANCELLED"))
+        .andExpect(jsonPath("$.cancelledAt").isNotEmpty());
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    waitingExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(current)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("ALREADY_CANCELLED"));
+
+    UUID startedExternalId = UUID.randomUUID();
+    board.registerExternalTask("logistics-service", registration(startedExternalId));
+    jdbc.update(
+        """
+        update queue_entry
+           set status='IN_PROGRESS', active_started_at=clock_timestamp()
+         where task_id=(select id from board_task where external_task_id=?)
+        """,
+        startedExternalId);
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    startedExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(current)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("STARTED"))
+        .andExpect(jsonPath("$.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.cancelledAt").isEmpty());
+    assertThat(
+            jdbc.queryForObject(
+                "select status from board_task where external_task_id=?",
+                String.class,
+                startedExternalId))
+        .isEqualTo("ACTIVE");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.BOARD_TASK_CANCELLED))
+        .isOne();
+  }
+
+  private RegisterExternalTaskRequest registration(UUID externalTaskId) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Maintenance task",
+        "CABIN-1",
+        null,
+        15,
+        null,
+        List.of(new RouteStepRequest(queueDefinitionId, "Repair", 15)));
+  }
+
+  private RegisterExternalTaskRequest registration(UUID externalTaskId, UUID repairId) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Maintenance task",
+        "CABIN-1",
+        null,
+        15,
+        null,
+        List.of(new RouteStepRequest(queueDefinitionId, "Repair", 15)),
+        null,
+        null,
+        new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, repairId),
+        TaskLane.SCHEDULED);
+  }
+
+  private RegisterExternalTaskRequest repeatedQueueRegistration(
+      UUID externalTaskId, String returnStepText) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Repair route",
+        "CABIN-1",
+        null,
+        30,
+        null,
+        List.of(
+            new RouteStepRequest(queueDefinitionId, "Перемещение", 5),
+            new RouteStepRequest(
+                verificationQueueDefinitionId, "Внутренние работы", 20),
+            new RouteStepRequest(queueDefinitionId, returnStepText, 5)));
+  }
+
+  private RegisterExternalTaskRequest plannerRegistration(
+      UUID externalTaskId,
+      UUID sourceTaskId,
+      UUID driverQueueDefinitionId,
+      LocalDate scheduledDate,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID sourcePlanWarehouseId,
+      LocalDate sourcePlanDate) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Planner shipment",
+        "CABIN-PLANNER",
+        null,
+        30,
+        null,
+        List.of(new RouteStepRequest(driverQueueDefinitionId, "Delivery", 30)),
+        scheduledDate,
+        3,
+        new TaskSourceReferenceDto(TaskSourceType.LOGISTICS_DRIVER_TASK, sourceTaskId),
+        TaskLane.SCHEDULED,
+        new DriverTaskAudienceDto(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+        new PlannerTaskLineageDto(
+            sourcePlanId, sourcePlanVersion, sourcePlanWarehouseId, sourcePlanDate));
+  }
+
+  private ResultActions registerPlannerTask(RegisterExternalTaskRequest registration)
+      throws Exception {
+    return mvc.perform(
+        post("/api/internal/task-board/v1/tasks")
+            .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(registration)));
+  }
+
+  private JsonSchema openApiSchema(String schemaName) throws Exception {
+    Map<String, Object> openApi;
+    Path contract =
+        Path.of(System.getProperty("rwms.contracts.dir"), "openapi/task-board-service.yaml");
+    try (InputStream input = Files.newInputStream(contract)) {
+      openApi = new Yaml().load(input);
+    }
+    ObjectNode document = SCHEMA_JSON.valueToTree(openApi);
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/" + schemaName);
+    return SCHEMAS.getSchema(document);
+  }
+
+  private JwtRequestPostProcessor taskSyncJwt(String clientId, List<String> scopes) {
+    return taskSyncJwt(clientId, clientId, scopes);
+  }
+
+  private JwtRequestPostProcessor taskSyncJwt(
+      String clientId, String subject, List<String> scopes) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(subject)
+                    .audience(List.of("rwms-services"))
+                    .claim("principal_type", "SERVICE")
+                    .claim("client_id", clientId)
+                    .claim("scope", scopes));
+  }
+}

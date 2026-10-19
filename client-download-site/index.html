@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f7fafb" />
+    <title>RWMS Клиент — Android</title>
+    <meta
+      name="description"
+      content="Официальная страница загрузки Android-приложения RWMS для клиентов аренды бытовок."
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="brand" aria-label="RWMS">
+        <span class="mark" aria-hidden="true">R</span>
+        <span><strong>RWMS</strong><small>Warehouse management</small></span>
+      </header>
+
+      <section class="intro" aria-labelledby="title">
+        <p class="eyebrow">Приложение для клиента</p>
+        <h1 id="title">Бронирование бытовок</h1>
+        <p>
+          Выберите свободные бытовки и мебель на складе, укажите адрес и
+          подтвердите доступное время доставки.
+        </p>
+      </section>
+
+      <section class="release" aria-live="polite" aria-labelledby="release-title">
+        <div class="release-heading">
+          <div class="app-icon" aria-hidden="true">⌂</div>
+          <div>
+            <h2 id="release-title">RWMS Клиент для Android</h2>
+            <p id="version">Проверяем выпуск…</p>
+          </div>
+        </div>
+
+        <div id="pending" class="pending" hidden>
+          <strong>Выпуск готовится</strong>
+          <p>
+            Проверенный APK ещё не опубликован. Ссылка появится здесь после
+            проверки версии, пакета, подписи и SHA-256.
+          </p>
+        </div>
+
+        <a id="download" class="download" hidden rel="noopener">
+          Скачать APK
+        </a>
+
+        <dl class="facts">
+          <div><dt>Минимальная версия</dt><dd id="minimum">Android 11</dd></div>
+          <div><dt>Пакет</dt><dd id="package">dev.buhanzaz.rwms.client</dd></div>
+          <div><dt>Дата публикации</dt><dd id="published">—</dd></div>
+          <div><dt>SHA-256</dt><dd id="sha">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="steps" aria-labelledby="steps-title">
+        <h2 id="steps-title">Как начать</h2>
+        <ol>
+          <li>Скачайте проверенный APK после публикации.</li>
+          <li>Разрешите установку из браузера, если Android запросит.</li>
+          <li>Зарегистрируйтесь или войдите в клиентский аккаунт RWMS.</li>
+        </ol>
+      </section>
+    </main>
+    <script type="module" src="release.js"></script>
+  </body>
+</html>

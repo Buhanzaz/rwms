@@ -1,0 +1,162 @@
+package dev.buhanzaz.rwms.worker.feature.camera
+
+import android.content.Context
+import androidx.core.content.edit
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
+internal enum class WorkerCameraMode(val label: String) {
+    Night("НОЧЬ"),
+    Photo("ФОТО"),
+    Video("ВИДЕО"),
+}
+
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
+internal enum class WorkerCameraAspectRatio(val label: String) {
+    FourThree("4:3"),
+    SixteenNine("16:9");
+
+    fun next(): WorkerCameraAspectRatio = when (this) {
+        FourThree -> SixteenNine
+        SixteenNine -> FourThree
+    }
+}
+
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
+internal data class WorkerCameraSettings(
+    val gridEnabled: Boolean = false,
+    val aspectRatio: WorkerCameraAspectRatio = WorkerCameraAspectRatio.FourThree,
+    val motionCaptureEnabled: Boolean = false,
+    val exposureEvTenths: Int = 0,
+)
+
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
+internal class WorkerCameraPreferences(context: Context) {
+    private val preferences = context.applicationContext.getSharedPreferences(
+        "worker-camera-v3-manager-0.3.29",
+        Context.MODE_PRIVATE,
+    )
+
+    fun load(): WorkerCameraSettings = normalizeWorkerCameraSettings(
+        WorkerCameraSettings(
+            gridEnabled = preferences.getBoolean("grid", false),
+            aspectRatio = preferences.getString("aspect-ratio", null)
+                ?.let { value -> WorkerCameraAspectRatio.entries.firstOrNull { it.name == value } }
+                ?: WorkerCameraAspectRatio.FourThree,
+            motionCaptureEnabled = preferences.getBoolean("motion", false),
+            exposureEvTenths = preferences.getInt("exposure-ev-tenths", 0),
+        ),
+    )
+
+    fun save(settings: WorkerCameraSettings) {
+        val normalized = normalizeWorkerCameraSettings(settings)
+        preferences.edit {
+            putBoolean("grid", normalized.gridEnabled)
+            putString("aspect-ratio", normalized.aspectRatio.name)
+            putBoolean("motion", normalized.motionCaptureEnabled)
+            putInt("exposure-ev-tenths", normalized.exposureEvTenths)
+        }
+    }
+}
+
+internal fun normalizeWorkerCameraSettings(settings: WorkerCameraSettings): WorkerCameraSettings =
+    settings.copy(exposureEvTenths = settings.exposureEvTenths.coerceIn(-20, 20))
+
+private const val WORKER_WIDE_ZOOM_TARGET = 0.6f
+
+/**
+ * Expose a common 0.6× floor only when the currently bound camera really supports it. Some
+ * front/physical cameras start at 1× (or another value); inventing a ratio there crashes or
+ * silently ignores the request on several OEM devices.
+ */
+internal fun workerCaptureMinimumZoom(hardwareMinimum: Float?, hardwareMaximum: Float?): Float {
+    val minimum = workerSupportedMinimumZoom(hardwareMinimum, hardwareMaximum)
+    val maximum = workerCaptureMaximumZoom(hardwareMinimum, hardwareMaximum)
+    return WORKER_WIDE_ZOOM_TARGET.takeIf { it in minimum..maximum } ?: minimum
+}
+
+internal fun workerCaptureMaximumZoom(hardwareMinimum: Float?, hardwareMaximum: Float?): Float {
+    val minimum = workerSupportedMinimumZoom(hardwareMinimum, hardwareMaximum)
+    return hardwareMaximum
+        ?.takeIf { zoom -> zoom.isFinite() && zoom >= minimum }
+        ?: minimum
+}
+
+internal fun workerCoerceCaptureZoom(
+    requested: Float,
+    hardwareMinimum: Float?,
+    hardwareMaximum: Float?,
+): Float = workerCoerceZoom(
+    requested = requested,
+    minZoom = workerCaptureMinimumZoom(hardwareMinimum, hardwareMaximum),
+    maxZoom = workerCaptureMaximumZoom(hardwareMinimum, hardwareMaximum),
+)
+
+private fun workerSupportedMinimumZoom(hardwareMinimum: Float?, hardwareMaximum: Float?): Float {
+    val reportedMinimum = hardwareMinimum?.takeIf { zoom -> zoom.isFinite() && zoom > 0f }
+    val reportedMaximum = hardwareMaximum?.takeIf { zoom -> zoom.isFinite() && zoom > 0f }
+    return when {
+        reportedMinimum != null && reportedMaximum != null && reportedMaximum >= reportedMinimum ->
+            reportedMinimum
+        reportedMinimum != null -> reportedMinimum
+        // If the HAL gives us only one usable maximum, it is the only known-safe request.
+        reportedMaximum != null -> reportedMaximum
+        else -> 1f
+    }
+}
+
+internal fun workerSupportedZoomStops(minZoom: Float, maxZoom: Float): List<Float> {
+    val minimum = minZoom.takeIf { it.isFinite() && it > 0f } ?: 1f
+    val maximum = maxZoom.takeIf { it.isFinite() && it >= minimum } ?: minimum
+    if (abs(maximum - minimum) < 0.01f) return listOf(minimum)
+    return buildList {
+        if (minimum < 0.99f) add(minimum)
+        listOf(1f, 2f, 3f).filterTo(this) { it in minimum..maximum }
+        if (isEmpty()) add(minimum)
+        if (size == 1 && maximum - first() >= 0.1f) add(maximum)
+    }.distinctBy { (it * 1_000).roundToInt() }.sorted()
+}
+
+internal fun workerCoerceZoom(requested: Float, minZoom: Float, maxZoom: Float): Float {
+    val minimum = minZoom.takeIf { it.isFinite() && it > 0f } ?: 1f
+    val maximum = maxZoom.takeIf { it.isFinite() && it >= minimum } ?: minimum
+    return requested.takeIf(Float::isFinite)?.coerceIn(minimum, maximum) ?: minimum
+}
+
+internal fun workerZoomLabel(value: Float): String =
+    if (abs(value - value.roundToInt()) < 0.01f) "${value.roundToInt()}×"
+    else String.format(Locale.US, "%.1f×", value)
+
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
+internal data class WorkerCameraModeSelection(
+    val mode: WorkerCameraMode,
+    val message: String?,
+)
+
+/** Worker evidence is still-image WebP; the visible Video tab cannot create an MP4 payload. */
+internal fun selectWorkerCameraMode(requested: WorkerCameraMode): WorkerCameraModeSelection =
+    if (requested == WorkerCameraMode.Video) {
+        WorkerCameraModeSelection(
+            mode = WorkerCameraMode.Photo,
+            message = "Видео для фотоотчёта пока не поддерживается",
+        )
+    } else {
+        WorkerCameraModeSelection(requested, null)
+    }
+
+/** Installs or removes the foreground camera action invoked by a hardware volume key. */
+fun interface VolumeShutterHost {
+    fun setVolumeShutterHandler(handler: (() -> Unit)?)
+}

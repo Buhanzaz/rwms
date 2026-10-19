@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: ${DOSSIER_DB_URL:jdbc:postgresql://localhost:5441/rwms_dossier}
+    username: ${DOSSIER_DB_USERNAME:rwms_dossier}
+    password: ${DOSSIER_DB_PASSWORD:rwms_dossier_dev}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${DOSSIER_KAFKA_ENABLED:false}
+  dossier:
+    cursor:
+      secret: ${DOSSIER_CURSOR_SECRET:rwms-dossier-dev-cursor-secret-change-me}
+    security:
+      dev-auth-bypass: ${DOSSIER_DEV_AUTH_BYPASS:true}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

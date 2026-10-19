@@ -1,0 +1,418 @@
+package dev.buhanzaz.rwms.worker.feature.camera
+
+import android.net.Uri
+import android.os.SystemClock
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.buhanzaz.rwms.worker.core.database.PendingEvidenceReservation
+import dev.buhanzaz.rwms.worker.core.database.DraftProblemReportEvidenceInput
+import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
+import dev.buhanzaz.rwms.worker.core.database.WorkerProblemReportStore
+import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
+import dev.buhanzaz.rwms.worker.core.media.WorkerEvidenceBundlePreparer
+import dev.buhanzaz.rwms.worker.core.media.WorkerGalleryJpegImporter
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
+import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
+import java.io.File
+import java.time.Instant
+import java.util.UUID
+import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+/**
+ * Tracks capture/import progress, partial camera-batch persistence and a one-shot immutable list
+ * of saved evidence identifiers.
+ */
+data class CameraUiState(
+    val saving: Boolean = false,
+    val savedEvidenceIds: List<String> = emptyList(),
+    val persistedCapturePaths: Set<String> = emptySet(),
+    val persistedCameraCaptureCount: Int = 0,
+    val error: String? = null,
+)
+
+@HiltViewModel
+/**
+ * Owns CameraX capture and picker-import persistence while task completion remains task-owned.
+ */
+class CameraViewModel @Inject constructor(
+    private val fileStore: EncryptedEvidenceFileStore,
+    private val bundlePreparer: WorkerEvidenceBundlePreparer,
+    private val galleryImporter: WorkerGalleryJpegImporter,
+    private val localStore: WorkerLocalStore,
+    private val problemReports: WorkerProblemReportStore,
+    private val scheduler: WorkerSyncScheduler,
+    private val json: Json,
+) : ViewModel() {
+    private val mutableState = MutableStateFlow(CameraUiState())
+    private val accumulatedCameraEvidenceIds = mutableListOf<String>()
+    private val accumulatedCameraCapturePaths = linkedSetOf<String>()
+    val uiState: StateFlow<CameraUiState> = mutableState.asStateFlow()
+
+    /** Saved captures are one-shot navigation results, never durable route state. */
+    fun consumeSavedCaptures(evidenceIds: List<String>) {
+        val current = mutableState.value
+        val consumed = current.consumeSavedCaptures(evidenceIds)
+        if (consumed !== current) {
+            accumulatedCameraEvidenceIds.clear()
+            accumulatedCameraCapturePaths.clear()
+        }
+        mutableState.value = consumed
+    }
+
+    /** Clears the acknowledgement after the camera removes already persisted transient files. */
+    fun consumePersistedCaptures(filePaths: Set<String>) {
+        mutableState.value = mutableState.value.consumePersistedCaptures(filePaths)
+    }
+
+    /**
+     * Converts one confirmed CameraX batch into encrypted WebP evidence in capture order.
+     *
+     * Successful files are acknowledged once and excluded from a retry. If part of the batch
+     * fails, already durable evidence IDs remain accumulated while only failed transient files
+     * stay in the camera gallery. Completion flows defer their final scheduling until the matching
+     * task action enters the outbox; ordinary capture requests sync after the batch.
+     */
+    fun confirmCaptures(
+        userId: String,
+        entryId: String,
+        routeIndex: Int,
+        temporaryFiles: List<File>,
+        requestSyncAfterSave: Boolean = true,
+        completeAfterSave: Boolean = false,
+        problemReportId: String? = null,
+    ) {
+        if (mutableState.value.saving) return
+        val selectedFiles = remainingWorkerCameraCaptures(
+            files = temporaryFiles.distinctBy(File::getAbsolutePath),
+            persistedPaths = accumulatedCameraCapturePaths,
+        )
+        if (selectedFiles.isEmpty()) {
+            if (accumulatedCameraEvidenceIds.isEmpty()) {
+                mutableState.value = CameraUiState(error = EMPTY_CAMERA_BATCH_ERROR)
+            } else if (completeAfterSave) {
+                enqueueCompletionForPersistedCameraBatch(
+                    userId = userId,
+                    entryId = entryId,
+                    evidenceId = accumulatedCameraEvidenceIds.last(),
+                )
+            } else {
+                mutableState.value = CameraUiState(savedEvidenceIds = accumulatedCameraEvidenceIds.toList())
+            }
+            return
+        }
+        mutableState.value = CameraUiState(saving = true)
+        viewModelScope.launch {
+            val saved = mutableListOf<Pair<File, String>>()
+            val failures = mutableListOf<Exception>()
+            try {
+                withContext(Dispatchers.IO) {
+                    selectedFiles.forEachIndexed { index, temporaryFile ->
+                        try {
+                            val evidenceId = saveEvidence(
+                                userId,
+                                entryId,
+                                routeIndex,
+                                temporaryFile,
+                                completeAfterEvidence = completeAfterSave &&
+                                    failures.isEmpty() &&
+                                    index == selectedFiles.lastIndex,
+                                problemReportId = problemReportId,
+                            )
+                            saved += temporaryFile to evidenceId
+                            temporaryFile.delete()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            failures += error
+                        }
+                    }
+                }
+            } catch (error: CancellationException) {
+                if (saved.isNotEmpty() && problemReportId == null) {
+                    runCatching { scheduler.requestAfterMutation(userId) }
+                }
+                throw error
+            }
+
+            accumulatedCameraEvidenceIds += saved.map { it.second }
+            accumulatedCameraCapturePaths += saved.map { it.first.absolutePath }
+            val syncFailure = if (
+                accumulatedCameraEvidenceIds.isNotEmpty() &&
+                problemReportId == null &&
+                (failures.isNotEmpty() || requestSyncAfterSave || completeAfterSave)
+            ) {
+                runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
+            } else {
+                null
+            }
+            if (failures.isEmpty()) {
+                mutableState.value = CameraUiState(
+                    savedEvidenceIds = accumulatedCameraEvidenceIds.toList(),
+                    error = syncFailure?.let { failure ->
+                        "Фотографии сохранены. ${cameraSyncFailureReason(failure)}"
+                    },
+                )
+            } else {
+                val batchFailure = cameraBatchFailureMessage(
+                    savedCount = saved.size,
+                    selectedCount = selectedFiles.size,
+                    cause = failures.firstOrNull(),
+                )
+                mutableState.value = CameraUiState(
+                    persistedCapturePaths = saved.mapTo(linkedSetOf()) { it.first.absolutePath },
+                    persistedCameraCaptureCount = accumulatedCameraEvidenceIds.size,
+                    error = if (syncFailure == null) {
+                        batchFailure
+                    } else {
+                        "$batchFailure ${cameraSyncFailureReason(syncFailure)}"
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * Imports every selected photo-picker URI sequentially through the encrypted evidence path.
+     * One sync is requested after a complete batch when requested. A partial batch is also synced
+     * so its already durable evidence cannot remain stranded, but it is reported as an error.
+     */
+    fun confirmGallery(
+        userId: String,
+        entryId: String,
+        routeIndex: Int,
+        uris: List<Uri>,
+        requestSyncAfterSave: Boolean = true,
+        completeAfterSave: Boolean = false,
+        problemReportId: String? = null,
+    ) {
+        if (mutableState.value.saving) return
+        val selectedUris = uris.toList()
+        if (selectedUris.isEmpty()) {
+            mutableState.value = CameraUiState(error = EMPTY_GALLERY_SELECTION_ERROR)
+            return
+        }
+        mutableState.value = CameraUiState(saving = true)
+        viewModelScope.launch {
+            val savedEvidenceIds = mutableListOf<String>()
+            val failures = mutableListOf<Exception>()
+            try {
+                withContext(Dispatchers.IO) {
+                    selectedUris.forEachIndexed { index, uri ->
+                        try {
+                            val temporaryFile = galleryImporter.`import`(uri)
+                            try {
+                                savedEvidenceIds += saveEvidence(
+                                    userId,
+                                    entryId,
+                                    routeIndex,
+                                    temporaryFile,
+                                    completeAfterEvidence = completeAfterSave &&
+                                        failures.isEmpty() &&
+                                        index == selectedUris.lastIndex,
+                                    problemReportId = problemReportId,
+                                )
+                            } finally {
+                                temporaryFile.delete()
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            failures += error
+                        }
+                    }
+                }
+            } catch (error: CancellationException) {
+                if (savedEvidenceIds.isNotEmpty() && problemReportId == null) {
+                    runCatching { scheduler.requestAfterMutation(userId) }
+                }
+                throw error
+            }
+
+            val syncFailure = if (
+                savedEvidenceIds.isNotEmpty() &&
+                problemReportId == null &&
+                (failures.isNotEmpty() || requestSyncAfterSave || completeAfterSave)
+            ) {
+                runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
+            } else {
+                null
+            }
+            if (failures.isEmpty()) {
+                mutableState.value = if (syncFailure == null) {
+                    CameraUiState(savedEvidenceIds = savedEvidenceIds.toList())
+                } else {
+                    CameraUiState(
+                        error = "Фотографии сохранены. ${cameraSyncFailureReason(syncFailure)}",
+                    )
+                }
+            } else {
+                val importFailure = galleryBatchFailureMessage(
+                    savedCount = savedEvidenceIds.size,
+                    selectedCount = selectedUris.size,
+                    cause = failures.firstOrNull(),
+                )
+                mutableState.value = CameraUiState(
+                    error = if (syncFailure == null) {
+                        importFailure
+                    } else {
+                        "$importFailure ${cameraSyncFailureReason(syncFailure)}"
+                    },
+                )
+            }
+        }
+    }
+
+    private suspend fun saveEvidence(
+        userId: String,
+        entryId: String,
+        routeIndex: Int,
+        temporaryFile: File,
+        completeAfterEvidence: Boolean,
+        problemReportId: String?,
+    ): String = withContext(Dispatchers.IO) {
+        val lease = requireNotNull(localStore.leaseFor(userId)) { "Сначала синхронизируйте задание" }
+        val evidenceId = UUID.randomUUID().toString()
+        val capturedAt = Instant.ofEpochMilli(
+            lease.estimatedServerNow(SystemClock.elapsedRealtime()),
+        ).toString()
+        val persisted = bundlePreparer.prepareAndPersist(userId, evidenceId, temporaryFile)
+        try {
+            if (problemReportId != null) {
+                require(!completeAfterEvidence) { "Фото проблемы не завершает задание" }
+                problemReports.attachPreparedPhoto(
+                    userId,
+                    problemReportId,
+                    DraftProblemReportEvidenceInput(
+                        evidenceId = evidenceId,
+                        encryptedFilePath = persisted.originalEncryptedPath,
+                        fileName = "$evidenceId.webp",
+                        routeIndex = routeIndex,
+                        capturedAt = capturedAt,
+                        sizeBytes = persisted.aggregateContentLength,
+                        sha256 = persisted.manifestSha256,
+                        variantManifestJson = json.encodeToString(persisted.variants),
+                    ),
+                )
+            } else {
+                val reservation = PendingEvidenceReservation(
+                    operationId = evidenceId,
+                    evidenceId = evidenceId,
+                    routeIndex = routeIndex,
+                    capturedAt = capturedAt,
+                    offlineLeaseId = requireNotNull(localStore.currentLeaseId(userId)),
+                    contentType = "image/webp",
+                    sizeBytes = persisted.aggregateContentLength,
+                    sha256 = persisted.manifestSha256,
+                )
+                localStore.enqueueEvidenceReservation(
+                    userId = userId,
+                    entryId = entryId,
+                    evidenceId = evidenceId,
+                    encryptedFilePath = persisted.originalEncryptedPath,
+                    fileName = "$evidenceId.webp",
+                    routeIndex = routeIndex,
+                    capturedAt = capturedAt,
+                    sizeBytes = persisted.aggregateContentLength,
+                    sha256 = persisted.manifestSha256,
+                    variantManifestJson = json.encodeToString(persisted.variants),
+                    reservationPayload = json.encodeToString(reservation),
+                    completeAfterEvidence = completeAfterEvidence,
+                )
+            }
+        } catch (error: Throwable) {
+            fileStore.deleteBundle(persisted.originalEncryptedPath, persisted.variants)
+            throw error
+        }
+        evidenceId
+    }
+
+    private fun enqueueCompletionForPersistedCameraBatch(
+        userId: String,
+        entryId: String,
+        evidenceId: String,
+    ) {
+        mutableState.value = CameraUiState(saving = true)
+        viewModelScope.launch {
+            val completionFailure = runCatching {
+                withContext(Dispatchers.IO) {
+                    localStore.enqueueCompletionAfterEvidence(userId, entryId, evidenceId)
+                }
+            }.exceptionOrNull()
+            if (completionFailure != null) {
+                mutableState.value = CameraUiState(
+                    persistedCameraCaptureCount = accumulatedCameraEvidenceIds.size,
+                    error = "Фотографии сохранены. Не удалось завершить задание: ${
+                        completionFailure.safeWorkerUserMessage(CAMERA_SAVE_FAILURE)
+                    }",
+                )
+                return@launch
+            }
+            val syncFailure = runCatching { scheduler.requestAfterMutation(userId) }.exceptionOrNull()
+            mutableState.value = CameraUiState(
+                savedEvidenceIds = accumulatedCameraEvidenceIds.toList(),
+                error = syncFailure?.let { "Фотографии сохранены. ${cameraSyncFailureReason(it)}" },
+            )
+        }
+    }
+}
+
+internal fun CameraUiState.consumeSavedCaptures(evidenceIds: List<String>): CameraUiState =
+    if (savedEvidenceIds.isNotEmpty() && savedEvidenceIds == evidenceIds) CameraUiState() else this
+
+/** Clears only the exact partial-batch acknowledgement consumed by the active camera screen. */
+internal fun CameraUiState.consumePersistedCaptures(filePaths: Set<String>): CameraUiState =
+    if (persistedCapturePaths.isNotEmpty() && persistedCapturePaths == filePaths) {
+        copy(persistedCapturePaths = emptySet())
+    } else {
+        this
+    }
+
+/** Builds an honest user-facing result for a partially persisted CameraX batch. */
+internal fun cameraBatchFailureMessage(
+    savedCount: Int,
+    selectedCount: Int,
+    cause: Throwable?,
+): String {
+    val safeCause = cause?.safeWorkerUserMessage(CAMERA_SAVE_FAILURE) ?: CAMERA_SAVE_FAILURE
+    return if (savedCount > 0) {
+        "Сохранено $savedCount из $selectedCount фото. Остальные не сохранены: $safeCause"
+    } else {
+        safeCause
+    }
+}
+
+/** Builds an honest user-facing result for a failed multi-image import. */
+internal fun galleryBatchFailureMessage(
+    savedCount: Int,
+    selectedCount: Int,
+    cause: Throwable?,
+): String {
+    val safeCause = cause?.safeWorkerUserMessage(GALLERY_IMPORT_FAILURE) ?: GALLERY_IMPORT_FAILURE
+    return if (savedCount > 0) {
+        "Добавлено $savedCount из $selectedCount фото. Остальные не добавлены: $safeCause"
+    } else {
+        safeCause
+    }
+}
+
+/** Returns an operation-specific safe reason for a failed evidence sync request. */
+internal fun cameraSyncFailureReason(cause: Throwable): String =
+    cause.safeWorkerUserMessage(CAMERA_SYNC_FAILURE)
+
+private const val EMPTY_GALLERY_SELECTION_ERROR = "Выберите хотя бы одну фотографию"
+private const val EMPTY_CAMERA_BATCH_ERROR = "Сделайте хотя бы одну фотографию"
+private const val CAMERA_SAVE_FAILURE = "Не удалось сохранить фотографию. Повторите снимок."
+private const val GALLERY_IMPORT_FAILURE =
+    "Не удалось добавить фотографию. Проверьте файл и повторите попытку."
+private const val CAMERA_SYNC_FAILURE =
+    "Не удалось запустить синхронизацию фотографий. Повторите её позже."

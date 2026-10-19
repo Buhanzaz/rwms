@@ -1,0 +1,168 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Media Events
+  version: 1.6.0
+  description: >-
+    PostgreSQL is the replay authority. Facts and processing requests use
+    separate schemas and aggregate families. Delivery is at-least-once.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  mediaFacts:
+    address: rwms.media.media.v1
+    description: >-
+      Keyed by mediaId; aggregate versions preserve per-media order. Owner types
+      cover inventory, cabin, maintenance and logistics scopes. Logistics facts
+      retain the server-derived documentId:lineId identity; browsers never
+      construct or submit that composite value. TASK_BOARD_ENTRY and
+      DRIVER_SHIFT facts carry their stable reservation evidenceId as
+      clientReferenceId and a WORKER actor reference.
+    messages:
+      mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  processingRequests:
+    address: rwms.media.processing.v1
+    description: >-
+      Keyed by processingJobId. An initial request depends on the broker ACK of
+      its UPLOADED fact; READY or ROTATED can be created only by the consumer.
+    messages:
+      processingRequestV1: { $ref: '#/components/messages/MediaProcessingRequestV1' }
+  processingDeadLetters:
+    address: rwms.media.processing.v1.media-service-processing-v1.dlt
+    description: >-
+      Hash-only consumer-owned DLT; raw processing requests and owner/object
+      data are forbidden. Valid source records retain processingJobId as the
+      key. Invalid source records use UUIDv5 in the OID namespace over the
+      SHA-256 digest of the exact raw record bytes.
+    messages:
+      mediaProcessingDltV1: { $ref: '#/components/messages/MediaProcessingDltV1' }
+  inventoryOwnerFacts:
+    address: rwms.inventory.session.v1
+    description: >-
+      Inventory FINDING streams are keyed by finding UUID. The media consumer
+      checkpoints canonical finding markers and applies only the exact owner-proof fact.
+    messages:
+      inventoryFindingFactV1: { $ref: '#/components/messages/InventoryFindingFactV1' }
+  inventoryOwnerDeadLetters:
+    address: rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt
+    description: >-
+      Hash-only media-owned DLT. Raw inventory facts, owner/warehouse values and
+      actor data are forbidden.
+    messages:
+      inventoryOwnerDltV1: { $ref: '#/components/messages/InventoryOwnerDltV1' }
+  taskBoardOwnerProofFacts:
+    address: rwms.task-board.entry-owner-proof.v1
+    description: >-
+      Task-board entry owner proofs are keyed by entry UUID and applied with
+      aggregate-version gap detection. Worker media access fails closed until
+      an active current proof explicitly contains the authenticated worker ID.
+    messages:
+      taskBoardEntryOwnerProofV1: { $ref: '#/components/messages/TaskBoardEntryOwnerProofV1' }
+  driverShiftOwnerProofFacts:
+    address: rwms.task-board.driver-shift-owner-proof.v1
+    description: >-
+      Driver-shift owner proofs are keyed by shift UUID and applied by a
+      dedicated aggregate checkpoint. Shift media access fails closed until an
+      active current proof names the authenticated driver in the appropriate
+      allowed or reader audience.
+    messages:
+      driverShiftOwnerProofV1: { $ref: '#/components/messages/DriverShiftOwnerProofV1' }
+  cabinPhotoFacts:
+    address: rwms.media.cabin-photo.v1
+    description: >-
+      Canonical cabin cover changes keyed by cabin ID. The referenced media
+      remains one logical asset; consumers receive no object-store locator.
+    messages:
+      cabinCoverChangedV1: { $ref: '#/components/messages/CabinCoverChangedV1' }
+operations:
+  publishMediaFact:
+    action: send
+    channel: { $ref: '#/channels/mediaFacts' }
+  publishProcessingRequest:
+    action: send
+    channel: { $ref: '#/channels/processingRequests' }
+  consumeProcessingRequest:
+    action: receive
+    channel: { $ref: '#/channels/processingRequests' }
+  publishProcessingDeadLetter:
+    action: send
+    channel: { $ref: '#/channels/processingDeadLetters' }
+  consumeInventoryOwnerFact:
+    action: receive
+    channel: { $ref: '#/channels/inventoryOwnerFacts' }
+  publishInventoryOwnerDeadLetter:
+    action: send
+    channel: { $ref: '#/channels/inventoryOwnerDeadLetters' }
+  consumeTaskBoardOwnerProofFact:
+    action: receive
+    channel: { $ref: '#/channels/taskBoardOwnerProofFacts' }
+  consumeDriverShiftOwnerProofFact:
+    action: receive
+    channel: { $ref: '#/channels/driverShiftOwnerProofFacts' }
+  publishCabinCoverChangedFact:
+    action: send
+    channel: { $ref: '#/channels/cabinPhotoFacts' }
+components:
+  messages:
+    MediaFactV1:
+      name: media.fact.v1
+      payload: { $ref: './media/media-facts-v1.schema.json' }
+      x-rwms-record-key: aggregateId
+    MediaProcessingRequestV1:
+      name: media.processing.request.v1
+      payload: { $ref: './media/media-processing-requests-v1.schema.json' }
+      x-rwms-record-key: aggregateId
+    MediaProcessingDltV1:
+      name: media.processing.dlt.v1
+      payload: { $ref: './media/media-processing-dlt-v1.schema.json' }
+      x-rwms-record-key: source processingJobId when valid; UUIDv5(OID namespace, SHA-256(raw source bytes)) when invalid
+    InventoryFindingFactV1:
+      name: inventory.finding.owner-input.v1
+      payload:
+        allOf:
+          - $ref: './inventory/inventory-events-v1.schema.json'
+          - type: object
+            required: [aggregateType, eventType]
+            properties:
+              aggregateType: { const: FINDING }
+              eventType:
+                enum:
+                  - inventory.finding.added.v1
+                  - inventory.finding.inspection-saved.v1
+                  - inventory.finding.membership-departed.v1
+                  - inventory.finding.membership-refreshed.v1
+                  - inventory.finding.membership-restored.v1
+                  - inventory.finding.owner-proof.v1
+      x-rwms-record-key: aggregateId
+    InventoryOwnerDltV1:
+      name: media.inventory-owner.dlt.v1
+      payload: { $ref: './media/media-inventory-owner-dlt-v1.schema.json' }
+      x-rwms-record-key: source finding aggregateId when identity is valid; UUIDv5(OID namespace, SHA-256(raw source bytes)) when invalid
+    TaskBoardEntryOwnerProofV1:
+      name: task-board.entry-owner-proof.changed.v1
+      payload:
+        allOf:
+          - $ref: './task-board/task-board-events-v1.schema.json'
+          - type: object
+            required: [aggregateType, eventType]
+            properties:
+              aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
+              eventType: { const: task-board.entry-owner-proof.changed.v1 }
+      x-rwms-record-key: aggregateId
+    DriverShiftOwnerProofV1:
+      name: task-board.driver-shift-owner-proof.changed.v1
+      payload:
+        allOf:
+          - $ref: './task-board/task-board-events-v1.schema.json'
+          - type: object
+            required: [aggregateType, eventType]
+            properties:
+              aggregateType: { const: DRIVER_SHIFT_OWNER_PROOF }
+              eventType: { const: task-board.driver-shift-owner-proof.changed.v1 }
+      x-rwms-record-key: aggregateId
+    CabinCoverChangedV1:
+      name: media.cabin.cover-changed.v1
+      payload: { $ref: './media/cabin-photo-facts-v1.schema.json' }
+      x-rwms-record-key: aggregateId

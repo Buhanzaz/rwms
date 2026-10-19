@@ -1,0 +1,7 @@
+{
+  "formatVersion": 1,
+  "version": "0002",
+  "description": "Add task-board idempotency outbox and inbox",
+  "applySha256": "4a801d2a93c38ff7cd0bc59df5300a9d015d901f733fac1280ecb6e25b8b14b5",
+  "verifySha256": "bc8fc1a73122627a310d5f17d71790f3874267841964dc4f524e282d6e817487"
+}

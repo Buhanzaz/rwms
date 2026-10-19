@@ -1,0 +1,317 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Task Board Kafka Facts
+  version: 1.4.0
+  description: >-
+    Canonical version-one facts published by task-board-service in
+    DomainEventEnvelopeV2 through its PostgreSQL transactional outbox. The V2
+    envelope does not change fact eventType or eventVersion. Topics are keyed
+    by aggregateId and delivery is at-least-once; eventId is the inbox
+    deduplication identity.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: kafka:9092
+    protocol: kafka
+    description: Runtime bootstrap servers are supplied by service configuration.
+channels:
+  boardTaskFacts:
+    address: rwms.task-board.board-task.v1
+    messages:
+      boardTaskCreatedV1: { $ref: '#/components/messages/BoardTaskCreatedV1' }
+      boardTaskChangedV1: { $ref: '#/components/messages/BoardTaskChangedV1' }
+      boardTaskCompletedV1: { $ref: '#/components/messages/BoardTaskCompletedV1' }
+      boardTaskCancelledV1: { $ref: '#/components/messages/BoardTaskCancelledV1' }
+  queueEntryFacts:
+    address: rwms.task-board.queue-entry.v1
+    description: >-
+      Queue-entry v1 preserves its immutable payload shape and carries taskId
+      plus stable routeIndex. externalTaskId remains owned by the corresponding
+      board-task fact: source-owned task-sync consumers correlate
+      queueEntry.payload.taskId to boardTask.payload.boardTaskId. The private
+      source-owned registration path guarantees that the correlated board-task
+      externalTaskId is non-null; general and retained legacy board tasks may
+      still carry null.
+    messages:
+      queueEntryCreatedV1: { $ref: '#/components/messages/QueueEntryCreatedV1' }
+      queueEntryChangedV1: { $ref: '#/components/messages/QueueEntryChangedV1' }
+      queueEntryTakenV1: { $ref: '#/components/messages/QueueEntryTakenV1' }
+      queueEntryPausedV1: { $ref: '#/components/messages/QueueEntryPausedV1' }
+      queueEntryResumedV1: { $ref: '#/components/messages/QueueEntryResumedV1' }
+      queueEntryCompletedV1: { $ref: '#/components/messages/QueueEntryCompletedV1' }
+      queueEntryMovedV1: { $ref: '#/components/messages/QueueEntryMovedV1' }
+      queueEntryCancelledV1: { $ref: '#/components/messages/QueueEntryCancelledV1' }
+      queueEntryInterruptedV1: { $ref: '#/components/messages/QueueEntryInterruptedV1' }
+      queueEntryReturningV1: { $ref: '#/components/messages/QueueEntryReturningV1' }
+  entryOwnerProofFacts:
+    address: rwms.task-board.entry-owner-proof.v1
+    description: >-
+      Monotonic media authorization proof keyed by task-board entry ID. Media
+      service rejects WORKER access unless the current proof is active and
+      contains the authenticated worker ID.
+    messages:
+      entryOwnerProofChangedV1: { $ref: '#/components/messages/EntryOwnerProofChangedV1' }
+  driverShiftOwnerProofFacts:
+    address: rwms.task-board.driver-shift-owner-proof.v1
+    description: >-
+      Monotonic media authorization proof keyed by Driver Shift ID. An active
+      retained shift grants both upload and read access only to its owning driver.
+    messages:
+      driverShiftOwnerProofChangedV1: { $ref: '#/components/messages/DriverShiftOwnerProofChangedV1' }
+  taskEvidenceFacts:
+    address: rwms.task-board.task-evidence.v1
+    description: >-
+      Server-attributed result evidence projected by downstream owning
+      services. Human-readable worker and group names are intentionally absent.
+    messages:
+      taskEvidenceReadyV1: { $ref: '#/components/messages/TaskEvidenceReadyV1' }
+      taskEvidenceReviewRequiredV1: { $ref: '#/components/messages/TaskEvidenceReviewRequiredV1' }
+  groupKpiDayFacts:
+    address: rwms.task-board.group-kpi-day.v1
+    description: >-
+      Replaceable warehouse-local daily KPI evidence keyed by evidenceId and
+      consumed asynchronously by analytics-service.
+    messages:
+      groupKpiDayChangedV1: { $ref: '#/components/messages/GroupKpiDayChangedV1' }
+operations:
+  publishBoardTaskFacts:
+    action: send
+    channel: { $ref: '#/channels/boardTaskFacts' }
+  publishQueueEntryFacts:
+    action: send
+    channel: { $ref: '#/channels/queueEntryFacts' }
+  publishEntryOwnerProofFacts:
+    action: send
+    channel: { $ref: '#/channels/entryOwnerProofFacts' }
+  publishDriverShiftOwnerProofFacts:
+    action: send
+    channel: { $ref: '#/channels/driverShiftOwnerProofFacts' }
+  publishTaskEvidenceFacts:
+    action: send
+    channel: { $ref: '#/channels/taskEvidenceFacts' }
+  publishGroupKpiDayFacts:
+    action: send
+    channel: { $ref: '#/channels/groupKpiDayFacts' }
+components:
+  messages:
+    BoardTaskCreatedV1:
+      name: task-board.board-task.created.v1
+      title: Board task created
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/BoardTaskCreatedDiscriminator' }
+    BoardTaskChangedV1:
+      name: task-board.board-task.changed.v1
+      title: Board task changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/BoardTaskChangedDiscriminator' }
+    BoardTaskCompletedV1:
+      name: task-board.board-task.completed.v1
+      title: Board task completed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/BoardTaskCompletedDiscriminator' }
+    BoardTaskCancelledV1:
+      name: task-board.board-task.cancelled.v1
+      title: Board task cancelled
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/BoardTaskCancelledDiscriminator' }
+    QueueEntryCreatedV1:
+      name: task-board.queue-entry.created.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryCreatedDiscriminator' }
+    QueueEntryChangedV1:
+      name: task-board.queue-entry.changed.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryChangedDiscriminator' }
+    QueueEntryTakenV1:
+      name: task-board.queue-entry.taken.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryTakenDiscriminator' }
+    QueueEntryPausedV1:
+      name: task-board.queue-entry.paused.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryPausedDiscriminator' }
+    QueueEntryResumedV1:
+      name: task-board.queue-entry.resumed.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryResumedDiscriminator' }
+    QueueEntryCompletedV1:
+      name: task-board.queue-entry.completed.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryCompletedDiscriminator' }
+    QueueEntryMovedV1:
+      name: task-board.queue-entry.moved.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryMovedDiscriminator' }
+    QueueEntryCancelledV1:
+      name: task-board.queue-entry.cancelled.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryCancelledDiscriminator' }
+    QueueEntryInterruptedV1:
+      name: task-board.queue-entry.interrupted.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryInterruptedDiscriminator' }
+    QueueEntryReturningV1:
+      name: task-board.queue-entry.returning.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/QueueEntryReturningDiscriminator' }
+    EntryOwnerProofChangedV1:
+      name: task-board.entry-owner-proof.changed.v1
+      title: Task-board entry media owner proof changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/EntryOwnerProofChangedDiscriminator' }
+    DriverShiftOwnerProofChangedV1:
+      name: task-board.driver-shift-owner-proof.changed.v1
+      title: Driver Shift media owner proof changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/DriverShiftOwnerProofChangedDiscriminator' }
+    TaskEvidenceReadyV1:
+      name: task-board.task-evidence.ready.v1
+      title: Worker result evidence became ready
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/TaskEvidenceReadyDiscriminator' }
+    TaskEvidenceReviewRequiredV1:
+      name: task-board.task-evidence.review-required.v1
+      title: Late worker result evidence requires review
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/TaskEvidenceReviewRequiredDiscriminator' }
+    GroupKpiDayChangedV1:
+      name: task-board.group-kpi-day.changed.v1
+      title: Worker-group KPI day evidence changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        $ref: './analytics/group-kpi-day-v1.schema.json'
+  schemas:
+    BoardTaskCreatedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.board-task.created.v1 }
+        aggregateType: { const: BOARD_TASK }
+    BoardTaskChangedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.board-task.changed.v1 }
+        aggregateType: { const: BOARD_TASK }
+    BoardTaskCompletedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.board-task.completed.v1 }
+        aggregateType: { const: BOARD_TASK }
+    BoardTaskCancelledDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.board-task.cancelled.v1 }
+        aggregateType: { const: BOARD_TASK }
+    QueueEntryCreatedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.created.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryChangedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.changed.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryTakenDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.taken.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryPausedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.paused.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryResumedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.resumed.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryCompletedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.completed.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryMovedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.moved.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryCancelledDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.cancelled.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryInterruptedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.interrupted.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    QueueEntryReturningDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.queue-entry.returning.v1 }
+        aggregateType: { const: QUEUE_ENTRY }
+    EntryOwnerProofChangedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.entry-owner-proof.changed.v1 }
+        aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
+    DriverShiftOwnerProofChangedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.driver-shift-owner-proof.changed.v1 }
+        aggregateType: { const: DRIVER_SHIFT_OWNER_PROOF }
+    TaskEvidenceReadyDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.task-evidence.ready.v1 }
+        aggregateType: { const: TASK_EVIDENCE }
+    TaskEvidenceReviewRequiredDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.task-evidence.review-required.v1 }
+        aggregateType: { const: TASK_EVIDENCE }

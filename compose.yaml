@@ -1,0 +1,328 @@
+# Local development and test dependencies only. This is not a deployment manifest.
+name: rwms
+
+services:
+  auth-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_auth
+      POSTGRES_USER: rwms_auth
+      POSTGRES_PASSWORD: ${RWMS_AUTH_DB_PASSWORD:-rwms_auth_dev}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - rwms-auth-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_auth -d rwms_auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  task-board-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_task_board
+      POSTGRES_USER: rwms_task_board
+      POSTGRES_PASSWORD: ${RWMS_TASK_BOARD_DB_PASSWORD:-rwms_task_board_dev}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - rwms-task-board-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_task_board -d rwms_task_board"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  warehouse-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_warehouse
+      POSTGRES_USER: rwms_warehouse
+      POSTGRES_PASSWORD: ${RWMS_WAREHOUSE_DB_PASSWORD:-rwms_warehouse_dev}
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - rwms-warehouse-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_warehouse -d rwms_warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  asset-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_asset
+      POSTGRES_USER: rwms_asset
+      POSTGRES_PASSWORD: ${RWMS_ASSET_DB_PASSWORD:-rwms_asset_dev}
+    ports:
+      - "127.0.0.1:5436:5432"
+    volumes:
+      - rwms-asset-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_asset -d rwms_asset"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  maintenance-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_maintenance
+      POSTGRES_USER: rwms_maintenance
+      POSTGRES_PASSWORD: ${RWMS_MAINTENANCE_DB_PASSWORD:-rwms_maintenance_dev}
+    ports:
+      - "127.0.0.1:5437:5432"
+    volumes:
+      - rwms-maintenance-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_maintenance -d rwms_maintenance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  media-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_media
+      POSTGRES_USER: rwms_media
+      POSTGRES_PASSWORD: ${RWMS_MEDIA_DB_PASSWORD:-rwms_media_dev}
+    ports:
+      - "127.0.0.1:5438:5432"
+    volumes:
+      - rwms-media-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_media -d rwms_media"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  inventory-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_inventory
+      POSTGRES_USER: rwms_inventory
+      POSTGRES_PASSWORD: ${RWMS_INVENTORY_DB_PASSWORD:-rwms_inventory_dev}
+    ports:
+      - "127.0.0.1:5439:5432"
+    volumes:
+      - rwms-inventory-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_inventory -d rwms_inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  logistics-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_logistics
+      POSTGRES_USER: rwms_logistics
+      POSTGRES_PASSWORD: ${RWMS_LOGISTICS_DB_PASSWORD:-rwms_logistics_dev}
+    ports:
+      - "127.0.0.1:5440:5432"
+    volumes:
+      - rwms-logistics-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_logistics -d rwms_logistics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dossier-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_dossier
+      POSTGRES_USER: rwms_dossier
+      POSTGRES_PASSWORD: ${RWMS_DOSSIER_DB_PASSWORD:-rwms_dossier_dev}
+    ports:
+      - "127.0.0.1:5441:5432"
+    volumes:
+      - rwms-dossier-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_dossier -d rwms_dossier"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  assistant-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_assistant
+      POSTGRES_USER: rwms_assistant
+      POSTGRES_PASSWORD: ${RWMS_ASSISTANT_DB_PASSWORD:-rwms_assistant_dev}
+    ports:
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - rwms-assistant-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_assistant -d rwms_assistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  analytics-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_analytics
+      POSTGRES_USER: rwms_analytics
+      POSTGRES_PASSWORD: ${RWMS_ANALYTICS_DB_PASSWORD:-rwms_analytics_dev}
+    ports:
+      - "127.0.0.1:5443:5432"
+    volumes:
+      - rwms-analytics-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_analytics -d rwms_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: ["core"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${RWMS_MINIO_ROOT_USER:-rwms_media_dev}
+      MINIO_ROOT_PASSWORD: ${RWMS_MINIO_ROOT_PASSWORD:-rwms_media_dev_secret}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - rwms-media-objects:/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  media-bucket-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["core"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${RWMS_MINIO_ROOT_USER:-rwms_media_dev}
+      MINIO_ROOT_PASSWORD: ${RWMS_MINIO_ROOT_PASSWORD:-rwms_media_dev_secret}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing local/rwms-media
+        mc version enable local/rwms-media
+    command: []
+    networks:
+      - rwms-core
+
+  kafka:
+    image: apache/kafka:4.3.1
+    profiles: ["core"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "127.0.0.1:9092:9092"
+    volumes:
+      - rwms-kafka:/var/lib/kafka/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  media-compat-rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    profiles: ["media-compat-rabbit"]
+    hostname: rabbitmq
+    labels:
+      com.rwms.compatibility-scope: media-only
+      com.rwms.target-integration: "false"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RWMS_RABBITMQ_USER:-rwms}
+      RABBITMQ_DEFAULT_PASS: ${RWMS_RABBITMQ_PASSWORD:-rwms_dev}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rwms-rabbitmq:/var/lib/rabbitmq
+    networks:
+      rwms-media-compat:
+        aliases:
+          - rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  rwms-auth-db:
+  rwms-task-board-db:
+  rwms-warehouse-db:
+  rwms-asset-db:
+  rwms-maintenance-db:
+  rwms-media-db:
+  rwms-inventory-db:
+  rwms-logistics-db:
+  rwms-dossier-db:
+  rwms-assistant-db:
+  rwms-analytics-db:
+  rwms-media-objects:
+  rwms-kafka:
+  rwms-rabbitmq:
+
+networks:
+  rwms-core:
+  rwms-media-compat:
+    internal: true

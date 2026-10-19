@@ -1,0 +1,172 @@
+package dev.buhanzaz.rwms.asset.api;
+
+import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
+
+import dev.buhanzaz.rwms.asset.mapper.AssetMaintenanceResponseMapper;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
+import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
+import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.MaintenanceFurnitureCustodyService;
+import jakarta.validation.Valid;
+import java.util.List;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/** Least-privilege maintenance surface; equipment holds are intentionally absent. */
+@RestController
+@Validated
+@RequestMapping("/api/internal/asset/v1/maintenance")
+@RequiredArgsConstructor
+public class MaintenanceAssetController {
+  private final AssetService service;
+  private final MaintenanceFurnitureCustodyService furnitureCustody;
+  private final AssetAuthorizer access;
+  private final AssetMaintenanceResponseMapper responseMapper;
+
+  @GetMapping("/rental-items/{id}/snapshot")
+  public MaintenanceRentalItemSnapshot snapshot(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return responseMapper.toMaintenanceSnapshot(service.rentalItem(id));
+  }
+
+  @GetMapping("/cabin-characteristics")
+  public List<CabinCatalogValueResponse> cabinCharacteristics(
+      @AuthenticationPrincipal Jwt jwt) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return service.maintenanceCabinCharacteristics();
+  }
+
+  @PutMapping(
+      "/rental-items/{rentalItemId}/characteristics/{characteristicId}")
+  public ResponseEntity<MaintenanceCharacteristicApplicationResponse> applyCharacteristic(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID rentalItemId,
+      @PathVariable UUID characteristicId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    return idempotentOk(
+        service.applyMaintenanceCharacteristic(
+            access.maintenanceSubjectId(jwt),
+            idempotencyKey,
+            rentalItemId,
+            characteristicId));
+  }
+
+  @PostMapping("/equipment-catalog")
+  public ResponseEntity<MaintenanceFurnitureEquipmentResponse> createFurnitureEquipment(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody EnsureMaintenanceFurnitureEquipmentRequest request) {
+    access.requireMaintenanceAssetAccess(jwt);
+    AssetService.CreateResult<MaintenanceFurnitureEquipmentResponse> result =
+        service.ensureMaintenanceFurnitureEquipment(
+            access.maintenanceSubjectId(jwt), idempotencyKey, request);
+    return created(result);
+  }
+
+  @PostMapping("/operation-leases")
+  public ResponseEntity<OperationLeaseResponse> acquireLease(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody AcquireMaintenanceOperationLeaseRequest request) {
+    UUID subjectId = access.maintenanceSubjectId(jwt);
+    AssetService.CreateResult<OperationLeaseResponse> result =
+        service.acquireMaintenanceLease(subjectId, idempotencyKey, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  @PostMapping("/equipment-catalog/snapshots")
+  public List<MaintenanceFurnitureEquipmentResponse> furnitureEquipmentSnapshots(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody MaintenanceFurnitureEquipmentSnapshotRequest request) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return service.maintenanceFurnitureEquipmentSnapshots(request);
+  }
+
+  @PutMapping("/operation-leases/{id}/renew")
+  public ResponseEntity<OperationLeaseResponse> renewLease(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody RenewMaintenanceOperationLeaseRequest request) {
+    return idempotentOk(service.renewMaintenanceLease(
+        access.maintenanceSubjectId(jwt), idempotencyKey, id, request));
+  }
+
+  @PutMapping("/operation-leases/{id}/release")
+  public ResponseEntity<OperationLeaseResponse> releaseLease(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReleaseMaintenanceOperationLeaseRequest request) {
+    return idempotentOk(service.releaseMaintenanceLease(
+        access.maintenanceSubjectId(jwt), idempotencyKey, id, request));
+  }
+
+  @PutMapping("/rental-items/{id}/fenced-status")
+  public ResponseEntity<RentalItemResponse> fencedStatus(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody MaintenanceFencedStatusRequest request) {
+    return idempotentOk(service.maintenanceFencedStatus(
+        access.maintenanceSubjectId(jwt), idempotencyKey, id, request));
+  }
+
+  /**
+   * Maintenance reads only the custody facts it owns. The values are not a
+   * substitute for an admin disposition decision: availableForDisposition is
+   * merely the exact quantity that can be proposed for approval.
+   */
+  @GetMapping("/furniture-custody")
+  public List<MaintenanceFurnitureCustodyClaim> unresolvedFurnitureCustody(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam MaintenanceLeaseOwnerType ownerType,
+      @RequestParam UUID ownerId) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return furnitureCustody.unresolvedClaims(ownerType, ownerId);
+  }
+
+  @PostMapping("/furniture-custody/{claimId}/return-to-stock")
+  public ResponseEntity<MaintenanceFurnitureCustodyReturnReceipt> returnFurnitureCustodyToStock(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID claimId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReturnMaintenanceFurnitureCustodyToStockRequest request) {
+    MaintenanceFurnitureCustodyService.CommandResult<MaintenanceFurnitureCustodyReturnReceipt>
+        result = furnitureCustody.returnToStock(
+            access.maintenanceSubjectId(jwt), idempotencyKey, claimId, request);
+    ResponseEntity.BodyBuilder response = result.replayed()
+        ? ResponseEntity.ok().header("Idempotency-Replayed", "true")
+        : ResponseEntity.status(HttpStatus.CREATED);
+    return response.body(result.response());
+  }
+
+  private static <T> ResponseEntity<T> idempotentOk(AssetService.CreateResult<T> result) {
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  private static <T> ResponseEntity<T> created(AssetService.CreateResult<T> result) {
+    ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+}

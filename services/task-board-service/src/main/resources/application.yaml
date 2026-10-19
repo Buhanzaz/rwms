@@ -1,0 +1,269 @@
+server:
+  port: ${TASK_BOARD_SERVICE_PORT:8081}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: task-board-service
+  tracing:
+    sampling:
+      probability: ${TASK_BOARD_TRACING_SAMPLING_PROBABILITY:0.1}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+spring:
+  application:
+    name: task-board-service
+  datasource:
+    url: ${TASK_BOARD_DB_URL}
+    username: ${TASK_BOARD_DB_USERNAME}
+    password: ${TASK_BOARD_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  cloud:
+    function:
+      definition: taskBoardWorkerClassEvents;taskBoardWorkerEvents;taskBoardWorkerGroupEvents;taskBoardWorkQueueEvents;taskBoardQueueUsageReferenceEvents;taskBoardBoardTaskEvents;taskBoardQueueEntryEvents;taskBoardMediaEvents;taskBoardWarehouseEvents
+    stream:
+      bindings:
+        taskBoardWorkerClassEvents-in-0:
+          destination: rwms.task-board.worker-class.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardWorkerEvents-in-0:
+          destination: rwms.task-board.worker.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardWorkerGroupEvents-in-0:
+          destination: rwms.task-board.worker-group.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardWorkQueueEvents-in-0:
+          destination: rwms.task-board.work-queue.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardQueueUsageReferenceEvents-in-0:
+          destination: rwms.task-board.queue-usage-reference.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardBoardTaskEvents-in-0:
+          destination: rwms.task-board.board-task.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardQueueEntryEvents-in-0:
+          destination: rwms.task-board.queue-entry.v1
+          group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardMediaEvents-in-0:
+          destination: rwms.media.media.v1
+          group: task-board-worker-evidence-v1
+          consumer:
+            max-attempts: 1
+        taskBoardWarehouseEvents-in-0:
+          destination: rwms.warehouse.warehouse.v1
+          group: task-board-warehouse-metadata-v1
+          consumer:
+            max-attempts: 1
+      kafka:
+        binder:
+          brokers: ${TASK_BOARD_KAFKA_BROKERS:}
+          auto-create-topics: false
+          configuration:
+            acks: all
+            enable.idempotence: true
+            compression.type: zstd
+            request.timeout.ms: 5000
+            delivery.timeout.ms: 15000
+            max.block.ms: 5000
+            metadata.recovery.rebootstrap.trigger.ms: 1000
+        bindings:
+          taskBoardWorkerClassEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardWorkerEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardWorkerGroupEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardWorkQueueEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardQueueUsageReferenceEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardBoardTaskEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardQueueEntryEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardMediaEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardWarehouseEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+        default:
+          producer:
+            sync: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER}
+          audiences: ${AUTH_AUDIENCE:rwms-services}
+      client:
+        registration:
+          maintenance-task-requirements:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: maintenance.task-requirements
+          auth-service:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: worker-credentials.manage
+          warehouse-lifecycle-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.read
+          warehouse-lifecycle-confirm:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.confirm
+          warehouse-timezone-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.timezone.read
+          warehouse-identity-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.identity.read
+          worker-profile-media:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: media.task-board
+        provider:
+          auth-service:
+            token-uri: ${AUTH_TOKEN_URI}
+
+rwms:
+  maintenance:
+    base-url: ${MAINTENANCE_SERVICE_URL:}
+  platform:
+    kafka:
+      enabled: ${TASK_BOARD_KAFKA_ENABLED:false}
+      destinations:
+        - rwms.task-board.worker-class.v1
+        - rwms.task-board.worker.v1
+        - rwms.task-board.worker-group.v1
+        - rwms.task-board.work-queue.v1
+        - rwms.task-board.queue-usage-reference.v1
+        - rwms.task-board.board-task.v1
+        - rwms.task-board.queue-entry.v1
+        - rwms.task-board.entry-owner-proof.v1
+        - rwms.task-board.task-evidence.v1
+        - rwms.task-board.group-kpi-day.v1
+        - rwms.task-board.driver-shift-owner-proof.v1
+  task-board:
+    eventing:
+      outbox:
+        relay-delay: ${TASK_BOARD_KAFKA_OUTBOX_RELAY_DELAY:1s}
+        lease-duration: ${TASK_BOARD_KAFKA_OUTBOX_LEASE_DURATION:30s}
+        instance-id: ${TASK_BOARD_KAFKA_INSTANCE_ID:task-board-service}
+    push:
+      fcm:
+        enabled: ${TASK_BOARD_FCM_ENABLED:false}
+        project-id: ${TASK_BOARD_FCM_PROJECT_ID:}
+        dispatcher-delay: ${TASK_BOARD_FCM_DISPATCHER_DELAY:2s}
+        lease-duration: ${TASK_BOARD_FCM_LEASE_DURATION:30s}
+        batch-size: ${TASK_BOARD_FCM_BATCH_SIZE:50}
+        max-attempts: ${TASK_BOARD_FCM_MAX_ATTEMPTS:8}
+  driver-shift:
+    enabled: ${DRIVER_DAILY_SHIFT_ENABLED:false}
+    day-start: ${DRIVER_SHIFT_DAY_START:06:00}
+    suspicious-odometer-jump-km: ${DRIVER_SHIFT_SUSPICIOUS_ODOMETER_JUMP_KM:1500}
+    weather:
+      base-url: ${MET_NO_BASE_URL:https://api.met.no/weatherapi/locationforecast/2.0/complete}
+      user-agent: ${MET_NO_USER_AGENT:}
+      connect-timeout: ${MET_NO_CONNECT_TIMEOUT:2s}
+      read-timeout: ${MET_NO_READ_TIMEOUT:5s}
+      cache-ttl: ${MET_NO_CACHE_TTL:15m}
+      max-attempts: ${MET_NO_MAX_ATTEMPTS:2}
+    hazards:
+      wind-gust-warning: ${WEATHER_HAZARD_WIND_GUST_WARNING:13.0}
+      heavy-rain-mm-per-hour: ${WEATHER_HAZARD_HEAVY_RAIN_MM_PER_HOUR:10.0}
+      fog-area-fraction-warning-percent: ${WEATHER_HAZARD_FOG_AREA_FRACTION_WARNING_PERCENT:30.0}
+  security:
+    queue-registry-client-ids: ${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:maintenance-service}
+  worker:
+    offline-lease-secret: ${TASK_BOARD_WORKER_OFFLINE_LEASE_SECRET}
+  auth:
+    worker-credentials-url: ${AUTH_WORKER_CREDENTIALS_URL}
+    connect-timeout: ${AUTH_CONNECT_TIMEOUT:2s}
+    read-timeout: ${AUTH_READ_TIMEOUT:5s}
+    credential-operation-timeout: ${AUTH_CREDENTIAL_OPERATION_TIMEOUT:15m}
+  media:
+    base-url: ${MEDIA_SERVICE_INTERNAL_BASE_URL:http://127.0.0.1:8085}
+  warehouse:
+    lifecycle:
+      base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:}
+      reconciliation:
+        enabled: ${TASK_BOARD_WAREHOUSE_LIFECYCLE_RECONCILIATION_ENABLED:true}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN},${WORKER_ORIGIN},${DRIVER_ORIGIN}
