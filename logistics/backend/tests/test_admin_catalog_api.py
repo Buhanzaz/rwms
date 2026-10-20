@@ -358,7 +358,7 @@ async def test_admin_trailer_delete_rejects_default_assignment_and_honors_versio
         vehicle.id,
         VehicleUpdate(
             expected_version=1,
-            can_use_trailer=True,
+            has_trailer=True,
             default_trailer_id=trailer.id,
         ),
     )
@@ -509,7 +509,7 @@ async def test_relocation_rejects_active_shift_and_vehicle_trailer_links(
             vehicle.id,
             VehicleUpdate(
                 expected_version=1,
-                can_use_trailer=True,
+                has_trailer=True,
                 default_trailer_id=trailer.id,
             ),
         )

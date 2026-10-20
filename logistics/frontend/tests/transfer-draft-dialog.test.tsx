@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AvailableWarehouse } from '../src/domain/types';
 import { TransferDraftDialog } from '../src/features/transfers/TransferDraftDialog';
 import type {
@@ -150,6 +150,8 @@ async function selectCalendarDate(
 
 describe('standalone transfer draft dialog', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-01T12:00:00+03:00'));
     auth.restorePanelUser.mockReset();
     auth.beginPanelLogin.mockReset();
     transfers.createTransferDraft.mockReset();
@@ -174,6 +176,10 @@ describe('standalone transfer draft dialog', () => {
       cabin_count: input.cabinCount,
       trailer_attached: input.cabinCount === 2,
     }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('stays inside logistics and offers the shared RWMS login when no USER session exists', async () => {

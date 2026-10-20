@@ -239,7 +239,7 @@ async def test_support_positioning_does_not_reattach_an_incident_trailer(inciden
     fact = _fact()
     trailer_id = uuid4()
     fact.shift.vehicle.capacity = 2
-    fact.shift.vehicle.can_use_trailer = True
+    fact.shift.vehicle.has_trailer = True
     fact.shift.vehicle.default_trailer = SimpleNamespace(id=trailer_id, active=True)
     restrictions = DayResourceRestrictions(
         trailer_ids=frozenset({str(trailer_id)}) if incident else frozenset(),

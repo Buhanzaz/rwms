@@ -1,4 +1,4 @@
-"""Canonical physical vehicle model expressed in tonnes and metres.
+"""Canonical physical equipment model expressed in tonnes and metres.
 
 The simulator carries one authoritative description of a vehicle:
 
@@ -8,11 +8,13 @@ The simulator carries one authoritative description of a vehicle:
 * dimensions in metres: ``length_m``, ``width_m`` and ``height_m``;
 * trailer availability as one boolean: ``has_trailer``.
 
-The legacy kilogram/millimetre columns and the legacy routing-extension fields
-(platform sizes, coupled length, safety margins) remain in the database only for
-backward compatibility with already routed plans and external consumers.  This
-module is the single place where canonical units are converted, validated and
-projected back to the legacy columns, so no calculation may mix units.
+Optional routing extensions (platform geometry, per-unit cargo limits, coupling
+length and safety margins) use the same tonne/metre units.  The legacy
+kilogram/millimetre columns remain in the database only as a rollback and
+compatibility layer; no active calculation reads or writes them.
+
+The module is the single place where legacy request values are converted and
+canonical values are validated, so no calculation may mix units.
 """
 
 from __future__ import annotations
@@ -31,8 +33,29 @@ CANONICAL_MASS_FIELDS: tuple[str, ...] = (
     "max_gross_weight_t",
     "axle_load_t",
     "payload_capacity_t",
+    "max_platform_payload_t",
+    "max_cargo_weight_t",
 )
-CANONICAL_DIMENSION_FIELDS: tuple[str, ...] = ("length_m", "width_m", "height_m")
+CANONICAL_DIMENSION_FIELDS: tuple[str, ...] = (
+    "length_m",
+    "width_m",
+    "height_m",
+    "platform_length_m",
+    "platform_height_from_ground_m",
+    "max_cargo_length_m",
+    "max_cargo_width_m",
+    "max_cargo_height_m",
+    "coupling_length_m",
+)
+CANONICAL_MARGIN_FIELDS: tuple[str, ...] = (
+    "height_safety_margin_m",
+    "width_safety_margin_m",
+    "weight_safety_margin_t",
+)
+TRAILER_DIMENSION_FIELDS: tuple[str, ...] = tuple(
+    field for field in CANONICAL_DIMENSION_FIELDS if field != "coupling_length_m"
+)
+
 CANONICAL_TO_LEGACY: dict[str, str] = {
     "tare_weight_t": "tare_weight_kg",
     "max_gross_weight_t": "max_gross_weight_kg",
@@ -41,10 +64,38 @@ CANONICAL_TO_LEGACY: dict[str, str] = {
     "length_m": "length_mm",
     "width_m": "width_mm",
     "height_m": "height_mm",
+    "platform_length_m": "platform_length_mm",
+    "platform_height_from_ground_m": "platform_height_from_ground_mm",
+    "max_platform_payload_t": "max_platform_payload_kg",
+    "max_cargo_length_m": "max_cargo_length_mm",
+    "max_cargo_width_m": "max_cargo_width_mm",
+    "max_cargo_height_m": "max_cargo_height_mm",
+    "max_cargo_weight_t": "max_cargo_weight_kg",
+    "coupling_length_m": "coupling_length_mm",
+    "height_safety_margin_m": "height_safety_margin_mm",
+    "width_safety_margin_m": "width_safety_margin_mm",
+    "weight_safety_margin_t": "weight_safety_margin_kg",
 }
 LEGACY_TO_CANONICAL: dict[str, str] = {
     legacy: canonical for canonical, legacy in CANONICAL_TO_LEGACY.items()
 }
+
+LEGACY_VEHICLE_FIELDS: frozenset[str] = frozenset(
+    {
+        *LEGACY_TO_CANONICAL,
+        "can_use_trailer",
+        "combined_length_with_trailer_mm",
+        "platform_width_mm",
+    }
+)
+LEGACY_TRAILER_FIELDS: frozenset[str] = frozenset(LEGACY_TO_CANONICAL) | {
+    "platform_width_mm"
+}
+
+REMOVED_VEHICLE_FIELDS: frozenset[str] = frozenset(
+    {"combined_length_with_trailer_mm", "platform_width_mm"}
+)
+REMOVED_TRAILER_FIELDS: frozenset[str] = frozenset({"platform_width_mm"})
 
 
 class VehicleSpecificationError(ValueError):
@@ -78,6 +129,25 @@ def _decimal(value: object, field: str) -> Decimal:
     normalized = _quantize(decimal_value)
     if normalized <= 0:
         raise VehicleSpecificationError(f"{field} must be positive", fields=(field,))
+    return normalized
+
+
+def _nonnegative_decimal(value: object, field: str) -> Decimal:
+    """Coerce a non-negative canonical decimal used for safety margins."""
+
+    if isinstance(value, bool):
+        raise VehicleSpecificationError(f"{field} must be a decimal number", fields=(field,))
+    try:
+        decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise VehicleSpecificationError(
+            f"{field} must be a decimal number", fields=(field,)
+        ) from exc
+    if not decimal_value.is_finite():
+        raise VehicleSpecificationError(f"{field} must be finite", fields=(field,))
+    normalized = _quantize(decimal_value)
+    if normalized < 0:
+        raise VehicleSpecificationError(f"{field} must not be negative", fields=(field,))
     return normalized
 
 
@@ -126,27 +196,30 @@ def _is_mass_field(name: str) -> bool:
 
 
 def canonical_to_legacy_value(field: str, value: Decimal | None) -> int | None:
-    """Project one canonical value to the legacy integer column."""
+    """Project one canonical value to its rollback compatibility column."""
 
-    if _is_mass_field(field):
+    if value is None:
+        return None
+    if _is_mass_field(field) or (
+        field in CANONICAL_MARGIN_FIELDS and field.endswith("_t")
+    ):
         return tonnes_to_kilograms(value)
     return metres_to_millimetres(value)
 
 
 def legacy_to_canonical_value(field: str, value: int | None) -> Decimal | None:
-    """Convert one legacy integer column to the canonical decimal value."""
-
-    if _is_mass_field(field):
-        return kilograms_to_tonnes(value)
-    return millimetres_to_metres(value)
-
-
-def _coerce_canonical(field: str, value: object) -> Decimal | None:
-    """Validate one canonical decimal supplied by a request or an entity."""
+    """Convert one legacy integer request value to the canonical decimal value."""
 
     if value is None:
         return None
-    return _decimal(value, field)
+    if field in CANONICAL_MARGIN_FIELDS:
+        if isinstance(value, bool) or value < 0:
+            raise VehicleSpecificationError(f"{field} must not be negative", fields=(field,))
+        divisor = KG_PER_TONNE if field.endswith("_t") else MM_PER_METER
+        return _quantize(Decimal(value) / divisor)
+    if _is_mass_field(field):
+        return kilograms_to_tonnes(value)
+    return millimetres_to_metres(value)
 
 
 def _coerce_legacy(field: str, value: object) -> int | None:
@@ -158,7 +231,9 @@ def _coerce_legacy(field: str, value: object) -> int | None:
         raise VehicleSpecificationError(
             f"{field} must be a positive integer", fields=(field,)
         )
-    if value <= 0:
+    if value < 0:
+        raise VehicleSpecificationError(f"{field} must not be negative", fields=(field,))
+    if value == 0 and LEGACY_TO_CANONICAL.get(field) not in CANONICAL_MARGIN_FIELDS:
         raise VehicleSpecificationError(f"{field} must be positive", fields=(field,))
     return value
 
@@ -173,88 +248,35 @@ def _entity_value(current: object | None, field: str) -> Any:
     return getattr(current, field, None)
 
 
-@dataclass(frozen=True, slots=True)
-class VehicleSpecification:
-    """Validated canonical physical vehicle specification.
-
-    ``None`` keeps the explicit "physical fact is unknown" semantics used by the
-    existing equipment policy; a value is always a positive tonne/metre decimal
-    with at most millimetre/kilogram precision.
-    """
-
-    tare_weight_t: Decimal | None = None
-    max_gross_weight_t: Decimal | None = None
-    axle_load_t: Decimal | None = None
-    payload_capacity_t: Decimal | None = None
-    length_m: Decimal | None = None
-    width_m: Decimal | None = None
-    height_m: Decimal | None = None
-    has_trailer: bool = False
-
-    def __post_init__(self) -> None:
-        for field in (*CANONICAL_MASS_FIELDS, *CANONICAL_DIMENSION_FIELDS):
-            normalized = _coerce_canonical(field, getattr(self, field))
-            object.__setattr__(self, field, normalized)
-        if (
-            self.tare_weight_t is not None
-            and self.max_gross_weight_t is not None
-            and self.max_gross_weight_t < self.tare_weight_t
-        ):
-            raise VehicleSpecificationError(
-                "max_gross_weight_t must not be below tare_weight_t",
-                fields=("max_gross_weight_t", "tare_weight_t"),
-            )
-
-    def legacy_projection(self) -> dict[str, int | None]:
-        """Return the legacy kilogram/millimetre columns for this specification."""
-
-        return {
-            CANONICAL_TO_LEGACY[field]: canonical_to_legacy_value(
-                field, getattr(self, field)
-            )
-            for field in (*CANONICAL_MASS_FIELDS, *CANONICAL_DIMENSION_FIELDS)
-        }
-
-    def routing_values(self) -> dict[str, int | None]:
-        """Return exact integer units consumed by the routing adapter."""
-
-        return self.legacy_projection()
-
-
 def _canonical_current_value(current: object | None, field: str) -> Decimal | None:
-    """Read the effective canonical value, falling back to the legacy column."""
+    """Read the effective canonical value from a persisted entity."""
 
     value = _entity_value(current, field)
-    if value is not None:
-        return _coerce_canonical(field, value)
-    return legacy_to_canonical_value(
-        field, _entity_value(current, CANONICAL_TO_LEGACY[field])
-    )
+    if value is None:
+        return None
+    if field in CANONICAL_MARGIN_FIELDS:
+        return _nonnegative_decimal(value, field)
+    return _decimal(value, field)
 
 
-def normalize_vehicle_fields(
+def _normalize_field_names(values: Mapping[str, Any]) -> None:
+    removed = REMOVED_VEHICLE_FIELDS | REMOVED_TRAILER_FIELDS
+    supplied = sorted(field for field in removed if values.get(field) is not None)
+    if supplied:
+        raise VehicleSpecificationError(
+            f"{', '.join(supplied)} is no longer supported; use canonical metres",
+            fields=tuple(supplied),
+        )
+
+
+def _normalize_physical_fields(
     values: Mapping[str, Any],
     *,
-    current: object | None = None,
-    allow_clear: bool = False,
-    create: bool = False,
+    current: object | None,
+    allow_clear: bool,
 ) -> dict[str, Any]:
-    """Normalize a partial vehicle command into canonical and legacy columns.
+    """Reconcile canonical and legacy request values into canonical updates."""
 
-    The returned mapping always contains the canonical field and its legacy
-    projection for every mass/dimension that is explicitly supplied (or derived
-    from an explicitly supplied legacy value).  Conflicting values for the same
-    physical fact are rejected instead of silently choosing one unit.
-
-    ``current`` is the persisted entity (or a mapping) for partial updates.  When
-    ``allow_clear`` is false, explicit ``None`` values are treated as absent
-    (used by response models); request updates keep them so a fact can be cleared.
-    """
-
-    merged = {
-        field: _canonical_current_value(current, field)
-        for field in (*CANONICAL_MASS_FIELDS, *CANONICAL_DIMENSION_FIELDS)
-    }
     updates: dict[str, Any] = {}
     for canonical, legacy in CANONICAL_TO_LEGACY.items():
         canonical_provided = canonical in values
@@ -266,8 +288,25 @@ def normalize_vehicle_fields(
             legacy_provided = legacy_provided and legacy_value is not None
         if not canonical_provided and not legacy_provided:
             continue
+        if allow_clear and (
+            (canonical_provided and canonical_value is None)
+            or (legacy_provided and legacy_value is None)
+        ):
+            if canonical_provided and legacy_provided and (
+                canonical_value is None
+            ) != (legacy_value is None):
+                raise VehicleSpecificationError(
+                    f"{canonical} and {legacy} describe different values",
+                    fields=(canonical, legacy),
+                )
+            updates[canonical] = None
+            continue
         if canonical_provided and legacy_provided:
-            normalized_canonical = _coerce_canonical(canonical, canonical_value)
+            normalized_canonical = (
+                _nonnegative_decimal(canonical_value, canonical)
+                if canonical in CANONICAL_MARGIN_FIELDS
+                else _decimal(canonical_value, canonical)
+            )
             normalized_legacy = _coerce_legacy(legacy, legacy_value)
             expected_legacy = canonical_to_legacy_value(canonical, normalized_canonical)
             if normalized_legacy != expected_legacy:
@@ -276,43 +315,120 @@ def normalize_vehicle_fields(
                     fields=(canonical, legacy),
                 )
             updates[canonical] = normalized_canonical
-            updates[legacy] = normalized_legacy
         elif canonical_provided:
-            normalized_canonical = _coerce_canonical(canonical, canonical_value)
-            updates[canonical] = normalized_canonical
-            updates[legacy] = canonical_to_legacy_value(canonical, normalized_canonical)
+            updates[canonical] = (
+                _nonnegative_decimal(canonical_value, canonical)
+                if canonical in CANONICAL_MARGIN_FIELDS
+                else _decimal(canonical_value, canonical)
+            )
         else:
             normalized_legacy = _coerce_legacy(legacy, legacy_value)
-            updates[legacy] = normalized_legacy
             updates[canonical] = legacy_to_canonical_value(canonical, normalized_legacy)
-        merged[canonical] = updates[canonical]
-
-    trailer_updates = _normalize_trailer_fields(
-        values,
-        current=current,
-        allow_clear=allow_clear,
-        create=create,
-    )
-    updates.update(trailer_updates)
-
-    try:
-        VehicleSpecification(
-            **merged,
-            has_trailer=bool(trailer_updates.get("has_trailer", False)),
-        )
-    except VehicleSpecificationError:
-        raise
     return updates
 
 
-def _normalize_trailer_fields(
+@dataclass(frozen=True, slots=True)
+class VehicleSpecification:
+    """Validated canonical physical vehicle specification.
+
+    ``None`` keeps the explicit "physical fact is unknown" semantics used by the
+    existing equipment policy; a value is always a positive tonne/metre decimal
+    with at most millimetre/kilogram precision.  Safety margins are non-negative.
+    """
+
+    tare_weight_t: Decimal | None = None
+    max_gross_weight_t: Decimal | None = None
+    axle_load_t: Decimal | None = None
+    payload_capacity_t: Decimal | None = None
+    length_m: Decimal | None = None
+    width_m: Decimal | None = None
+    height_m: Decimal | None = None
+    platform_length_m: Decimal | None = None
+    platform_height_from_ground_m: Decimal | None = None
+    max_platform_payload_t: Decimal | None = None
+    max_cargo_length_m: Decimal | None = None
+    max_cargo_width_m: Decimal | None = None
+    max_cargo_height_m: Decimal | None = None
+    max_cargo_weight_t: Decimal | None = None
+    coupling_length_m: Decimal | None = None
+    height_safety_margin_m: Decimal = Decimal(0)
+    width_safety_margin_m: Decimal = Decimal(0)
+    weight_safety_margin_t: Decimal = Decimal(0)
+    has_trailer: bool = False
+
+    def __post_init__(self) -> None:
+        for field in (*CANONICAL_MASS_FIELDS, *CANONICAL_DIMENSION_FIELDS):
+            normalized = _canonical_current_value(self, field)
+            object.__setattr__(self, field, normalized)
+        for field in CANONICAL_MARGIN_FIELDS:
+            value = getattr(self, field)
+            normalized = _nonnegative_decimal(0 if value is None else value, field)
+            object.__setattr__(self, field, normalized)
+        if not isinstance(self.has_trailer, bool):
+            raise VehicleSpecificationError(
+                "has_trailer must be boolean", fields=("has_trailer",)
+            )
+        if (
+            self.tare_weight_t is not None
+            and self.max_gross_weight_t is not None
+            and self.max_gross_weight_t < self.tare_weight_t
+        ):
+            raise VehicleSpecificationError(
+                "max_gross_weight_t must not be below tare_weight_t",
+                fields=("max_gross_weight_t", "tare_weight_t"),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class TrailerSpecification:
+    """Validated canonical physical trailer specification."""
+
+    tare_weight_t: Decimal | None = None
+    max_gross_weight_t: Decimal | None = None
+    axle_load_t: Decimal | None = None
+    payload_capacity_t: Decimal | None = None
+    length_m: Decimal | None = None
+    width_m: Decimal | None = None
+    height_m: Decimal | None = None
+    platform_length_m: Decimal | None = None
+    platform_height_from_ground_m: Decimal | None = None
+    max_platform_payload_t: Decimal | None = None
+    max_cargo_length_m: Decimal | None = None
+    max_cargo_width_m: Decimal | None = None
+    max_cargo_height_m: Decimal | None = None
+    max_cargo_weight_t: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        for field in (*CANONICAL_MASS_FIELDS, *TRAILER_DIMENSION_FIELDS):
+            normalized = _canonical_current_value(self, field)
+            object.__setattr__(self, field, normalized)
+        if (
+            self.tare_weight_t is not None
+            and self.max_gross_weight_t is not None
+            and self.max_gross_weight_t < self.tare_weight_t
+        ):
+            raise VehicleSpecificationError(
+                "max_gross_weight_t must not be below tare_weight_t",
+                fields=("max_gross_weight_t", "tare_weight_t"),
+            )
+
+
+def normalize_vehicle_fields(
     values: Mapping[str, Any],
     *,
-    current: object | None,
-    allow_clear: bool,
-    create: bool,
+    current: object | None = None,
+    allow_clear: bool = False,
+    create: bool = False,
 ) -> dict[str, Any]:
-    """Reconcile the canonical trailer boolean with its legacy tri-state column."""
+    """Normalize a partial vehicle command into canonical columns only.
+
+    Legacy kilogram/millimetre values are accepted for a transition period and
+    converted exactly once.  Removed duplicate fields are rejected instead of
+    being silently ignored.  The returned mapping never contains legacy fields.
+    """
+
+    _normalize_field_names(values)
+    updates = _normalize_physical_fields(values, current=current, allow_clear=allow_clear)
 
     has_trailer_provided = "has_trailer" in values
     legacy_trailer_provided = "can_use_trailer" in values
@@ -326,114 +442,104 @@ def _normalize_trailer_fields(
             default_trailer_provided and values.get("default_trailer_id") is not None
         )
 
-    current_has_trailer = _entity_value(current, "has_trailer")
-    if current_has_trailer is None:
-        current_has_trailer = _entity_value(current, "can_use_trailer") is True
-    final_has_trailer = bool(current_has_trailer)
-
-    def _as_bool(field: str, value: object) -> bool:
+    final_has_trailer = bool(_entity_value(current, "has_trailer"))
+    if has_trailer_provided:
+        value = values.get("has_trailer")
         if not isinstance(value, bool):
             raise VehicleSpecificationError(
-                f"{field} must be boolean", fields=(field,)
+                "has_trailer must be boolean", fields=("has_trailer",)
             )
-        return value
-
-    if has_trailer_provided:
-        if values.get("has_trailer") is None:
-            final_has_trailer = False
-        else:
-            final_has_trailer = _as_bool("has_trailer", values["has_trailer"])
+        final_has_trailer = value
     if legacy_trailer_provided:
-        legacy_value = values.get("can_use_trailer")
-        if legacy_value is not None:
-            normalized_legacy = _as_bool("can_use_trailer", legacy_value)
-            if has_trailer_provided and normalized_legacy != final_has_trailer:
-                raise VehicleSpecificationError(
-                    "has_trailer and can_use_trailer describe different values",
-                    fields=("has_trailer", "can_use_trailer"),
-                )
-            final_has_trailer = normalized_legacy
+        value = values.get("can_use_trailer")
+        if not isinstance(value, bool):
+            raise VehicleSpecificationError(
+                "can_use_trailer must be boolean", fields=("can_use_trailer",)
+            )
+        if has_trailer_provided and value != final_has_trailer:
+            raise VehicleSpecificationError(
+                "has_trailer and can_use_trailer describe different values",
+                fields=("has_trailer", "can_use_trailer"),
+            )
+        final_has_trailer = value
     if create and not has_trailer_provided and not legacy_trailer_provided:
         final_has_trailer = False
+    if create or has_trailer_provided or legacy_trailer_provided:
+        updates["has_trailer"] = final_has_trailer
 
-    default_trailer_value = values.get("default_trailer_id")
-    if not default_trailer_provided or current is not None:
-        current_default = _entity_value(current, "default_trailer_id")
-        effective_default = (
-            default_trailer_value
-            if default_trailer_provided
-            else current_default
-        )
-    else:
-        effective_default = default_trailer_value
+    effective_default = (
+        values.get("default_trailer_id")
+        if default_trailer_provided
+        else _entity_value(current, "default_trailer_id")
+    )
     if effective_default is not None and not final_has_trailer:
         raise VehicleSpecificationError(
             "default_trailer_id requires has_trailer=true",
             fields=("default_trailer_id", "has_trailer"),
         )
 
-    updates: dict[str, Any] = {}
-    if create:
-        updates["has_trailer"] = final_has_trailer
-        updates["can_use_trailer"] = (
-            values.get("can_use_trailer")
-            if legacy_trailer_provided
-            else final_has_trailer
-        )
-        return updates
-    if has_trailer_provided or legacy_trailer_provided:
-        updates["has_trailer"] = final_has_trailer
-        # Keep the legacy tri-state column in sync so old consumers and the
-        # persisted routing snapshot observe the same trailer capability.
-        updates["can_use_trailer"] = final_has_trailer
+    merged: dict[str, Any] = {
+        field: _canonical_current_value(current, field)
+        for field in (*CANONICAL_MASS_FIELDS, *CANONICAL_DIMENSION_FIELDS, *CANONICAL_MARGIN_FIELDS)
+    }
+    merged.update({field: value for field, value in updates.items() if field in merged})
+    for field in CANONICAL_MARGIN_FIELDS:
+        if merged[field] is None:
+            merged[field] = Decimal(0)
+    VehicleSpecification(**merged, has_trailer=final_has_trailer)
     return updates
 
 
-def effective_trailer_capability(
-    has_trailer: bool | None,
-    can_use_trailer: bool | None,
-) -> bool | None:
-    """Resolve canonical and legacy trailer facts without inventing capability.
+def normalize_trailer_fields(
+    values: Mapping[str, Any],
+    *,
+    current: object | None = None,
+    allow_clear: bool = False,
+) -> dict[str, Any]:
+    """Normalize a partial trailer command into canonical columns only."""
 
-    ``True`` wins for backward compatibility with legacy rows and in-memory
-    projections that only set ``can_use_trailer``.  ``None`` is reserved for a
-    genuinely unknown profile so routing still fails with an explicit
-    ``ROUTING_PROFILE_INCOMPLETE`` error instead of silently attaching a trailer.
-    """
-
-    if has_trailer is True or can_use_trailer is True:
-        return True
-    if has_trailer is None and can_use_trailer is None:
-        return None
-    return False
+    _normalize_field_names(values)
+    updates = _normalize_physical_fields(values, current=current, allow_clear=allow_clear)
+    merged = {
+        field: _canonical_current_value(current, field)
+        for field in (*CANONICAL_MASS_FIELDS, *TRAILER_DIMENSION_FIELDS)
+    }
+    merged.update(updates)
+    TrailerSpecification(**merged)
+    return updates
 
 
 def vehicle_specification(entity: object) -> VehicleSpecification:
-    """Build the canonical specification from a persisted or ad-hoc vehicle."""
+    """Build the canonical vehicle specification from canonical persisted fields."""
 
-    values = {
+    values: dict[str, Any] = {
         field: _canonical_current_value(entity, field)
         for field in (*CANONICAL_MASS_FIELDS, *CANONICAL_DIMENSION_FIELDS)
     }
-    has_trailer = effective_trailer_capability(
-        _entity_value(entity, "has_trailer"),
-        _entity_value(entity, "can_use_trailer"),
+    for field in CANONICAL_MARGIN_FIELDS:
+        values[field] = _canonical_current_value(entity, field) or Decimal(0)
+    has_trailer = _entity_value(entity, "has_trailer")
+    return VehicleSpecification(**values, has_trailer=bool(has_trailer))
+
+
+def trailer_specification(entity: object) -> TrailerSpecification:
+    """Build the canonical trailer specification from canonical persisted fields."""
+
+    return TrailerSpecification(
+        **{
+            field: _canonical_current_value(entity, field)
+            for field in (*CANONICAL_MASS_FIELDS, *TRAILER_DIMENSION_FIELDS)
+        }
     )
-    return VehicleSpecification(**values, has_trailer=has_trailer is True)
 
 
-def load_profile_axle_load_kg(profile: object) -> int:
-    """Return one measured axle load in kilograms using canonical data first."""
+def load_profile_axle_load_t(profile: object) -> Decimal:
+    """Return one measured axle load in tonnes from the canonical column."""
 
     canonical = _entity_value(profile, "max_actual_axle_load_t")
-    if canonical is not None:
-        kilograms = tonnes_to_kilograms(_coerce_canonical("axle_load_t", canonical))
-        assert kilograms is not None
-        return kilograms
-    legacy = _entity_value(profile, "max_actual_axle_load_kg")
-    if isinstance(legacy, bool) or not isinstance(legacy, int) or legacy <= 0:
+    if canonical is None:
         raise VehicleSpecificationError(
-            "max_actual_axle_load_kg must be a positive integer",
-            fields=("max_actual_axle_load_kg",),
+            "max_actual_axle_load_t is required",
+            fields=("max_actual_axle_load_t",),
         )
-    return int(legacy)
+    return _decimal(canonical, "max_actual_axle_load_t")

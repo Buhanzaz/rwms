@@ -2169,7 +2169,7 @@ async def test_recovery_persists_unaffected_locked_task_identity_without_duplica
     )
     driver = await make_driver(db_session, warehouse)
     vehicle = await make_vehicle(db_session, warehouse)
-    vehicle.can_use_trailer = True
+    vehicle.has_trailer = True
     vehicle.default_trailer = Trailer(
         warehouse_id=warehouse.id, name="Full-load trailer", registration_number=str(uuid4()),
     )

@@ -55,7 +55,7 @@ async def test_representative_capacity_uses_its_root_incidents_without_cross_gro
     driver = await make_driver(db_session, representative)
     vehicle = await make_vehicle(db_session, representative)
     vehicle.capacity = 2
-    vehicle.can_use_trailer = True
+    vehicle.has_trailer = True
     trailer = Trailer(
         warehouse_id=representative.id,
         name="Reactivated",
@@ -259,7 +259,7 @@ async def test_trailer_breakdown_keeps_tractor_and_invalidates_capacity(
 ) -> None:
     runtime, source, _, vehicle, _ = await _generated_day(db_session)
     vehicle.capacity = 2
-    vehicle.can_use_trailer = True
+    vehicle.has_trailer = True
     trailer = Trailer(
         warehouse_id=source.warehouse_id,
         name="Trailer",

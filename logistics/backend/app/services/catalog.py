@@ -16,7 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import Base
-from app.domain.vehicle import VehicleSpecificationError, normalize_vehicle_fields
+from app.domain.vehicle import (
+    LEGACY_TRAILER_FIELDS,
+    LEGACY_VEHICLE_FIELDS,
+    VehicleSpecificationError,
+    normalize_trailer_fields,
+    normalize_vehicle_fields,
+)
 from app.errors import ApiError, not_found
 from app.models import (
     Driver,
@@ -62,6 +68,7 @@ from app.schemas.domain import (
     VehicleConfigurationCreate,
     VehicleConfigurationUpdate,
     VehicleCreate,
+    VehicleLoadProfileCreate,
     VehicleUpdate,
     WarehouseCreate,
     WarehouseUpdate,
@@ -754,10 +761,11 @@ async def create_vehicle(
     await _validate_vehicle_trailer_assignment(
         session,
         warehouse_id=warehouse_id,
-        can_use_trailer=payload.can_use_trailer,
+        has_trailer=payload.has_trailer,
         trailer_id=payload.default_trailer_id,
     )
-    entity = Vehicle(warehouse_id=warehouse_id, **payload.model_dump())
+    values = payload.model_dump(exclude=set(LEGACY_VEHICLE_FIELDS))
+    entity = Vehicle(warehouse_id=warehouse_id, **values)
     session.add(entity)
     await session.flush()
     return entity
@@ -799,12 +807,15 @@ async def update_vehicle(
         "vehicle",
         payload.expected_version,
     )
-    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
+    values = payload.model_dump(
+        exclude_unset=True,
+        exclude={"expected_version", *LEGACY_VEHICLE_FIELDS},
+    )
     normalized = _normalized_vehicle_updates(payload, entity)
     await _validate_vehicle_trailer_assignment(
         session,
         warehouse_id=entity.warehouse_id,
-        can_use_trailer=normalized.get("can_use_trailer", entity.can_use_trailer),
+        has_trailer=normalized.get("has_trailer", entity.has_trailer),
         trailer_id=normalized.get("default_trailer_id", entity.default_trailer_id),
     )
     for field, value in values.items():
@@ -843,7 +854,7 @@ async def create_vehicle_configuration(
 
     entity = await create_vehicle(session, warehouse_id, payload.vehicle)
     session.add_all(
-        VehicleLoadProfile(vehicle_id=entity.id, **profile.model_dump())
+        VehicleLoadProfile(vehicle_id=entity.id, **_load_profile_values(profile))
         for profile in payload.load_profiles
     )
     await session.flush()
@@ -868,13 +879,13 @@ async def update_vehicle_configuration(
     _assert_catalog_version(entity, "vehicle", payload.vehicle.expected_version)
     values = payload.vehicle.model_dump(
         exclude_unset=True,
-        exclude={"expected_version"},
+        exclude={"expected_version", *LEGACY_VEHICLE_FIELDS},
     )
     normalized = _normalized_vehicle_updates(payload.vehicle, entity)
     await _validate_vehicle_trailer_assignment(
         session,
         warehouse_id=entity.warehouse_id,
-        can_use_trailer=normalized.get("can_use_trailer", entity.can_use_trailer),
+        has_trailer=normalized.get("has_trailer", entity.has_trailer),
         trailer_id=normalized.get("default_trailer_id", entity.default_trailer_id),
     )
     for field, value in values.items():
@@ -884,29 +895,40 @@ async def update_vehicle_configuration(
     entity.load_profiles.clear()
     await session.flush()
     entity.load_profiles.extend(
-        VehicleLoadProfile(**profile.model_dump()) for profile in payload.load_profiles
+        VehicleLoadProfile(**_load_profile_values(profile))
+        for profile in payload.load_profiles
     )
     _advance_catalog_version(entity)
     await session.flush()
     return entity
 
 
+def _load_profile_values(profile: VehicleLoadProfileCreate) -> dict[str, object]:
+    """Project one request profile to canonical persistence fields only."""
+
+    assert profile.max_actual_axle_load_t is not None
+    return {
+        "configuration_type": profile.configuration_type,
+        "max_actual_axle_load_t": profile.max_actual_axle_load_t,
+    }
+
+
 async def _validate_vehicle_trailer_assignment(
     session: AsyncSession,
     *,
     warehouse_id: UUID,
-    can_use_trailer: object,
+    has_trailer: object,
     trailer_id: object,
 ) -> None:
     """Ensure a default trailer is explicitly supported and warehouse-owned."""
 
     if trailer_id is None:
         return
-    if can_use_trailer is not True:
+    if has_trailer is not True:
         raise ApiError(
             422,
             "DEFAULT_TRAILER_REQUIRES_CAPABILITY",
-            "A default trailer requires can_use_trailer=true",
+            "A default trailer requires has_trailer=true",
         )
     if not isinstance(trailer_id, UUID):
         raise ApiError(422, "INVALID_TRAILER_ID", "default_trailer_id must be a UUID")
@@ -926,7 +948,8 @@ async def create_trailer(
     """Create a trailer owned by one warehouse."""
 
     await require_warehouse(session, warehouse_id)
-    entity = Trailer(warehouse_id=warehouse_id, **payload.model_dump())
+    values = payload.model_dump(exclude=set(LEGACY_TRAILER_FIELDS))
+    entity = Trailer(warehouse_id=warehouse_id, **values)
     session.add(entity)
     await session.flush()
     return entity
@@ -944,7 +967,26 @@ async def update_trailer(
         "trailer",
         payload.expected_version,
     )
-    apply_update(entity, payload, exclude={"expected_version"})
+    raw_values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
+    try:
+        normalized = normalize_trailer_fields(
+            raw_values,
+            current=entity,
+            allow_clear=True,
+        )
+    except VehicleSpecificationError as exc:
+        raise ApiError(
+            422,
+            "TRAILER_SPECIFICATION_INVALID",
+            exc.detail,
+            extra={"fields": list(exc.fields)},
+        ) from exc
+    non_physical = {"name", "registration_number", "active", "axle_count", "notes"}
+    for field, value in raw_values.items():
+        if field in non_physical:
+            setattr(entity, field, value)
+    for field, value in normalized.items():
+        setattr(entity, field, value)
     _advance_catalog_version(entity)
     await session.flush()
     return entity

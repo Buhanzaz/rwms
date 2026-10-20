@@ -98,13 +98,13 @@ const vehicle: AdminCatalogResource = {
   capacity: 2,
   physical: {
     ...emptyAdminPhysicalSpecification(),
-    tareWeightKg: 12_000,
+    tareWeightT: 12,
   },
   vehicle: {
     ...defaultAdminVehicleSpecification(),
     vehicleType: "CRANE",
     loadProfiles: [
-      { configurationType: "EMPTY_TRUCK", maxActualAxleLoadKg: 7_500 },
+      { configurationType: "EMPTY_TRUCK", maxActualAxleLoadT: 7.5 },
     ],
   },
 }
@@ -246,16 +246,16 @@ describe("AdminCatalogSettingsPage", () => {
       screen.getByRole("button", { name: "Масса, габариты и оси" })
     )
     const tareWeight = screen.getByRole("textbox", {
-      name: "Снаряжённая масса, кг",
+      name: "Снаряжённая масса, т",
     })
     await user.clear(tareWeight)
-    await user.type(tareWeight, "12500")
+    await user.type(tareWeight, "12.5")
     await user.click(screen.getByRole("button", { name: "Осевые замеры" }))
     const emptyTruckLoad = screen.getByRole("textbox", {
-      name: "Пустой автомобиль, кг",
+      name: "Пустой автомобиль, т",
     })
     await user.clear(emptyTruckLoad)
-    await user.type(emptyTruckLoad, "7800")
+    await user.type(emptyTruckLoad, "7.8")
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     expect(catalogApi.update).toHaveBeenCalledWith(
@@ -263,7 +263,7 @@ describe("AdminCatalogSettingsPage", () => {
       "vehicle",
       vehicle,
       expect.objectContaining({
-        physical: expect.objectContaining({ tareWeightKg: 12_500 }),
+        physical: expect.objectContaining({ tareWeightT: 12.5 }),
         vehicle: expect.objectContaining({
           vehicleType: "CRANE",
           averageSpeedCity: 35,
@@ -271,7 +271,7 @@ describe("AdminCatalogSettingsPage", () => {
           loadProfiles: [
             {
               configurationType: "EMPTY_TRUCK",
-              maxActualAxleLoadKg: 7_800,
+              maxActualAxleLoadT: 7.8,
             },
           ],
         }),
@@ -356,7 +356,7 @@ describe("AdminCatalogSettingsPage", () => {
           ...vehicle.vehicle!.loadProfiles,
           {
             configurationType: "CARGO_ON_TRUCK" as const,
-            maxActualAxleLoadKg: 9_000,
+            maxActualAxleLoadT: 9,
           },
         ],
       },
@@ -371,21 +371,21 @@ describe("AdminCatalogSettingsPage", () => {
       screen.getByRole("button", { name: "Масса, габариты и оси" })
     )
     await user.clear(
-      screen.getByRole("textbox", { name: "Снаряжённая масса, кг" })
+      screen.getByRole("textbox", { name: "Снаряжённая масса, т" })
     )
     await user.click(
       screen.getByRole("button", { name: "Масса, габариты и оси" })
     )
     await user.click(screen.getByRole("button", { name: "Осевые замеры" }))
     await user.clear(
-      screen.getByRole("textbox", { name: "Пустой автомобиль, кг" })
+      screen.getByRole("textbox", { name: "Пустой автомобиль, т" })
     )
     await user.click(screen.getByRole("button", { name: "Осевые замеры" }))
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
     const saved = catalogApi.update.mock.calls[0]![3]
-    expect(saved.physical.tareWeightKg).toBeNull()
+    expect(saved.physical.tareWeightT).toBeNull()
     expect(saved.vehicle.loadProfiles).toEqual([
-      { configurationType: "CARGO_ON_TRUCK", maxActualAxleLoadKg: 9_000 },
+      { configurationType: "CARGO_ON_TRUCK", maxActualAxleLoadT: 9 },
     ])
   })
 
@@ -431,10 +431,10 @@ describe("AdminCatalogSettingsPage", () => {
     expect(first[3].physical).toEqual(emptyAdminPhysicalSpecification())
     expect(first[3].vehicle).toMatchObject({
       isHgv: false,
-      canUseTrailer: null,
+      hasTrailer: false,
       defaultTrailerId: null,
       averageSpeedCity: 37.5,
-      heightSafetyMarginMm: 0,
+      heightSafetyMarginM: 0,
       loadProfiles: [],
     })
     expect(first[4]).toMatch(/^[0-9a-f-]{36}$/i)
@@ -442,12 +442,12 @@ describe("AdminCatalogSettingsPage", () => {
   })
 
   it.each([
-    ["Масса, габариты и оси", "Высота транспорта, мм", "0"],
-    ["Масса, габариты и оси", "Высота транспорта, мм", "-1"],
-    ["Масса, габариты и оси", "Высота транспорта, мм", "1.5"],
-    ["Расчёт маршрута", "Запас по высоте, мм", "-1"],
+    ["Масса, габариты и оси", "Высота транспорта, м", "0"],
+    ["Масса, габариты и оси", "Высота транспорта, м", "-1"],
+    ["Масса, габариты и оси", "Высота транспорта, м", "abc"],
+    ["Расчёт маршрута", "Запас по высоте, м", "-1"],
     ["Расчёт маршрута", "Средняя скорость в городе, км/ч", "0"],
-    ["Осевые замеры", "Пустой автомобиль, кг", "0"],
+    ["Осевые замеры", "Пустой автомобиль, т", "0"],
   ])(
     "validates %s / %s = %s and reveals the invalid field",
     async (section, label, value) => {
@@ -480,8 +480,8 @@ describe("AdminCatalogSettingsPage", () => {
     ).toBeNull()
     await user.click(screen.getByRole("button", { name: "Платформа и груз" }))
     await user.type(
-      screen.getByRole("textbox", { name: "Длина платформы, мм" }),
-      "6200"
+      screen.getByRole("textbox", { name: "Длина платформы, м" }),
+      "6.2"
     )
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
     expect(catalogApi.update).toHaveBeenCalledWith(
@@ -491,7 +491,7 @@ describe("AdminCatalogSettingsPage", () => {
       expect.objectContaining({
         capacity: null,
         vehicle: null,
-        physical: { ...trailer.physical, platformLengthMm: 6200 },
+        physical: { ...trailer.physical, platformLengthM: 6.2 },
       })
     )
   })
@@ -502,7 +502,7 @@ describe("AdminCatalogSettingsPage", () => {
       ...vehicle,
       vehicle: {
         ...vehicle.vehicle!,
-        canUseTrailer: true,
+        hasTrailer: true,
         defaultTrailerId: TRAILER_ID,
       },
     }
@@ -549,9 +549,7 @@ describe("AdminCatalogSettingsPage", () => {
       )
     ).toBeTruthy()
     await user.click(
-      within(
-        screen.getByRole("radiogroup", { name: "Можно использовать прицеп" })
-      ).getByRole("radio", { name: "Да" })
+      screen.getByRole("checkbox", { name: "Можно использовать прицеп" })
     )
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
     expect(catalogApi.list).toHaveBeenCalledWith(
@@ -560,7 +558,7 @@ describe("AdminCatalogSettingsPage", () => {
       "trailer"
     )
     expect(catalogApi.update.mock.calls[0]![3].vehicle).toMatchObject({
-      canUseTrailer: true,
+      hasTrailer: true,
       defaultTrailerId: TRAILER_ID,
     })
   })

@@ -21,22 +21,21 @@ const trailer: Trailer = {
   name: 'Прицеп 1',
   registration_number: 'ТР1234',
   active: true,
-  tare_weight_kg: 4000,
-  max_gross_weight_kg: 10000,
-  length_mm: 8000,
-  width_mm: 2500,
-  height_mm: 2000,
-  platform_length_mm: 6000,
-  platform_width_mm: 2500,
-  platform_height_from_ground_mm: 1000,
-  max_platform_payload_kg: 5000,
-  payload_capacity_kg: 5000,
+  tare_weight_t: 4,
+  max_gross_weight_t: 10,
+  axle_load_t: 7,
+  payload_capacity_t: 5,
+  length_m: 8,
+  width_m: 2.5,
+  height_m: 2,
+  platform_length_m: 6,
+  platform_height_from_ground_m: 1,
+  max_platform_payload_t: 5,
   axle_count: 2,
-  max_axle_load_kg: 7000,
-  max_cargo_length_mm: 6500,
-  max_cargo_width_mm: 2550,
-  max_cargo_height_mm: 3000,
-  max_cargo_weight_kg: 4000,
+  max_cargo_length_m: 6.5,
+  max_cargo_width_m: 2.55,
+  max_cargo_height_m: 3,
+  max_cargo_weight_t: 4,
   notes: '',
 };
 
@@ -62,7 +61,7 @@ describe('truck vehicle editor', () => {
     setNumber('Длина, м', 9);
     setNumber('Ширина, м', 2.5);
     setNumber('Высота, м', 3);
-    setNumber('Точная полная длина автопоезда, м', 12.5);
+    setNumber('Длина сцепки, м', 0.9);
     setNumber('Запас по массе, т', 0.25);
 
     expect(screen.queryByLabelText('Основной прицеп')).not.toBeInTheDocument();
@@ -76,7 +75,7 @@ describe('truck vehicle editor', () => {
       name: 'МАЗ 1',
       manufacturer: 'МАЗ',
       registration_number: 'А123БВ',
-      capacity: 1,
+      capacity: 2,
       tare_weight_t: 4.2,
       max_gross_weight_t: 9.5,
       axle_load_t: 3.5,
@@ -85,8 +84,8 @@ describe('truck vehicle editor', () => {
       width_m: 2.5,
       height_m: 3,
       has_trailer: false,
-      combined_length_with_trailer_mm: 12_500,
-      weight_safety_margin_kg: 250,
+      coupling_length_m: 0.9,
+      weight_safety_margin_t: 0.25,
       default_trailer_id: null,
     });
     expect(input).not.toHaveProperty('payload_capacity_kg');
@@ -105,13 +104,12 @@ describe('truck vehicle editor', () => {
       axle_count: 3,
       has_trailer: true,
       default_trailer_id: 'trailer-1',
-      platform_length_mm: 6_000,
-      max_cargo_length_mm: 6_500,
-      combined_length_with_trailer_mm: 12_000,
-      coupling_length_mm: 900,
-      height_safety_margin_mm: 100,
-      weight_safety_margin_kg: 250,
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT' as const, max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
+      platform_length_m: 6,
+      max_cargo_length_m: 6.5,
+      coupling_length_m: 0.9,
+      height_safety_margin_m: 0.1,
+      weight_safety_margin_t: 0.25,
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT' as const, max_actual_axle_load_t: 8.7 }],
     };
     render(<CatalogDialog value={vehicle} busy={false} onClose={() => undefined} onSubmit={submit} />);
 
@@ -132,13 +130,12 @@ describe('truck vehicle editor', () => {
       has_trailer: true,
       default_trailer_id: 'trailer-1',
       axle_count: 3,
-      platform_length_mm: 6_000,
-      max_cargo_length_mm: 6_500,
-      combined_length_with_trailer_mm: 12_000,
-      coupling_length_mm: 900,
-      height_safety_margin_mm: 100,
-      weight_safety_margin_kg: 250,
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
+      platform_length_m: 6,
+      max_cargo_length_m: 6.5,
+      coupling_length_m: 0.9,
+      height_safety_margin_m: 0.1,
+      weight_safety_margin_t: 0.25,
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7 }],
     });
   });
 
@@ -149,15 +146,14 @@ describe('truck vehicle editor', () => {
       ...workspaceFixture().vehicles[0]!,
       has_trailer: true,
       default_trailer_id: 'trailer-1',
-      platform_length_mm: 6_000,
-      max_cargo_length_mm: 6_500,
-      max_cargo_weight_kg: 2_500,
-      combined_length_with_trailer_mm: 12_000,
-      coupling_length_mm: 900,
-      height_safety_margin_mm: 100,
-      width_safety_margin_mm: 50,
-      weight_safety_margin_kg: 250,
-      load_profiles: [{ configuration_type: 'EMPTY_TRUCK' as const, max_actual_axle_load_kg: 7_500 }],
+      platform_length_m: 6,
+      max_cargo_length_m: 6.5,
+      max_cargo_weight_t: 2.5,
+      coupling_length_m: 0.9,
+      height_safety_margin_m: 0.1,
+      width_safety_margin_m: 0.05,
+      weight_safety_margin_t: 0.25,
+      load_profiles: [{ configuration_type: 'EMPTY_TRUCK' as const, max_actual_axle_load_t: 7.5 }],
     };
     render(<CatalogDialog value={vehicle} busy={false} onClose={() => undefined} onSubmit={submit} />);
 
@@ -183,15 +179,14 @@ describe('truck vehicle editor', () => {
       height_m: 3.1,
       has_trailer: true,
       default_trailer_id: 'trailer-1',
-      platform_length_mm: 6_400,
-      max_cargo_length_mm: 6_500,
-      max_cargo_weight_kg: 2_250,
-      combined_length_with_trailer_mm: 12_000,
-      coupling_length_mm: 900,
-      height_safety_margin_mm: 200,
-      width_safety_margin_mm: 50,
-      weight_safety_margin_kg: 250,
-      load_profiles: [{ configuration_type: 'EMPTY_TRUCK', max_actual_axle_load_t: 7.5, max_actual_axle_load_kg: 7_500 }],
+      platform_length_m: 6.4,
+      max_cargo_length_m: 6.5,
+      max_cargo_weight_t: 2.25,
+      coupling_length_m: 0.9,
+      height_safety_margin_m: 0.2,
+      width_safety_margin_m: 0.05,
+      weight_safety_margin_t: 0.25,
+      load_profiles: [{ configuration_type: 'EMPTY_TRUCK', max_actual_axle_load_t: 7.5 }],
     });
     expect(input).not.toHaveProperty('payload_capacity_kg');
     expect(input).not.toHaveProperty('tare_weight_kg');
@@ -203,7 +198,6 @@ describe('truck vehicle editor', () => {
     const withoutTrailer = {
       ...workspaceFixture().vehicles[0]!,
       has_trailer: false,
-      can_use_trailer: false,
       default_trailer_id: null,
     };
     const firstSubmit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
@@ -219,7 +213,6 @@ describe('truck vehicle editor', () => {
     const withTrailer = {
       ...workspaceFixture().vehicles[0]!,
       has_trailer: true,
-      can_use_trailer: true,
       default_trailer_id: 'trailer-9',
     };
     const secondSubmit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
@@ -240,7 +233,7 @@ describe('truck vehicle editor', () => {
     await user.type(screen.getByLabelText('Госномер'), 'ТР5678');
     await user.click(screen.getByRole('button', { name: 'Сохранить прицеп' }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Резервный прицеп', registration_number: 'ТР5678', tare_weight_kg: null, length_mm: null });
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Резервный прицеп', registration_number: 'ТР5678', tare_weight_t: null, length_m: null });
   });
 
   it('saves the vehicle and all axle profiles through one atomic API command', async () => {
@@ -261,12 +254,12 @@ describe('truck vehicle editor', () => {
         tare_weight_t: 4.2, max_gross_weight_t: 9.5, axle_load_t: 3.5, payload_capacity_t: 6.75,
         length_m: 9.25, width_m: 2.5, height_m: 3.1, has_trailer: true,
       },
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7 }],
     }, 'vehicle-intent');
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/trailers');
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('Idempotency-Key')).toBe('trailer-intent');
-    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ name: 'Прицеп 1', length_mm: 8000 });
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ name: 'Прицеп 1', length_m: 8 });
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses/warehouse-1/vehicle-configurations');
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Idempotency-Key')).toBe('vehicle-intent');
     expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toMatchObject({
@@ -277,7 +270,7 @@ describe('truck vehicle editor', () => {
         length_m: 9.25,
         has_trailer: true,
       },
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7 }],
     });
   });
 });
@@ -318,10 +311,10 @@ function cycleFixture(): RouteCycle {
 }
 
 describe('route profile normalization', () => {
-  it('preserves a backend profile snapshot when normalizing a route plan', async () => {
+  function rawPlanWithSnapshot(routingProfileSnapshot: unknown): object {
     const cycle = cycleFixture();
     const segment = cycle.legs[0]!;
-    const rawPlan = {
+    return {
       id: 'plan-1', warehouse_id: 'warehouse-1', date: '2026-08-25', name: 'План', version: 1,
       status: 'GENERATED', score: 1, metrics: {}, validation_errors: [], validation_warnings: [], manually_changed: false,
       created_at: '2026-08-25T04:00:00Z', updated_at: '2026-08-25T04:00:00Z', unassigned_tasks: [],
@@ -334,14 +327,51 @@ describe('route profile normalization', () => {
           id: segment.id, sequence: 0, from_stop_id: segment.from_stop_id, to_stop_id: segment.to_stop_id,
           departure_at: segment.departure_at, arrival_at: segment.arrival_at, distance_meters: segment.distance_meters,
           travel_seconds: segment.travel_seconds, geometry: segment.geometry.geometry,
-          routing_profile_snapshot: segment.routing_profile_snapshot, routing_provider: 'valhalla', osm_data_version: '2026-08-24', routed_at: segment.routed_at,
+          routing_profile_snapshot: routingProfileSnapshot, routing_provider: 'valhalla', osm_data_version: '2026-08-24', routed_at: segment.routed_at,
         }],
       }],
     };
+  }
+
+  async function normalize(rawPlan: object) {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify(rawPlan), { status: 200, headers: { 'Content-Type': 'application/json' } }))));
     const workspace: WarehouseWorkspace = workspaceFixture({ drivers: [], vehicles: [], shifts: [], requests: [] });
-    const plan = await api.getPlan('plan-1', workspace);
+    return api.getPlan('plan-1', workspace);
+  }
+
+  it('preserves a canonical backend profile snapshot when normalizing a route plan', async () => {
+    const canonicalSnapshot = {
+      ...cycleFixture().legs[0]!.routing_profile_snapshot!,
+      cargoPlacements: [
+        { cargoId: 'cargo-1', position: 'TRUCK_PLATFORM', lengthM: 6, widthM: 2.4, heightM: 2.4, weightT: 2.5 },
+        { cargoId: 'cargo-2', position: 'TRAILER_PLATFORM', lengthM: 6, widthM: 2.4, heightM: 2.4, weightT: 2.5 },
+      ],
+    };
+    const plan = await normalize(rawPlanWithSnapshot(canonicalSnapshot));
+
     expect(plan.driver_routes[0]?.cycles[0]?.legs[0]?.routing_profile_snapshot?.effectiveLengthMeters).toBe(18.6);
+    expect(plan.driver_routes[0]?.cycles[0]?.legs[0]?.routing_profile_snapshot?.cargoPlacements[0]).toEqual({
+      cargoId: 'cargo-1',
+      position: 'TRUCK_PLATFORM',
+      lengthMm: 6_000,
+      widthMm: 2_400,
+      heightMm: 2_400,
+      weightKg: 2_500,
+    });
     expect(plan.driver_routes[0]?.cycles[0]?.legs[0]?.routing_provider).toBe('valhalla');
+  });
+
+  it('normalizes persisted pre-canonical millimetre snapshots without dropping them', async () => {
+    const legacySnapshot = cycleFixture().legs[0]!.routing_profile_snapshot;
+    const plan = await normalize(rawPlanWithSnapshot(legacySnapshot));
+
+    expect(plan.driver_routes[0]?.cycles[0]?.legs[0]?.routing_profile_snapshot?.cargoPlacements[0]).toEqual({
+      cargoId: 'cargo-1',
+      position: 'TRUCK_PLATFORM',
+      lengthMm: 6_000,
+      widthMm: 2_400,
+      heightMm: 2_400,
+      weightKg: 2_500,
+    });
   });
 });

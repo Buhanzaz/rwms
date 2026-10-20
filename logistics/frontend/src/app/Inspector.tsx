@@ -191,10 +191,10 @@ function CatalogSection({ props, kind }: { props: InspectorProps; kind: 'driver'
       <div className="entity-list">{group.values.map((value) => {
         const driver = kind === 'driver' ? value as Driver : null;
         const vehicle = kind === 'vehicle' ? value as Vehicle : null;
-        const lengthMetres = vehicle?.length_m ?? (vehicle?.length_mm != null ? vehicle.length_mm / 1_000 : null);
-        const widthMetres = vehicle?.width_m ?? (vehicle?.width_mm != null ? vehicle.width_mm / 1_000 : null);
-        const heightMetres = vehicle?.height_m ?? (vehicle?.height_mm != null ? vehicle.height_mm / 1_000 : null);
-        const payloadTonnes = vehicle?.payload_capacity_t ?? (vehicle?.payload_capacity_kg != null ? vehicle.payload_capacity_kg / 1_000 : null);
+        const lengthMetres = vehicle?.length_m ?? null;
+        const widthMetres = vehicle?.width_m ?? null;
+        const heightMetres = vehicle?.height_m ?? null;
+        const payloadTonnes = vehicle?.payload_capacity_t ?? null;
         const physicalSummary = lengthMetres !== null && widthMetres !== null && heightMetres !== null
           ? ` · габариты ${lengthMetres.toFixed(1)} × ${widthMetres.toFixed(1)} × ${heightMetres.toFixed(1)} м`
           : '';

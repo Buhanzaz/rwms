@@ -76,27 +76,38 @@ apparently complete workspace. See
 [`rwms_sync.py`](../backend/app/integrations/rwms_sync.py).
 
 Each workspace vehicle embeds `load_profiles` as
-`[{configuration_type,max_actual_axle_load_t,max_actual_axle_load_kg}]`; the
-canonical tonne value is authoritative and the kilogram value is the deprecated
-backward-compatible projection. Workspace trailers are the only trailer list.
-There are no separate list or mutation endpoints for axle profiles and no
-separate trailer list endpoint.
+`[{configuration_type,max_actual_axle_load_t}]` with the canonical tonne value
+only; the deprecated kilogram projection is not returned. Workspace trailers
+are the only trailer list. There are no separate list or mutation endpoints for
+axle profiles and no separate trailer list endpoint.
 
-## Canonical vehicle physical model
+## Canonical vehicle and trailer physical model
 
-Vehicle create/update accepts the canonical physical facts as `NUMERIC(12, 3)`
-JSON numbers: `tare_weight_t`, `max_gross_weight_t`, `axle_load_t` and
-`payload_capacity_t` in tonnes; `length_m`, `width_m` and `height_m` in metres;
-and the `has_trailer` boolean. Responses always contain these canonical values
-plus the deprecated kilogram/millimetre projection (`tare_weight_kg`,
-`length_mm`, ...) for one transition period. A request may send either unit set:
-the server converts 1 t = 1000 kg and 1 m = 1000 mm exactly, rejects conflicting
-values with `422`, and keeps both stored projections in sync. `default_trailer_id`
-requires `has_trailer=true`. The routing-extension fields (platform sizes,
-coupled length, cargo limits and safety margins) remain deprecated technical
-inputs required for exact Valhalla truck profiles; they are not part of the
-canonical model. See [`vehicle.py`](../backend/app/domain/vehicle.py) and
-Alembic `20260908_0038`.
+Vehicle and trailer create/update accept the canonical physical facts as
+`NUMERIC(12, 3)` JSON numbers: `tare_weight_t`, `max_gross_weight_t`,
+`axle_load_t` and `payload_capacity_t` in tonnes; `length_m`, `width_m` and
+`height_m` in metres; and the required `has_trailer` vehicle boolean. Responses
+always contain these canonical values only. A request may still send the
+deprecated kilogram/millimetre fields or `can_use_trailer` for one transition
+period: the server converts 1 t = 1000 kg and 1 m = 1000 mm exactly, rejects
+conflicting values with `422`, and never returns or updates the legacy
+projection. The legacy columns remain in the database only as a rollback
+projection. `default_trailer_id` requires `has_trailer=true`. The routing
+extensions (platform sizes, cargo limits, coupling length and safety margins)
+use the same canonical tonnes/metres fields and are required for exact Valhalla
+truck profiles. The removed duplicate fields `platform_width_mm` and
+`combined_length_with_trailer_mm` are rejected; combination length is derived
+from `length_m + coupling_length_m + trailer.length_m`. See
+[`vehicle.py`](../backend/app/domain/vehicle.py) and Alembic
+`20260908_0038` / `20261020_0039`.
+
+The cargo limits are independent equipment facts rather than derived values:
+`payload_capacity_t` caps total cargo mass on the carrier,
+`max_platform_payload_t` caps mass placed on that platform, and
+`max_cargo_length_m` / `max_cargo_width_m` / `max_cargo_height_m` /
+`max_cargo_weight_t` cap one cargo unit. A routed leg must satisfy every
+applicable limit simultaneously, so the effective limit is their intersection;
+none of them is derived from `max_gross_weight_t - tare_weight_t`.
 
 ## Warehouse isochrone tariffs
 

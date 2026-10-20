@@ -41,22 +41,21 @@ def _trailer_payload(registration_number: str = "PR1000") -> dict[str, object]:
         "name": "Низкорамный прицеп",
         "registration_number": registration_number,
         "active": True,
-        "tare_weight_kg": 3_000,
-        "max_gross_weight_kg": 10_000,
-        "length_mm": 8_000,
-        "width_mm": 2_500,
-        "height_mm": 1_800,
-        "platform_length_mm": 6_000,
-        "platform_width_mm": 2_500,
-        "platform_height_from_ground_mm": 900,
-        "max_platform_payload_kg": 6_000,
-        "payload_capacity_kg": 7_000,
+        "tare_weight_t": 3,
+        "max_gross_weight_t": 10,
+        "length_m": 8,
+        "width_m": 2.5,
+        "height_m": 1.8,
+        "platform_length_m": 6,
+        "platform_height_from_ground_m": 0.9,
+        "max_platform_payload_t": 6,
+        "payload_capacity_t": 7,
         "axle_count": 2,
-        "max_axle_load_kg": 10_000,
-        "max_cargo_length_mm": 7_000,
-        "max_cargo_width_mm": 2_600,
-        "max_cargo_height_mm": 3_000,
-        "max_cargo_weight_kg": 6_000,
+        "axle_load_t": 10,
+        "max_cargo_length_m": 7,
+        "max_cargo_width_m": 2.6,
+        "max_cargo_height_m": 3,
+        "max_cargo_weight_t": 6,
     }
 
 
@@ -75,34 +74,32 @@ def _vehicle_payload(trailer_id: str) -> dict[str, object]:
             "manufacturer": "MAN",
             "model": "TGS",
             "is_hgv": True,
-            "tare_weight_kg": 12_000,
-            "max_gross_weight_kg": 22_000,
-            "length_mm": 9_200,
-            "width_mm": 2_500,
-            "height_mm": 3_200,
+            "tare_weight_t": 12,
+            "max_gross_weight_t": 22,
+            "length_m": 9.2,
+            "width_m": 2.5,
+            "height_m": 3.2,
             "axle_count": 3,
-            "max_axle_load_kg": 10_000,
-            "payload_capacity_kg": 8_000,
-            "platform_length_mm": 6_000,
-            "platform_width_mm": 2_500,
-            "platform_height_from_ground_mm": 1_300,
-            "max_platform_payload_kg": 7_000,
-            "max_cargo_length_mm": 7_000,
-            "max_cargo_width_mm": 2_600,
-            "max_cargo_height_mm": 3_000,
-            "max_cargo_weight_kg": 6_000,
-            "can_use_trailer": True,
+            "axle_load_t": 10,
+            "payload_capacity_t": 8,
+            "platform_length_m": 6,
+            "platform_height_from_ground_m": 1.3,
+            "max_platform_payload_t": 7,
+            "max_cargo_length_m": 7,
+            "max_cargo_width_m": 2.6,
+            "max_cargo_height_m": 3,
+            "max_cargo_weight_t": 6,
+            "has_trailer": True,
             "default_trailer_id": trailer_id,
-            "combined_length_with_trailer_mm": 18_500,
-            "coupling_length_mm": 1_300,
+            "coupling_length_m": 1.3,
         },
         "load_profiles": [
-            {"configuration_type": "EMPTY_TRUCK", "max_actual_axle_load_kg": 6_000},
-            {"configuration_type": "CARGO_ON_TRUCK", "max_actual_axle_load_kg": 8_000},
-            {"configuration_type": "EMPTY_COMBINATION", "max_actual_axle_load_kg": 7_000},
+            {"configuration_type": "EMPTY_TRUCK", "max_actual_axle_load_t": 6},
+            {"configuration_type": "CARGO_ON_TRUCK", "max_actual_axle_load_t": 8},
+            {"configuration_type": "EMPTY_COMBINATION", "max_actual_axle_load_t": 7},
             {
                 "configuration_type": "TWO_CARGO_SPLIT",
-                "max_actual_axle_load_kg": 9_000,
+                "max_actual_axle_load_t": 9,
             },
         ],
     }
@@ -131,11 +128,7 @@ async def test_full_vehicle_configuration_and_cargo_flow(db_session: AsyncSessio
         assert vehicle.status_code == 201, vehicle.text
         assert len(vehicle.json()["load_profiles"]) == 4
         assert all(
-            set(profile) == {
-                "configuration_type",
-                "max_actual_axle_load_kg",
-                "max_actual_axle_load_t",
-            }
+            set(profile) == {"configuration_type", "max_actual_axle_load_t"}
             for profile in vehicle.json()["load_profiles"]
         )
         assert {
@@ -151,7 +144,6 @@ async def test_full_vehicle_configuration_and_cargo_flow(db_session: AsyncSessio
         assert vehicle.json()["tare_weight_t"] == 12.0
         assert vehicle.json()["length_m"] == 9.2
         assert vehicle.json()["has_trailer"] is True
-        assert vehicle.json()["tare_weight_kg"] == 12_000
 
         request = await client.post(
             f"/api/warehouses/{warehouse.id}/requests",

@@ -25,7 +25,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("capacity", "can_use_trailer", "trailer_active", "expected_capacity"),
+    ("capacity", "has_trailer", "trailer_active", "expected_capacity"),
     (
         (2, False, None, 1),
         (2, True, None, 1),
@@ -37,7 +37,7 @@ pytestmark = pytest.mark.integration
 async def test_projection_uses_only_available_assigned_trailer_capacity(
     db_session: AsyncSession,
     capacity: int,
-    can_use_trailer: bool,
+    has_trailer: bool,
     trailer_active: bool | None,
     expected_capacity: int,
 ) -> None:
@@ -49,7 +49,7 @@ async def test_projection_uses_only_available_assigned_trailer_capacity(
     driver = await make_driver(db_session, warehouse)
     vehicle = await make_vehicle(db_session, warehouse)
     vehicle.capacity = capacity
-    vehicle.can_use_trailer = can_use_trailer
+    vehicle.has_trailer = has_trailer
     if trailer_active is not None:
         vehicle.default_trailer = Trailer(
             warehouse_id=warehouse.id,

@@ -827,12 +827,12 @@ describe('operational event capture', () => {
         trailers: [{
           id: 'trailer-1', warehouse_id: 'warehouse-1', name: 'Прицеп',
           registration_number: 'ПР-1', active: true, version: 1, notes: '',
-          tare_weight_kg: null, max_gross_weight_kg: null, length_mm: null, width_mm: null,
-          height_mm: null, platform_length_mm: null, platform_width_mm: null,
-          platform_height_from_ground_mm: null, max_platform_payload_kg: null,
-          payload_capacity_kg: null, axle_count: null, max_axle_load_kg: null,
-          max_cargo_length_mm: null, max_cargo_width_mm: null,
-          max_cargo_height_mm: null, max_cargo_weight_kg: null,
+          tare_weight_t: null, max_gross_weight_t: null, axle_load_t: null,
+          payload_capacity_t: null, length_m: null, width_m: null, height_m: null,
+          platform_length_m: null, platform_height_from_ground_m: null,
+          max_platform_payload_t: null, axle_count: null,
+          max_cargo_length_m: null, max_cargo_width_m: null,
+          max_cargo_height_m: null, max_cargo_weight_t: null,
         }],
       }),
     });

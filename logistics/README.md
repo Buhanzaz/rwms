@@ -339,17 +339,20 @@ acceptance boundary. Ordinary delivery polygons and request-to-zone ownership
 do not return; exceptional access/price policies are separate versioned,
 warehouse-owned MultiPolygons and never extend normal delivery reach.
 
-The vehicle physical model is canonical: masses (`tare_weight_t`,
+The vehicle and trailer physical model is canonical: masses (`tare_weight_t`,
 `max_gross_weight_t`, `axle_load_t`, `payload_capacity_t`) are in tonnes,
 dimensions (`length_m`, `width_m`, `height_m`) are in metres and trailer
-availability is one `has_trailer` boolean. Values persist as `NUMERIC(12, 3)`,
-so the former kilogram/millimetre precision is retained exactly. One domain
-module, [`vehicle.py`](backend/app/domain/vehicle.py), normalizes units,
-validates contradictions and produces the exact integer projection used by
-Valhalla truck routing; calculations never mix units. The deprecated
-kilogram/millimetre fields and the routing-extension platform/coupled-length
-fields remain accepted and returned for backward compatibility. Additive Alembic
-migration `20260908_0038` backfills existing rows and drops no legacy data.
+availability is one required `has_trailer` boolean. Values persist as
+`NUMERIC(12, 3)`, so the former kilogram/millimetre precision is retained
+exactly. One domain module, [`vehicle.py`](backend/app/domain/vehicle.py),
+normalizes units, validates contradictions and produces the exact tonnes/metres
+input used by Valhalla truck routing; calculations never mix units. Deprecated
+kilogram/millimetre fields are accepted on input for one transition period and
+converted once; responses expose canonical values only, and the legacy columns
+remain only as a rollback projection. Routing-extension platform, cargo,
+coupling and safety-margin fields use the same canonical units. Additive Alembic
+migrations `20260908_0038` and `20261020_0039` backfill existing rows and drop no
+legacy data.
 
 ## Logistics rules
 
@@ -438,7 +441,8 @@ migration `20260908_0038` backfills existing rows and drops no legacy data.
 - Every leg gets a new `EffectiveTruckProfile`. Unloading changes actual mass
   and cargo placement, but does not detach a trailer. Effective height includes
   platform height, width includes the widest equipment/cargo, and combination
-  length uses the configured exact value or validated coupling calculation.
+  length is derived from the tractor length, coupling distance and trailer
+  length.
   Saved segments retain the complete profile, provider and OSM data-version
   snapshot used for the route.
 - Valhalla route failure returns `NO_SAFE_ROUTE`. The application never retries
@@ -944,9 +948,9 @@ warehouse settings version.
 Open **Vehicles**, create or edit a vehicle and fill the **Truck routing**
 section: tare/gross mass, dimensions, axle capability, platform geometry,
 cargo limits and safety margins. Create a trailer in the same workspace,
-select it as the vehicle's default compatible trailer and enter either the
-exact combined length or the coupling length used to derive it. Finally provide
-the measured `maxActualAxleLoadKg` for every operational state used by the
+select it as the vehicle's default compatible trailer and enter the coupling
+length used to derive the combination length. Finally provide the measured
+`maxActualAxleLoadT` for every operational state used by the
 vehicle; the application deliberately never estimates it as total mass divided
 by axle count. For a combination this scalar is the measured peak among all
 truck and trailer axles; it is not a per-component axle-load vector, so each

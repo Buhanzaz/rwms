@@ -76,24 +76,28 @@ currently present in the selected RWMS warehouse directory; its local display
 name is canonical. `WAREHOUSE_DRIVERS` requires a null worker UUID and publishes
 to the warehouse-wide audience. No fake identity is generated.
 
-Vehicles use one canonical physical model: `tare_weight_t`,
+Vehicles and trailers use one canonical physical model: `tare_weight_t`,
 `max_gross_weight_t`, `axle_load_t` and `payload_capacity_t` in tonnes,
-`length_m`, `width_m` and `height_m` in metres, plus the `has_trailer` boolean.
-Persisted values are `NUMERIC(12, 3)`, so one kilogram and one millimetre remain
-exactly representable; `app/domain/vehicle.py` owns all conversion and
-validation. The deprecated kilogram/millimetre columns and routing-extension
-fields (platform sizes, coupled length, safety margins) remain in the database
-and responses only for backward compatibility; calculations read the canonical
-projection and never mix units. Alembic `20260908_0038` backfills the canonical
-columns additively without dropping legacy data.
+`length_m`, `width_m` and `height_m` in metres, plus the required `has_trailer`
+vehicle boolean. Persisted values are `NUMERIC(12, 3)`, so one kilogram and one
+millimetre remain exactly representable; `app/domain/vehicle.py` owns all
+conversion and validation. Deprecated kilogram/millimetre fields are accepted on
+input for one transition period and converted once; responses expose canonical
+values only, and the legacy columns remain in the database only as a rollback
+projection. Routing-extension fields (platform sizes, cargo limits, coupling
+length, safety margins and measured axle loads) use the same canonical units;
+calculations read the canonical projection and never mix units. Removed duplicate
+fields `platform_width_mm` and `combined_length_with_trailer_mm` are rejected,
+and combination length is derived from the tractor length plus coupling length
+and trailer length. Alembic `20260908_0038` and `20261020_0039` backfill the
+canonical columns additively without dropping legacy data.
 
 Vehicles also own their operational axle-load profiles as one aggregate. Vehicle
 reads, including workspace vehicles, embed only each profile's configuration
-type and measured maximum axle load (canonical `max_actual_axle_load_t`, with the
-deprecated kilogram projection kept in sync). The atomic configuration commands
-replace the complete set; no separately mutable or listable profile resource
-exists. Trailers remain independently mutable and keep their legacy physical
-units, but workspace is their sole read.
+type and measured maximum axle load (canonical `max_actual_axle_load_t`). The
+atomic configuration commands replace the complete set; no separately mutable or
+listable profile resource exists. Trailers remain independently mutable and use
+the same canonical physical model, but workspace is their sole read.
 
 A `DriverShift` is one inclusive `date_from`/`date_to` period within a single
 calendar month plus daily local `start_time`/`end_time`. Each range is at most

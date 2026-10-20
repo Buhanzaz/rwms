@@ -89,10 +89,8 @@ const loadProfileLabels: Record<VehicleLoadConfigurationType, string> = {
 };
 
 /**
- * Vehicle editor values. The physical block and routing extensions are stored
- * in the canonical tonnes/metres units shown to the operator; the submit
- * mapping converts routing extensions back to the legacy kilogram/millimetre
- * wire fields the backend still accepts.
+ * Vehicle editor values. The physical block and routing extensions use the
+ * canonical tonnes/metres units shown to the operator and sent to the API.
  */
 const catalogSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
@@ -114,11 +112,10 @@ const catalogSchema = z.object({
   length_m: nullablePositiveDecimal,
   width_m: nullablePositiveDecimal,
   height_m: nullablePositiveDecimal,
-  has_trailer: nullableBoolean,
+  has_trailer: z.boolean(),
   axle_count: nullablePositiveInteger,
   // Routing extensions shown in the same metric units.
   platform_length_m: nullablePositiveDecimal,
-  platform_width_m: nullablePositiveDecimal,
   platform_height_from_ground_m: nullablePositiveDecimal,
   max_platform_payload_t: nullablePositiveDecimal,
   max_cargo_length_m: nullablePositiveDecimal,
@@ -126,7 +123,6 @@ const catalogSchema = z.object({
   max_cargo_height_m: nullablePositiveDecimal,
   max_cargo_weight_t: nullablePositiveDecimal,
   default_trailer_id: z.string(),
-  combined_length_with_trailer_m: nullablePositiveDecimal,
   coupling_length_m: nullablePositiveDecimal,
   height_safety_margin_m: nullableNonNegativeDecimal,
   width_safety_margin_m: nullableNonNegativeDecimal,
@@ -162,19 +158,6 @@ const optionalBoolean = (value: unknown): boolean | null => {
   return null;
 };
 
-/** Legacy integer millimetres/kilograms projected into the metres/tonnes shown to the operator. */
-const fromLegacyUnit = (value: number | null | undefined): number | null => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return Number((value / 1_000).toFixed(3));
-};
-/** Operator-facing metres/tonnes projected back into the legacy integer wire field. */
-const toLegacyUnit = (value: number | null): number | null => value === null ? null : Math.round(value * 1_000);
-/** Prefer the canonical value; fall back to the deprecated kilogram/millimetre projection. */
-const canonicalUnit = (
-  canonical: number | null | undefined,
-  legacy: number | null | undefined,
-): number | null => typeof canonical === 'number' && Number.isFinite(canonical) ? canonical : fromLegacyUnit(legacy);
-
 export function CatalogDialog({ value, busy, onClose, onSubmit }: {
   value?: Vehicle | undefined;
   busy: boolean;
@@ -187,37 +170,37 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
     resolver: zodResolver(catalogSchema),
     defaultValues: {
       name: vehicle?.name ?? '', registration_number: vehicle?.registration_number ?? '',
-      capacity: vehicle?.capacity ?? 1, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
+      // The backend and the planner MVP default to two cabins; a new vehicle must
+      // not silently become solo-only just because the operator skipped the field.
+      capacity: vehicle?.capacity ?? 2, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
       notes: vehicle?.notes ?? '', active: vehicle?.active ?? true,
       vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
-      tare_weight_t: canonicalUnit(vehicle?.tare_weight_t, vehicle?.tare_weight_kg),
-      max_gross_weight_t: canonicalUnit(vehicle?.max_gross_weight_t, vehicle?.max_gross_weight_kg),
-      axle_load_t: canonicalUnit(vehicle?.axle_load_t, vehicle?.max_axle_load_kg),
-      payload_capacity_t: canonicalUnit(vehicle?.payload_capacity_t, vehicle?.payload_capacity_kg),
-      length_m: canonicalUnit(vehicle?.length_m, vehicle?.length_mm),
-      width_m: canonicalUnit(vehicle?.width_m, vehicle?.width_mm),
-      height_m: canonicalUnit(vehicle?.height_m, vehicle?.height_mm),
-      has_trailer: vehicle ? (vehicle.has_trailer ?? vehicle.can_use_trailer ?? false) : false,
+      tare_weight_t: vehicle?.tare_weight_t ?? null,
+      max_gross_weight_t: vehicle?.max_gross_weight_t ?? null,
+      axle_load_t: vehicle?.axle_load_t ?? null,
+      payload_capacity_t: vehicle?.payload_capacity_t ?? null,
+      length_m: vehicle?.length_m ?? null,
+      width_m: vehicle?.width_m ?? null,
+      height_m: vehicle?.height_m ?? null,
+      has_trailer: vehicle?.has_trailer ?? false,
       axle_count: vehicle?.axle_count ?? null,
-      platform_length_m: fromLegacyUnit(vehicle?.platform_length_mm),
-      platform_width_m: fromLegacyUnit(vehicle?.platform_width_mm),
-      platform_height_from_ground_m: fromLegacyUnit(vehicle?.platform_height_from_ground_mm),
-      max_platform_payload_t: fromLegacyUnit(vehicle?.max_platform_payload_kg),
-      max_cargo_length_m: fromLegacyUnit(vehicle?.max_cargo_length_mm),
-      max_cargo_width_m: fromLegacyUnit(vehicle?.max_cargo_width_mm),
-      max_cargo_height_m: fromLegacyUnit(vehicle?.max_cargo_height_mm),
-      max_cargo_weight_t: fromLegacyUnit(vehicle?.max_cargo_weight_kg),
+      platform_length_m: vehicle?.platform_length_m ?? null,
+      platform_height_from_ground_m: vehicle?.platform_height_from_ground_m ?? null,
+      max_platform_payload_t: vehicle?.max_platform_payload_t ?? null,
+      max_cargo_length_m: vehicle?.max_cargo_length_m ?? null,
+      max_cargo_width_m: vehicle?.max_cargo_width_m ?? null,
+      max_cargo_height_m: vehicle?.max_cargo_height_m ?? null,
+      max_cargo_weight_t: vehicle?.max_cargo_weight_t ?? null,
       default_trailer_id: vehicle?.default_trailer_id ?? '',
-      combined_length_with_trailer_m: fromLegacyUnit(vehicle?.combined_length_with_trailer_mm),
-      coupling_length_m: fromLegacyUnit(vehicle?.coupling_length_mm),
-      height_safety_margin_m: fromLegacyUnit(vehicle?.height_safety_margin_mm ?? 0),
-      width_safety_margin_m: fromLegacyUnit(vehicle?.width_safety_margin_mm ?? 0),
-      weight_safety_margin_t: fromLegacyUnit(vehicle?.weight_safety_margin_kg ?? 0),
+      coupling_length_m: vehicle?.coupling_length_m ?? null,
+      height_safety_margin_m: vehicle?.height_safety_margin_m ?? 0,
+      width_safety_margin_m: vehicle?.width_safety_margin_m ?? 0,
+      weight_safety_margin_t: vehicle?.weight_safety_margin_t ?? 0,
       load_profiles: loadConfigurationTypes.map((configurationType) => {
         const existing = existingProfiles.find((profile) => profile.configuration_type === configurationType);
         return {
           configuration_type: configurationType,
-          max_actual_axle_load_t: existing ? canonicalUnit(existing.max_actual_axle_load_t, existing.max_actual_axle_load_kg) : null,
+          max_actual_axle_load_t: existing?.max_actual_axle_load_t ?? null,
         };
       }),
     },
@@ -229,7 +212,6 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
       profile.max_actual_axle_load_t === null ? [] : [{
         configuration_type: profile.configuration_type,
         max_actual_axle_load_t: profile.max_actual_axle_load_t,
-        max_actual_axle_load_kg: Math.round(profile.max_actual_axle_load_t * 1_000),
       }]
     ));
     const hasTrailer = formValues.has_trailer;
@@ -254,20 +236,18 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
       height_m: formValues.height_m,
       has_trailer: hasTrailer,
       axle_count: formValues.axle_count,
-      platform_length_mm: toLegacyUnit(formValues.platform_length_m),
-      platform_width_mm: toLegacyUnit(formValues.platform_width_m),
-      platform_height_from_ground_mm: toLegacyUnit(formValues.platform_height_from_ground_m),
-      max_platform_payload_kg: toLegacyUnit(formValues.max_platform_payload_t),
-      max_cargo_length_mm: toLegacyUnit(formValues.max_cargo_length_m),
-      max_cargo_width_mm: toLegacyUnit(formValues.max_cargo_width_m),
-      max_cargo_height_mm: toLegacyUnit(formValues.max_cargo_height_m),
-      max_cargo_weight_kg: toLegacyUnit(formValues.max_cargo_weight_t),
-      default_trailer_id: hasTrailer === true ? (formValues.default_trailer_id || null) : null,
-      combined_length_with_trailer_mm: toLegacyUnit(formValues.combined_length_with_trailer_m),
-      coupling_length_mm: toLegacyUnit(formValues.coupling_length_m),
-      height_safety_margin_mm: toLegacyUnit(formValues.height_safety_margin_m) ?? 0,
-      width_safety_margin_mm: toLegacyUnit(formValues.width_safety_margin_m) ?? 0,
-      weight_safety_margin_kg: toLegacyUnit(formValues.weight_safety_margin_t) ?? 0,
+      platform_length_m: formValues.platform_length_m,
+      platform_height_from_ground_m: formValues.platform_height_from_ground_m,
+      max_platform_payload_t: formValues.max_platform_payload_t,
+      max_cargo_length_m: formValues.max_cargo_length_m,
+      max_cargo_width_m: formValues.max_cargo_width_m,
+      max_cargo_height_m: formValues.max_cargo_height_m,
+      max_cargo_weight_t: formValues.max_cargo_weight_t,
+      default_trailer_id: hasTrailer ? (formValues.default_trailer_id || null) : null,
+      coupling_length_m: formValues.coupling_length_m,
+      height_safety_margin_m: formValues.height_safety_margin_m ?? 0,
+      width_safety_margin_m: formValues.width_safety_margin_m ?? 0,
+      weight_safety_margin_t: formValues.weight_safety_margin_t ?? 0,
       load_profiles: loadProfiles,
     });
   };
@@ -286,7 +266,7 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
           <Field label="Длина, м" type="number" min="0.001" step="0.001" defaultValue={values.length_m ?? undefined} {...register('length_m', optionalNumberRegistration())} error={errors.length_m?.message} />
           <Field label="Ширина, м" type="number" min="0.001" step="0.001" defaultValue={values.width_m ?? undefined} {...register('width_m', optionalNumberRegistration())} error={errors.width_m?.message} />
           <Field label="Высота, м" type="number" min="0.001" step="0.001" defaultValue={values.height_m ?? undefined} {...register('height_m', optionalNumberRegistration())} error={errors.height_m?.message} />
-          <SelectField label="Есть прицеп" value={values.has_trailer === null ? '' : String(values.has_trailer)} onChange={(event) => setValue('has_trailer', optionalBoolean(event.target.value), { shouldValidate: true })} error={errors.has_trailer?.message}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
+          <SelectField label="Есть прицеп" value={String(values.has_trailer)} onChange={(event) => setValue('has_trailer', event.target.value === 'true', { shouldValidate: true })} error={errors.has_trailer?.message}><option value="true">Да</option><option value="false">Нет</option></SelectField>
 
           <details className="span-2">
             <summary><strong>Дополнительные настройки</strong></summary>
@@ -300,7 +280,6 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
 
             <div className="form-grid" style={{ marginTop: 10 }}>
               <Field label="Длина платформы машины, м" type="number" min="0.001" step="0.001" defaultValue={values.platform_length_m ?? undefined} {...register('platform_length_m', optionalNumberRegistration())} error={errors.platform_length_m?.message} />
-              <Field label="Ширина платформы машины, м" type="number" min="0.001" step="0.001" defaultValue={values.platform_width_m ?? undefined} {...register('platform_width_m', optionalNumberRegistration())} error={errors.platform_width_m?.message} />
               <Field label="Высота платформы машины от земли, м" type="number" min="0.001" step="0.001" defaultValue={values.platform_height_from_ground_m ?? undefined} {...register('platform_height_from_ground_m', optionalNumberRegistration())} error={errors.platform_height_from_ground_m?.message} />
               <Field label="Максимальная масса на платформе машины, т" type="number" min="0.001" step="0.001" defaultValue={values.max_platform_payload_t ?? undefined} {...register('max_platform_payload_t', optionalNumberRegistration())} error={errors.max_platform_payload_t?.message} />
               <Field label="Максимальная длина груза на машине, м" type="number" min="0.001" step="0.001" defaultValue={values.max_cargo_length_m ?? undefined} {...register('max_cargo_length_m', optionalNumberRegistration())} error={errors.max_cargo_length_m?.message} />
@@ -309,8 +288,7 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
               <Field label="Максимальная масса груза на машине, т" type="number" min="0.001" step="0.001" defaultValue={values.max_cargo_weight_t ?? undefined} {...register('max_cargo_weight_t', optionalNumberRegistration())} error={errors.max_cargo_weight_t?.message} />
             </div>
             <div className="form-grid" style={{ marginTop: 10 }}>
-              <Field label="Точная полная длина автопоезда, м" type="number" min="0.001" step="0.001" defaultValue={values.combined_length_with_trailer_m ?? undefined} {...register('combined_length_with_trailer_m', optionalNumberRegistration())} error={errors.combined_length_with_trailer_m?.message} />
-              <Field label="Длина сцепки, м" type="number" min="0.001" step="0.001" defaultValue={values.coupling_length_m ?? undefined} {...register('coupling_length_m', optionalNumberRegistration())} error={errors.coupling_length_m?.message} hint="Используется только если точная полная длина не задана" />
+              <Field label="Длина сцепки, м" type="number" min="0.001" step="0.001" defaultValue={values.coupling_length_m ?? undefined} {...register('coupling_length_m', optionalNumberRegistration())} error={errors.coupling_length_m?.message} hint="Расстояние между машиной и прицепом" />
               <Field label="Запас по высоте, м" type="number" min="0" step="0.001" defaultValue={values.height_safety_margin_m ?? undefined} {...register('height_safety_margin_m', optionalNumberRegistration())} error={errors.height_safety_margin_m?.message} />
               <Field label="Запас по ширине, м" type="number" min="0" step="0.001" defaultValue={values.width_safety_margin_m ?? undefined} {...register('width_safety_margin_m', optionalNumberRegistration())} error={errors.width_safety_margin_m?.message} />
               <Field label="Запас по массе, т" type="number" min="0" step="0.001" defaultValue={values.weight_safety_margin_t ?? undefined} {...register('weight_safety_margin_t', optionalNumberRegistration())} error={errors.weight_safety_margin_t?.message} />

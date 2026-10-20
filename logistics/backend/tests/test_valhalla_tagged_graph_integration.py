@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import cast
 
 import pytest
@@ -22,10 +23,10 @@ pytestmark = pytest.mark.integration
 
 DEPARTURE = datetime(2026, 8, 25, 8, tzinfo=UTC)
 CARGO = CargoDimensions(
-    length_mm=6_000,
-    width_mm=2_400,
-    height_mm=2_400,
-    weight_kg=2_500,
+    length_m=Decimal("6"),
+    width_m=Decimal("2.4"),
+    height_m=Decimal("2.4"),
+    weight_t=Decimal("2.5"),
 )
 
 

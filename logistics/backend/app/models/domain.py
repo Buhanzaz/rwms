@@ -725,6 +725,28 @@ class Trailer(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
             "max_gross_weight_kg >= tare_weight_kg",
             name="gross_not_below_tare",
         ),
+        CheckConstraint(
+            "(tare_weight_t IS NULL OR tare_weight_t > 0) AND "
+            "(max_gross_weight_t IS NULL OR max_gross_weight_t > 0) AND "
+            "(axle_load_t IS NULL OR axle_load_t > 0) AND "
+            "(payload_capacity_t IS NULL OR payload_capacity_t > 0) AND "
+            "(length_m IS NULL OR length_m > 0) AND "
+            "(width_m IS NULL OR width_m > 0) AND "
+            "(height_m IS NULL OR height_m > 0) AND "
+            "(platform_length_m IS NULL OR platform_length_m > 0) AND "
+            "(platform_height_from_ground_m IS NULL OR platform_height_from_ground_m > 0) AND "
+            "(max_platform_payload_t IS NULL OR max_platform_payload_t > 0) AND "
+            "(max_cargo_length_m IS NULL OR max_cargo_length_m > 0) AND "
+            "(max_cargo_width_m IS NULL OR max_cargo_width_m > 0) AND "
+            "(max_cargo_height_m IS NULL OR max_cargo_height_m > 0) AND "
+            "(max_cargo_weight_t IS NULL OR max_cargo_weight_t > 0)",
+            name="positive_canonical_trailer_values",
+        ),
+        CheckConstraint(
+            "max_gross_weight_t IS NULL OR tare_weight_t IS NULL OR "
+            "max_gross_weight_t >= tare_weight_t",
+            name="canonical_trailer_gross_not_below_tare",
+        ),
         CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_trailers_warehouse_active", "warehouse_id", "active"),
     )
@@ -751,6 +773,20 @@ class Trailer(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
     max_cargo_width_mm: Mapped[int | None] = mapped_column(Integer)
     max_cargo_height_mm: Mapped[int | None] = mapped_column(Integer)
     max_cargo_weight_kg: Mapped[int | None] = mapped_column(Integer)
+    tare_weight_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_gross_weight_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    axle_load_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    payload_capacity_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    width_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    height_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    platform_length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    platform_height_from_ground_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_platform_payload_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_width_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_height_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_weight_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     warehouse: Mapped[Warehouse] = relationship(back_populates="trailers")
@@ -809,7 +845,17 @@ class Vehicle(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
             "(payload_capacity_t IS NULL OR payload_capacity_t > 0) AND "
             "(length_m IS NULL OR length_m > 0) AND "
             "(width_m IS NULL OR width_m > 0) AND "
-            "(height_m IS NULL OR height_m > 0)",
+            "(height_m IS NULL OR height_m > 0) AND "
+            "(platform_length_m IS NULL OR platform_length_m > 0) AND "
+            "(platform_height_from_ground_m IS NULL OR platform_height_from_ground_m > 0) AND "
+            "(max_platform_payload_t IS NULL OR max_platform_payload_t > 0) AND "
+            "(max_cargo_length_m IS NULL OR max_cargo_length_m > 0) AND "
+            "(max_cargo_width_m IS NULL OR max_cargo_width_m > 0) AND "
+            "(max_cargo_height_m IS NULL OR max_cargo_height_m > 0) AND "
+            "(max_cargo_weight_t IS NULL OR max_cargo_weight_t > 0) AND "
+            "(coupling_length_m IS NULL OR coupling_length_m > 0) AND "
+            "height_safety_margin_m >= 0 AND width_safety_margin_m >= 0 AND "
+            "weight_safety_margin_t >= 0",
             name="positive_canonical_vehicle_values",
         ),
         CheckConstraint(
@@ -850,6 +896,23 @@ class Vehicle(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
     length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     width_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     height_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    platform_length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    platform_height_from_ground_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_platform_payload_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_width_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_height_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_cargo_weight_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    coupling_length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    height_safety_margin_m: Mapped[Decimal] = mapped_column(
+        Numeric(12, 3), nullable=False, default=0
+    )
+    width_safety_margin_m: Mapped[Decimal] = mapped_column(
+        Numeric(12, 3), nullable=False, default=0
+    )
+    weight_safety_margin_t: Mapped[Decimal] = mapped_column(
+        Numeric(12, 3), nullable=False, default=0
+    )
     has_trailer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     axle_count: Mapped[int | None] = mapped_column(Integer)
     max_axle_load_kg: Mapped[int | None] = mapped_column(Integer)
@@ -896,9 +959,12 @@ class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
         UniqueConstraint(
             "vehicle_id", "configuration_type", name="uq_vehicle_load_profiles_configuration"
         ),
-        CheckConstraint("max_actual_axle_load_kg > 0", name="positive_actual_axle_load"),
         CheckConstraint(
-            "max_actual_axle_load_t IS NULL OR max_actual_axle_load_t > 0",
+            "max_actual_axle_load_kg IS NULL OR max_actual_axle_load_kg > 0",
+            name="positive_actual_axle_load",
+        ),
+        CheckConstraint(
+            "max_actual_axle_load_t > 0",
             name="positive_canonical_actual_axle_load",
         ),
         Index("ix_vehicle_load_profiles_vehicle_id", "vehicle_id"),
@@ -908,11 +974,10 @@ class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
         Uuid(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False
     )
     configuration_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    max_actual_axle_load_kg: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Canonical measured axle load in tonnes. Backfilled from the legacy column
-    # and kept in sync by the API layer; the kilogram value above is the
-    # backward-compatible projection consumed by older clients and routing.
-    max_actual_axle_load_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    # Canonical measured axle load in tonnes; authoritative for routing.
+    max_actual_axle_load_t: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    # Legacy rollback projection; not read or written by active code.
+    max_actual_axle_load_kg: Mapped[int | None] = mapped_column(Integer)
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="load_profiles")
 

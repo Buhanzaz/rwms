@@ -19,6 +19,9 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    environmentOptions: {
+      jsdom: { url: 'http://localhost/' },
+    },
     setupFiles: './tests/setup.ts',
     exclude: ['playwright/**', 'node_modules/**', 'dist/**'],
     css: true,

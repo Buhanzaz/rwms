@@ -300,62 +300,48 @@ export interface VehicleInput {
   length_m?: number | null;
   width_m?: number | null;
   height_m?: number | null;
-  has_trailer?: boolean | null;
-  /** Deprecated legacy projection kept for one transition period. */
-  tare_weight_kg?: number | null;
-  max_gross_weight_kg?: number | null;
-  length_mm?: number | null;
-  width_mm?: number | null;
-  height_mm?: number | null;
+  has_trailer?: boolean;
   axle_count?: number | null;
-  max_axle_load_kg?: number | null;
-  payload_capacity_kg?: number | null;
-  platform_length_mm?: number | null;
-  platform_width_mm?: number | null;
-  platform_height_from_ground_mm?: number | null;
-  max_platform_payload_kg?: number | null;
-  max_cargo_length_mm?: number | null;
-  max_cargo_width_mm?: number | null;
-  max_cargo_height_mm?: number | null;
-  max_cargo_weight_kg?: number | null;
-  can_use_trailer?: boolean | null;
+  platform_length_m?: number | null;
+  platform_height_from_ground_m?: number | null;
+  max_platform_payload_t?: number | null;
+  max_cargo_length_m?: number | null;
+  max_cargo_width_m?: number | null;
+  max_cargo_height_m?: number | null;
+  max_cargo_weight_t?: number | null;
   default_trailer_id?: UUID | null;
-  combined_length_with_trailer_mm?: number | null;
-  coupling_length_mm?: number | null;
-  height_safety_margin_mm?: number;
-  width_safety_margin_mm?: number;
-  weight_safety_margin_kg?: number;
+  coupling_length_m?: number | null;
+  height_safety_margin_m?: number;
+  width_safety_margin_m?: number;
+  weight_safety_margin_t?: number;
 }
 
 export interface TrailerInput {
   name: string;
   registration_number: string;
   active: boolean;
-  tare_weight_kg: number | null;
-  max_gross_weight_kg: number | null;
-  length_mm: number | null;
-  width_mm: number | null;
-  height_mm: number | null;
-  platform_length_mm: number | null;
-  platform_width_mm: number | null;
-  platform_height_from_ground_mm: number | null;
-  max_platform_payload_kg: number | null;
-  payload_capacity_kg: number | null;
+  tare_weight_t: number | null;
+  max_gross_weight_t: number | null;
+  axle_load_t: number | null;
+  payload_capacity_t: number | null;
+  length_m: number | null;
+  width_m: number | null;
+  height_m: number | null;
+  platform_length_m: number | null;
+  platform_height_from_ground_m: number | null;
+  max_platform_payload_t: number | null;
   axle_count: number | null;
-  max_axle_load_kg: number | null;
-  max_cargo_length_mm: number | null;
-  max_cargo_width_mm: number | null;
-  max_cargo_height_mm: number | null;
-  max_cargo_weight_kg: number | null;
+  max_cargo_length_m: number | null;
+  max_cargo_width_m: number | null;
+  max_cargo_height_m: number | null;
+  max_cargo_weight_t: number | null;
   notes: string;
 }
 
 export interface VehicleLoadProfileInput {
   configuration_type: VehicleLoadConfigurationType;
-  /** Canonical measured peak axle load in tonnes; the legacy kilogram field is derived from it. */
-  max_actual_axle_load_t?: number | null;
-  /** Deprecated legacy projection kept for one transition period. */
-  max_actual_axle_load_kg: number;
+  /** Canonical measured peak axle load in tonnes. */
+  max_actual_axle_load_t: number;
 }
 
 export interface VehicleConfigurationInput {
@@ -485,15 +471,37 @@ function finiteNumber(record: Record<string, unknown>, key: string): number | nu
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function snapshotDimension(
+  record: Record<string, unknown>,
+  canonicalMetresKey: string,
+  legacyMillimetresKey: string,
+): number | null {
+  const canonicalMetres = finiteNumber(record, canonicalMetresKey);
+  if (canonicalMetres !== null) return Math.round(canonicalMetres * 1_000);
+  return finiteNumber(record, legacyMillimetresKey);
+}
+
+function snapshotMass(
+  record: Record<string, unknown>,
+  canonicalTonnesKey: string,
+  legacyKilogramsKey: string,
+): number | null {
+  const canonicalTonnes = finiteNumber(record, canonicalTonnesKey);
+  if (canonicalTonnes !== null) return Math.round(canonicalTonnes * 1_000);
+  return finiteNumber(record, legacyKilogramsKey);
+}
+
 function parseCargoPlacement(value: unknown): RoutingCargoPlacementSnapshot | null {
   const record = asRecord(value);
   if (!record) return null;
   const cargoId = record.cargoId;
   const position = record.position;
-  const lengthMm = finiteNumber(record, 'lengthMm');
-  const widthMm = finiteNumber(record, 'widthMm');
-  const heightMm = finiteNumber(record, 'heightMm');
-  const weightKg = finiteNumber(record, 'weightKg');
+  // Snapshots persisted before the canonical unit migration keep millimetres and
+  // kilograms; new canonical snapshots use metres and tonnes.
+  const lengthMm = snapshotDimension(record, 'lengthM', 'lengthMm');
+  const widthMm = snapshotDimension(record, 'widthM', 'widthMm');
+  const heightMm = snapshotDimension(record, 'heightM', 'heightMm');
+  const weightKg = snapshotMass(record, 'weightT', 'weightKg');
   if (
     typeof cargoId !== 'string'
     || (position !== 'TRUCK_PLATFORM' && position !== 'TRAILER_PLATFORM')

@@ -151,7 +151,7 @@ async def _mixed_generated_plan(
         task.type = "PICKUP"
     driver = await make_driver(session, warehouse)
     vehicle = await make_vehicle(session, warehouse)
-    vehicle.can_use_trailer = True
+    vehicle.has_trailer = True
     vehicle.default_trailer = Trailer(
         warehouse_id=warehouse.id, name="Two-platform trailer", registration_number=str(uuid4()),
     )
@@ -208,7 +208,7 @@ async def _two_cycle_generated_plan(
     )
     driver = await make_driver(session, warehouse)
     vehicle = await make_vehicle(session, warehouse)
-    vehicle.can_use_trailer = True
+    vehicle.has_trailer = True
     vehicle.default_trailer = Trailer(
         warehouse_id=warehouse.id, name="Two-platform trailer", registration_number=str(uuid4()),
     )

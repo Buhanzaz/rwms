@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, time
+from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,32 +111,31 @@ async def make_routable_vehicle(session: AsyncSession, warehouse: Warehouse) -> 
                 manufacturer="Test",
                 model="Solo",
                 is_hgv=True,
-                tare_weight_kg=10_000,
-                max_gross_weight_kg=20_000,
-                length_mm=9_000,
-                width_mm=2_500,
-                height_mm=3_200,
+                tare_weight_t=Decimal("10"),
+                max_gross_weight_t=Decimal("20"),
+                length_m=Decimal("9"),
+                width_m=Decimal("2.5"),
+                height_m=Decimal("3.2"),
                 axle_count=3,
-                max_axle_load_kg=10_000,
-                payload_capacity_kg=8_000,
-                platform_length_mm=7_000,
-                platform_width_mm=2_500,
-                platform_height_from_ground_mm=1_200,
-                max_platform_payload_kg=7_000,
-                max_cargo_length_mm=7_000,
-                max_cargo_width_mm=2_600,
-                max_cargo_height_mm=3_000,
-                max_cargo_weight_kg=6_000,
-                can_use_trailer=False,
+                axle_load_t=Decimal("10"),
+                payload_capacity_t=Decimal("8"),
+                platform_length_m=Decimal("7"),
+                platform_height_from_ground_m=Decimal("1.2"),
+                max_platform_payload_t=Decimal("7"),
+                max_cargo_length_m=Decimal("7"),
+                max_cargo_width_m=Decimal("2.6"),
+                max_cargo_height_m=Decimal("3"),
+                max_cargo_weight_t=Decimal("6"),
+                has_trailer=False,
             ),
             load_profiles=[
                 VehicleLoadProfileCreate(
                     configuration_type="EMPTY_TRUCK",
-                    max_actual_axle_load_kg=5_000,
+                    max_actual_axle_load_t=Decimal("5"),
                 ),
                 VehicleLoadProfileCreate(
                     configuration_type="CARGO_ON_TRUCK",
-                    max_actual_axle_load_kg=7_500,
+                    max_actual_axle_load_t=Decimal("7.5"),
                 ),
             ],
         ),

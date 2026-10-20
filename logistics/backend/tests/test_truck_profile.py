@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
@@ -23,34 +24,38 @@ from app.routing.truck_profile import (
 )
 
 
+def D(value: str) -> Decimal:
+    """Build one exact canonical decimal in tests."""
+
+    return Decimal(value)
+
+
 def _vehicle(**changes: Any) -> VehicleRoutingSpec:
     """Build one complete powered-vehicle routing specification."""
 
     vehicle = VehicleRoutingSpec(
         vehicle_id=uuid4(),
         is_hgv=True,
-        tare_weight_kg=12_000,
-        max_gross_weight_kg=22_000,
-        length_mm=9_200,
-        width_mm=2_500,
-        height_mm=3_200,
+        tare_weight_t=D("12"),
+        max_gross_weight_t=D("22"),
+        length_m=D("9.2"),
+        width_m=D("2.5"),
+        height_m=D("3.2"),
         axle_count=3,
-        max_axle_load_kg=10_000,
-        payload_capacity_kg=8_000,
-        platform_length_mm=6_000,
-        platform_width_mm=2_500,
-        platform_height_from_ground_mm=1_300,
-        max_platform_payload_kg=7_000,
-        max_cargo_length_mm=7_000,
-        max_cargo_width_mm=2_600,
-        max_cargo_height_mm=3_000,
-        max_cargo_weight_kg=6_000,
-        can_use_trailer=True,
-        combined_length_with_trailer_mm=18_500,
-        coupling_length_mm=1_300,
-        height_safety_margin_mm=100,
-        width_safety_margin_mm=50,
-        weight_safety_margin_kg=200,
+        axle_load_t=D("10"),
+        payload_capacity_t=D("8"),
+        platform_length_m=D("6"),
+        platform_height_from_ground_m=D("1.3"),
+        max_platform_payload_t=D("7"),
+        max_cargo_length_m=D("7"),
+        max_cargo_width_m=D("2.6"),
+        max_cargo_height_m=D("3"),
+        max_cargo_weight_t=D("6"),
+        has_trailer=True,
+        coupling_length_m=D("1.3"),
+        height_safety_margin_m=D("0.1"),
+        width_safety_margin_m=D("0.05"),
+        weight_safety_margin_t=D("0.2"),
     )
     return replace(vehicle, **changes)
 
@@ -60,22 +65,21 @@ def _trailer(**changes: Any) -> TrailerSpec:
 
     trailer = TrailerSpec(
         trailer_id=uuid4(),
-        tare_weight_kg=3_000,
-        max_gross_weight_kg=10_000,
-        length_mm=8_000,
-        width_mm=2_500,
-        height_mm=1_800,
-        platform_length_mm=6_000,
-        platform_width_mm=2_500,
-        platform_height_from_ground_mm=900,
-        max_platform_payload_kg=6_000,
-        payload_capacity_kg=7_000,
+        tare_weight_t=D("3"),
+        max_gross_weight_t=D("10"),
+        length_m=D("8"),
+        width_m=D("2.5"),
+        height_m=D("1.8"),
+        platform_length_m=D("6"),
+        platform_height_from_ground_m=D("0.9"),
+        max_platform_payload_t=D("6"),
+        payload_capacity_t=D("7"),
         axle_count=2,
-        max_axle_load_kg=10_000,
-        max_cargo_length_mm=7_000,
-        max_cargo_width_mm=2_600,
-        max_cargo_height_mm=3_000,
-        max_cargo_weight_kg=6_000,
+        axle_load_t=D("10"),
+        max_cargo_length_m=D("7"),
+        max_cargo_width_m=D("2.6"),
+        max_cargo_height_m=D("3"),
+        max_cargo_weight_t=D("6"),
     )
     return replace(trailer, **changes)
 
@@ -84,10 +88,10 @@ def _cargo(position: CargoPosition, **changes: Any) -> CargoPlacement:
     """Build one identified standard test cargo placement."""
 
     dimensions = CargoDimensions(
-        length_mm=6_000,
-        width_mm=2_400,
-        height_mm=2_400,
-        weight_kg=3_500,
+        length_m=D("6"),
+        width_m=D("2.4"),
+        height_m=D("2.4"),
+        weight_t=D("3.5"),
     )
     return CargoPlacement(
         cargo_id=uuid4(),
@@ -96,20 +100,20 @@ def _cargo(position: CargoPosition, **changes: Any) -> CargoPlacement:
     )
 
 
-def _profiles(**overrides: int) -> tuple[OperationalAxleLoadProfile, ...]:
+def _profiles(**overrides: str) -> tuple[OperationalAxleLoadProfile, ...]:
     """Build exact operational profiles for every supported load configuration."""
 
     defaults = {
-        TruckConfigurationType.EMPTY_TRUCK: 6_000,
-        TruckConfigurationType.CARGO_ON_TRUCK: 7_800,
-        TruckConfigurationType.EMPTY_COMBINATION: 6_500,
-        TruckConfigurationType.CARGO_ON_TRUCK_WITH_TRAILER: 7_900,
-        TruckConfigurationType.CARGO_ON_TRAILER_WITH_TRAILER: 7_400,
-        TruckConfigurationType.TWO_CARGO_SPLIT: 8_700,
+        TruckConfigurationType.EMPTY_TRUCK: D("6"),
+        TruckConfigurationType.CARGO_ON_TRUCK: D("7.8"),
+        TruckConfigurationType.EMPTY_COMBINATION: D("6.5"),
+        TruckConfigurationType.CARGO_ON_TRUCK_WITH_TRAILER: D("7.9"),
+        TruckConfigurationType.CARGO_ON_TRAILER_WITH_TRAILER: D("7.4"),
+        TruckConfigurationType.TWO_CARGO_SPLIT: D("8.7"),
     }
-    defaults.update({TruckConfigurationType(key): value for key, value in overrides.items()})
+    defaults.update({TruckConfigurationType(key): D(value) for key, value in overrides.items()})
     return tuple(
-        OperationalAxleLoadProfile(configuration_type=key, max_actual_axle_load_kg=value)
+        OperationalAxleLoadProfile(configuration_type=key, max_actual_axle_load_t=value)
         for key, value in defaults.items()
     )
 
@@ -141,10 +145,10 @@ def test_one_cargo_uses_platform_height_actual_weight_and_safety_margins() -> No
         {
             "cargoId": str(cargo.cargo_id),
             "position": "TRUCK_PLATFORM",
-            "lengthMm": 6_000,
-            "widthMm": 2_400,
-            "heightMm": 2_400,
-            "weightKg": 3_500,
+            "lengthM": 6.0,
+            "widthM": 2.4,
+            "heightM": 2.4,
+            "weightT": 3.5,
         }
     ]
 
@@ -205,10 +209,10 @@ def test_empty_trailer_stays_in_profile_after_one_cargo_is_unloaded() -> None:
     assert profile.cargo_count == 1
 
 
-def test_combined_length_can_be_computed_from_explicit_coupling_length() -> None:
-    """An explicit drawbar length is an accepted alternative to pair total length."""
+def test_combination_length_is_computed_from_explicit_coupling_length() -> None:
+    """The road length is derived from vehicle, coupling and trailer lengths."""
 
-    vehicle = _vehicle(combined_length_with_trailer_mm=None, coupling_length_mm=1_300)
+    vehicle = _vehicle()
     trailer = _trailer()
 
     profile = EffectiveTruckProfileCalculator().calculate(
@@ -281,10 +285,10 @@ def test_two_cargo_without_trailer_is_rejected_before_routing() -> None:
 @pytest.mark.parametrize(
     ("dimension_change", "expected_code"),
     [
-        ({"length_mm": 7_100}, TruckProfileErrorCode.CARGO_TOO_LONG),
-        ({"width_mm": 2_700}, TruckProfileErrorCode.CARGO_TOO_WIDE),
-        ({"height_mm": 3_100}, TruckProfileErrorCode.CARGO_TOO_HIGH),
-        ({"weight_kg": 6_100}, TruckProfileErrorCode.CARGO_TOO_HEAVY),
+        ({"length_m": D("7.1")}, TruckProfileErrorCode.CARGO_TOO_LONG),
+        ({"width_m": D("2.7")}, TruckProfileErrorCode.CARGO_TOO_WIDE),
+        ({"height_m": D("3.1")}, TruckProfileErrorCode.CARGO_TOO_HIGH),
+        ({"weight_t": D("6.1")}, TruckProfileErrorCode.CARGO_TOO_HEAVY),
     ],
 )
 def test_explicit_cargo_limits_return_specific_errors(
@@ -309,7 +313,7 @@ def test_explicit_cargo_limits_return_specific_errors(
 def test_peak_axle_load_is_configured_and_never_averaged() -> None:
     """A measured peak above equipment capability fails instead of using weight per axle."""
 
-    vehicle = _vehicle(max_axle_load_kg=8_000)
+    vehicle = _vehicle(axle_load_t=D("8"))
     with pytest.raises(TruckProfileError) as captured:
         EffectiveTruckProfileCalculator().calculate(
             vehicle=vehicle,
@@ -317,7 +321,7 @@ def test_peak_axle_load_is_configured_and_never_averaged() -> None:
                 vehicle_id=vehicle.vehicle_id,
                 cargo_placements=(_cargo(CargoPosition.TRUCK_PLATFORM),),
             ),
-            axle_profiles=_profiles(CARGO_ON_TRUCK=8_500),
+            axle_profiles=_profiles(CARGO_ON_TRUCK="8.5"),
         )
 
     assert captured.value.code is TruckProfileErrorCode.AXLE_LOAD_EXCEEDED
@@ -328,16 +332,16 @@ def test_combination_peak_is_not_compared_to_every_trailer_axle_rating() -> None
 
     vehicle = _vehicle()
     trailer = _trailer(
-        tare_weight_kg=1_080,
-        max_gross_weight_kg=3_500,
-        payload_capacity_kg=2_420,
-        max_platform_payload_kg=2_420,
-        max_axle_load_kg=1_675,
-        max_cargo_weight_kg=2_420,
+        tare_weight_t=D("1.08"),
+        max_gross_weight_t=D("3.5"),
+        payload_capacity_t=D("2.42"),
+        max_platform_payload_t=D("2.42"),
+        axle_load_t=D("1.675"),
+        max_cargo_weight_t=D("2.42"),
     )
     placements = (
-        _cargo(CargoPosition.TRUCK_PLATFORM, weight_kg=1_200),
-        _cargo(CargoPosition.TRAILER_PLATFORM, weight_kg=1_200),
+        _cargo(CargoPosition.TRUCK_PLATFORM, weight_t=D("1.2")),
+        _cargo(CargoPosition.TRAILER_PLATFORM, weight_t=D("1.2")),
     )
 
     profile = EffectiveTruckProfileCalculator().calculate(
@@ -349,16 +353,16 @@ def test_combination_peak_is_not_compared_to_every_trailer_axle_rating() -> None
             trailer_attached=True,
             cargo_placements=placements,
         ),
-        axle_profiles=_profiles(TWO_CARGO_SPLIT=7_400),
+        axle_profiles=_profiles(TWO_CARGO_SPLIT="7.4"),
     )
 
     assert profile.max_axle_load_tons == 7.4
 
 
 def test_missing_physical_values_report_exact_fields() -> None:
-    """Incomplete legacy vehicles fail safely and identify every critical missing value."""
+    """Incomplete vehicles fail safely and identify every critical missing value."""
 
-    vehicle = _vehicle(height_mm=None, platform_height_from_ground_mm=None)
+    vehicle = _vehicle(height_m=None, platform_height_from_ground_m=None)
     with pytest.raises(TruckProfileError) as captured:
         EffectiveTruckProfileCalculator().calculate(
             vehicle=vehicle,
@@ -371,18 +375,15 @@ def test_missing_physical_values_report_exact_fields() -> None:
 
     assert captured.value.code is TruckProfileErrorCode.ROUTING_PROFILE_INCOMPLETE
     assert captured.value.missing_fields == (
-        "vehicle.height_mm",
-        "vehicle.platform_height_from_ground_mm",
+        "vehicle.height_m",
+        "vehicle.platform_height_from_ground_m",
     )
 
 
-def test_attached_trailer_without_combination_length_is_incomplete() -> None:
+def test_attached_trailer_without_coupling_length_is_incomplete() -> None:
     """The calculator never invents a truck-and-trailer road length."""
 
-    vehicle = _vehicle(
-        combined_length_with_trailer_mm=None,
-        coupling_length_mm=None,
-    )
+    vehicle = _vehicle(coupling_length_m=None)
     trailer = _trailer()
     with pytest.raises(TruckProfileError) as captured:
         EffectiveTruckProfileCalculator().calculate(
@@ -397,4 +398,4 @@ def test_attached_trailer_without_combination_length_is_incomplete() -> None:
         )
 
     assert captured.value.code is TruckProfileErrorCode.ROUTING_PROFILE_INCOMPLETE
-    assert captured.value.missing_fields == ("vehicle.coupling_length_mm",)
+    assert captured.value.missing_fields == ("vehicle.coupling_length_m",)

@@ -23,28 +23,55 @@ const physicalResponse = {
   ...Object.fromEntries(
     Object.values(physicalFieldNames).map((field) => [field, null])
   ),
-  tare_weight_kg: 12_000,
-  length_mm: 8_000,
+  tare_weight_t: 12,
+  max_gross_weight_t: 20,
+  length_m: 8,
+  width_m: 2.5,
+  height_m: 3.2,
+  axle_count: 3,
+  axle_load_t: 7.5,
+  payload_capacity_t: 10,
+  platform_length_m: 7,
+  platform_height_from_ground_m: 1.2,
+  max_platform_payload_t: 7,
+  max_cargo_length_m: 7,
+  max_cargo_width_m: 2.6,
+  max_cargo_height_m: 3,
+  max_cargo_weight_t: 6,
 }
 const physical = {
   ...emptyAdminPhysicalSpecification(),
-  tareWeightKg: 12_000,
-  lengthMm: 8_000,
+  tareWeightT: 12,
+  maxGrossWeightT: 20,
+  lengthM: 8,
+  widthM: 2.5,
+  heightM: 3.2,
+  axleCount: 3,
+  axleLoadT: 7.5,
+  payloadCapacityT: 10,
+  platformLengthM: 7,
+  platformHeightFromGroundM: 1.2,
+  maxPlatformPayloadT: 7,
+  maxCargoLengthM: 7,
+  maxCargoWidthM: 2.6,
+  maxCargoHeightM: 3,
+  maxCargoWeightT: 6,
 }
 const vehicleSpecification = {
   ...defaultAdminVehicleSpecification(),
   vehicleType: "CRANE",
-  manufacturer: "КамАЗ",
+  manufacturer: "Test",
   isHgv: true,
-  canUseTrailer: true,
+  hasTrailer: true,
   defaultTrailerId: TRAILER_ID,
-  combinedLengthWithTrailerMm: 12_000,
-  couplingLengthMm: 900,
-  heightSafetyMarginMm: 100,
+  couplingLengthM: 0.9,
+  heightSafetyMarginM: 0.1,
+  widthSafetyMarginM: 0,
+  weightSafetyMarginT: 0,
   averageSpeedCity: 30,
   averageSpeedRegion: 60,
   loadProfiles: [
-    { configurationType: "EMPTY_TRUCK" as const, maxActualAxleLoadKg: 7_500 },
+    { configurationType: "EMPTY_TRUCK" as const, maxActualAxleLoadT: 7.5 },
   ],
 }
 
@@ -52,27 +79,26 @@ const vehicleResponse = {
   id: RESOURCE_ID,
   version: 4,
   warehouse_id: WAREHOUSE_ID,
-  name: "КамАЗ",
-  registration_number: "А123ВС77",
+  name: "Truck",
+  registration_number: "A123BC77",
   active: true,
-  notes: "Манипулятор",
+  notes: "Main truck",
   capacity: 2,
   ...physicalResponse,
   vehicle_type: "CRANE",
-  manufacturer: "КамАЗ",
+  manufacturer: "Test",
   model: null,
   is_hgv: true,
-  can_use_trailer: true,
+  has_trailer: true,
   default_trailer_id: TRAILER_ID,
-  combined_length_with_trailer_mm: 12_000,
-  coupling_length_mm: 900,
-  height_safety_margin_mm: 100,
-  width_safety_margin_mm: 0,
-  weight_safety_margin_kg: 0,
+  coupling_length_m: 0.9,
+  height_safety_margin_m: 0.1,
+  width_safety_margin_m: 0,
+  weight_safety_margin_t: 0,
   average_speed_city: 30,
   average_speed_region: 60,
   load_profiles: [
-    { configuration_type: "EMPTY_TRUCK", max_actual_axle_load_kg: 7_500 },
+    { configuration_type: "EMPTY_TRUCK", max_actual_axle_load_t: 7.5 },
   ],
 }
 
@@ -80,8 +106,8 @@ const trailerResponse = {
   id: RESOURCE_ID,
   version: 4,
   warehouse_id: WAREHOUSE_ID,
-  name: "Тонар",
-  registration_number: "АА123477",
+  name: "Trailer",
+  registration_number: "AA123477",
   active: true,
   notes: "",
   ...physicalResponse,
@@ -149,11 +175,11 @@ describe("admin vehicle and trailer catalog API", () => {
       WAREHOUSE_ID,
       "vehicle",
       {
-        name: " КамАЗ ",
-        registrationNumber: " А123ВС77 ",
+        name: " Truck ",
+        registrationNumber: " A123BC77 ",
         capacity: 2,
         active: true,
-        notes: " Манипулятор ",
+        notes: " Main truck ",
         physical,
         vehicle: vehicleSpecification,
       },
@@ -170,30 +196,29 @@ describe("admin vehicle and trailer catalog API", () => {
     )
     expect(JSON.parse(String(init?.body))).toEqual({
       vehicle: {
-        name: "КамАЗ",
-        registration_number: "А123ВС77",
+        name: "Truck",
+        registration_number: "A123BC77",
         active: true,
-        notes: "Манипулятор",
+        notes: "Main truck",
         capacity: 2,
         ...physicalResponse,
         vehicle_type: "CRANE",
-        manufacturer: "КамАЗ",
+        manufacturer: "Test",
         model: null,
         is_hgv: true,
-        can_use_trailer: true,
+        has_trailer: true,
         default_trailer_id: TRAILER_ID,
-        combined_length_with_trailer_mm: 12_000,
-        coupling_length_mm: 900,
-        height_safety_margin_mm: 100,
-        width_safety_margin_mm: 0,
-        weight_safety_margin_kg: 0,
+        coupling_length_m: 0.9,
+        height_safety_margin_m: 0.1,
+        width_safety_margin_m: 0,
+        weight_safety_margin_t: 0,
         average_speed_city: 30,
         average_speed_region: 60,
       },
       load_profiles: [
         {
           configuration_type: "EMPTY_TRUCK",
-          max_actual_axle_load_kg: 7_500,
+          max_actual_axle_load_t: 7.5,
         },
       ],
     })
@@ -209,8 +234,8 @@ describe("admin vehicle and trailer catalog API", () => {
       WAREHOUSE_ID,
       "trailer",
       {
-        name: "Тонар",
-        registrationNumber: "АА123477",
+        name: "Trailer",
+        registrationNumber: "AA123477",
         capacity: null,
         active: true,
         notes: "",
@@ -229,8 +254,8 @@ describe("admin vehicle and trailer catalog API", () => {
       "55555555-5555-4555-8555-555555555555"
     )
     expect(JSON.parse(String(init?.body))).toEqual({
-      name: "Тонар",
-      registration_number: "АА123477",
+      name: "Trailer",
+      registration_number: "AA123477",
       active: true,
       notes: "",
       ...physicalResponse,
@@ -247,11 +272,11 @@ describe("admin vehicle and trailer catalog API", () => {
       "trailer",
       resource("trailer"),
       {
-        name: "Тонар 2",
-        registrationNumber: "АА123477",
+        name: "Trailer 2",
+        registrationNumber: "AA123477",
         capacity: null,
         active: false,
-        notes: "Резерв",
+        notes: "Updated",
         physical,
         vehicle: null,
       }
@@ -264,10 +289,10 @@ describe("admin vehicle and trailer catalog API", () => {
     expect(init?.method).toBe("PATCH")
     expect(JSON.parse(String(init?.body))).toEqual({
       expected_version: 4,
-      name: "Тонар 2",
-      registration_number: "АА123477",
+      name: "Trailer 2",
+      registration_number: "AA123477",
       active: false,
-      notes: "Резерв",
+      notes: "Updated",
       ...physicalResponse,
     })
   })
@@ -283,7 +308,7 @@ describe("admin vehicle and trailer catalog API", () => {
       resource("vehicle"),
       {
         ...resource("vehicle"),
-        name: "КамАЗ 2",
+        name: "Truck 2",
       }
     )
 
@@ -295,15 +320,16 @@ describe("admin vehicle and trailer catalog API", () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({
       vehicle: {
         expected_version: 4,
-        name: "КамАЗ 2",
-        tare_weight_kg: 12_000,
+        name: "Truck 2",
+        tare_weight_t: 12,
         vehicle_type: "CRANE",
+        has_trailer: true,
         default_trailer_id: TRAILER_ID,
       },
       load_profiles: [
         {
           configuration_type: "EMPTY_TRUCK",
-          max_actual_axle_load_kg: 7_500,
+          max_actual_axle_load_t: 7.5,
         },
       ],
     })
@@ -381,27 +407,26 @@ describe("admin vehicle and trailer catalog API", () => {
   })
 
   it.each([
-    { ...vehicleResponse, tare_weight_kg: undefined },
+    { ...vehicleResponse, tare_weight_t: undefined },
     { ...vehicleResponse, load_profiles: undefined },
     {
       ...vehicleResponse,
       load_profiles: [
-        { configuration_type: "UNKNOWN", max_actual_axle_load_kg: 5000 },
+        { configuration_type: "UNKNOWN", max_actual_axle_load_t: 5 },
       ],
     },
     {
       ...vehicleResponse,
       load_profiles: [
-        { configuration_type: "EMPTY_TRUCK", max_actual_axle_load_kg: 0 },
+        { configuration_type: "EMPTY_TRUCK", max_actual_axle_load_t: 0 },
       ],
     },
-    { ...vehicleResponse, height_mm: -1 },
-    { ...vehicleResponse, width_mm: 2350.5 },
+    { ...vehicleResponse, height_m: -1 },
     { ...vehicleResponse, axle_count: 0 },
-    { ...vehicleResponse, height_safety_margin_mm: -1 },
+    { ...vehicleResponse, height_safety_margin_m: -1 },
     { ...vehicleResponse, average_speed_city: 0 },
     { ...vehicleResponse, is_hgv: "false" },
-    { ...vehicleResponse, can_use_trailer: false },
+    { ...vehicleResponse, has_trailer: undefined },
     {
       ...vehicleResponse,
       load_profiles: [
@@ -434,24 +459,24 @@ describe("admin vehicle and trailer catalog API", () => {
         },
         "55555555-5555-4555-8555-555555555555"
       )
-    ).rejects.toThrow("Проверьте характеристики")
+    ).rejects.toThrow(/Проверьте характеристики/)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("round-trips all measured profiles and distinguishes unknown fields from false and zero", async () => {
+  it("round-trips all measured profiles and preserves null and zero values", async () => {
     const profiles = vehicleLoadProfileTypes.map(
       (configuration_type, index) => ({
         configuration_type,
-        max_actual_axle_load_kg: 6000 + index * 100,
+        max_actual_axle_load_t: 6 + index * 0.1,
       })
     )
     const response = {
       ...vehicleResponse,
-      tare_weight_kg: null,
+      tare_weight_t: null,
       is_hgv: false,
-      can_use_trailer: null,
+      has_trailer: false,
       default_trailer_id: null,
-      weight_safety_margin_kg: 0,
+      weight_safety_margin_t: 0,
       average_speed_city: 37.5,
       load_profiles: profiles,
     }
@@ -464,32 +489,32 @@ describe("admin vehicle and trailer catalog API", () => {
       WAREHOUSE_ID,
       "vehicle"
     )
-    expect(loaded!.physical.tareWeightKg).toBeNull()
+    expect(loaded!.physical.tareWeightT).toBeNull()
     expect(loaded!.vehicle).toMatchObject({
       isHgv: false,
-      canUseTrailer: null,
+      hasTrailer: false,
       defaultTrailerId: null,
-      weightSafetyMarginKg: 0,
+      weightSafetyMarginT: 0,
       averageSpeedCity: 37.5,
     })
     await updateAdminCatalogResource("admin-token", "vehicle", loaded!, {
       ...loaded!,
-      name: "Новое имя",
+      name: "Truck updated",
     })
     const body = JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))
     expect(body.load_profiles).toEqual(profiles)
     expect(body.vehicle).toMatchObject({
       expected_version: 4,
-      tare_weight_kg: null,
+      tare_weight_t: null,
       is_hgv: false,
-      can_use_trailer: null,
+      has_trailer: false,
       default_trailer_id: null,
-      weight_safety_margin_kg: 0,
+      weight_safety_margin_t: 0,
       average_speed_city: 37.5,
     })
   })
 
-  it.each([0, -1, 12.5, Number.POSITIVE_INFINITY])(
+  it.each([0, -1, Number.POSITIVE_INFINITY, Number.NaN])(
     "rejects an invalid physical input %s before fetch",
     async (value) => {
       const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -497,9 +522,9 @@ describe("admin vehicle and trailer catalog API", () => {
       await expect(
         updateAdminCatalogResource("admin-token", "vehicle", existing, {
           ...existing,
-          physical: { ...existing.physical, heightMm: value },
+          physical: { ...existing.physical, heightM: value },
         })
-      ).rejects.toThrow("Проверьте характеристики")
+      ).rejects.toThrow(/Проверьте характеристики/)
       expect(fetchMock).not.toHaveBeenCalled()
     }
   )

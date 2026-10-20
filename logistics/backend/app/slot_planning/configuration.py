@@ -8,8 +8,10 @@ from typing import Any
 
 from app.config import Settings
 from app.domain.vehicle import (
-    effective_trailer_capability,
-    load_profile_axle_load_kg,
+    kilograms_to_tonnes,
+    load_profile_axle_load_t,
+    millimetres_to_metres,
+    trailer_specification,
     vehicle_specification,
 )
 from app.errors import ApiError
@@ -39,12 +41,11 @@ def vehicle_has_available_trailer(
 ) -> bool:
     """Return whether the current vehicle snapshot can actually use its assigned trailer."""
 
+    has_trailer = getattr(vehicle, "has_trailer", None)
+    if has_trailer is None:
+        has_trailer = getattr(vehicle, "can_use_trailer", None)
     return (
-        effective_trailer_capability(
-            getattr(vehicle, "has_trailer", None),
-            vehicle.can_use_trailer,
-        )
-        is True
+        has_trailer is True
         and vehicle.default_trailer is not None
         and vehicle.default_trailer.active
         and str(vehicle.default_trailer.id) not in unavailable_trailer_ids
@@ -65,52 +66,42 @@ def effective_vehicle_cabin_capacity(
 
 
 def vehicle_routing_spec(vehicle: Vehicle) -> VehicleRoutingSpec:
-    """Translate the canonical physical model into exact integer routing units.
+    """Translate the canonical physical model without legacy fallbacks."""
 
-    The canonical tonne/metre values are authoritative.  The deprecated
-    kilogram/millimetre columns are read only when the canonical value is absent
-    (rows created before the canonical migration and in-memory equipment
-    snapshots used by tests).
-    """
-
-    physical = vehicle_specification(vehicle).routing_values()
+    physical = vehicle_specification(vehicle)
     return VehicleRoutingSpec(
         vehicle_id=vehicle.id,
         is_hgv=vehicle.is_hgv,
-        tare_weight_kg=physical["tare_weight_kg"],
-        max_gross_weight_kg=physical["max_gross_weight_kg"],
-        length_mm=physical["length_mm"],
-        width_mm=physical["width_mm"],
-        height_mm=physical["height_mm"],
+        tare_weight_t=physical.tare_weight_t,
+        max_gross_weight_t=physical.max_gross_weight_t,
+        length_m=physical.length_m,
+        width_m=physical.width_m,
+        height_m=physical.height_m,
         axle_count=vehicle.axle_count,
-        max_axle_load_kg=physical["max_axle_load_kg"],
-        payload_capacity_kg=physical["payload_capacity_kg"],
-        platform_length_mm=vehicle.platform_length_mm,
-        platform_width_mm=vehicle.platform_width_mm,
-        platform_height_from_ground_mm=vehicle.platform_height_from_ground_mm,
-        max_platform_payload_kg=vehicle.max_platform_payload_kg,
-        max_cargo_length_mm=vehicle.max_cargo_length_mm,
-        max_cargo_width_mm=vehicle.max_cargo_width_mm,
-        max_cargo_height_mm=vehicle.max_cargo_height_mm,
-        max_cargo_weight_kg=vehicle.max_cargo_weight_kg,
-        can_use_trailer=effective_trailer_capability(
-            vehicle.has_trailer, vehicle.can_use_trailer
-        ),
-        combined_length_with_trailer_mm=vehicle.combined_length_with_trailer_mm,
-        coupling_length_mm=vehicle.coupling_length_mm,
-        height_safety_margin_mm=vehicle.height_safety_margin_mm,
-        width_safety_margin_mm=vehicle.width_safety_margin_mm,
-        weight_safety_margin_kg=vehicle.weight_safety_margin_kg,
+        axle_load_t=physical.axle_load_t,
+        payload_capacity_t=physical.payload_capacity_t,
+        platform_length_m=physical.platform_length_m,
+        platform_height_from_ground_m=physical.platform_height_from_ground_m,
+        max_platform_payload_t=physical.max_platform_payload_t,
+        max_cargo_length_m=physical.max_cargo_length_m,
+        max_cargo_width_m=physical.max_cargo_width_m,
+        max_cargo_height_m=physical.max_cargo_height_m,
+        max_cargo_weight_t=physical.max_cargo_weight_t,
+        has_trailer=physical.has_trailer,
+        coupling_length_m=physical.coupling_length_m,
+        height_safety_margin_m=physical.height_safety_margin_m,
+        width_safety_margin_m=physical.width_safety_margin_m,
+        weight_safety_margin_t=physical.weight_safety_margin_t,
     )
 
 
 def vehicle_axle_profiles(vehicle: Vehicle) -> tuple[OperationalAxleLoadProfile, ...]:
-    """Translate every measured operational axle load into routing units."""
+    """Translate every measured operational axle load into canonical tonnes."""
 
     return tuple(
         OperationalAxleLoadProfile(
             configuration_type=TruckConfigurationType(profile.configuration_type),
-            max_actual_axle_load_kg=load_profile_axle_load_kg(profile),
+            max_actual_axle_load_t=load_profile_axle_load_t(profile),
         )
         for profile in vehicle.load_profiles
     )
@@ -119,24 +110,24 @@ def vehicle_axle_profiles(vehicle: Vehicle) -> tuple[OperationalAxleLoadProfile,
 def trailer_routing_spec(trailer: Trailer) -> TrailerSpec:
     """Translate nullable persisted trailer values without selecting availability."""
 
+    physical = trailer_specification(trailer)
     return TrailerSpec(
         trailer_id=trailer.id,
-        tare_weight_kg=trailer.tare_weight_kg,
-        max_gross_weight_kg=trailer.max_gross_weight_kg,
-        length_mm=trailer.length_mm,
-        width_mm=trailer.width_mm,
-        height_mm=trailer.height_mm,
-        platform_length_mm=trailer.platform_length_mm,
-        platform_width_mm=trailer.platform_width_mm,
-        platform_height_from_ground_mm=trailer.platform_height_from_ground_mm,
-        max_platform_payload_kg=trailer.max_platform_payload_kg,
-        payload_capacity_kg=trailer.payload_capacity_kg,
+        tare_weight_t=physical.tare_weight_t,
+        max_gross_weight_t=physical.max_gross_weight_t,
+        length_m=physical.length_m,
+        width_m=physical.width_m,
+        height_m=physical.height_m,
+        platform_length_m=physical.platform_length_m,
+        platform_height_from_ground_m=physical.platform_height_from_ground_m,
+        max_platform_payload_t=physical.max_platform_payload_t,
+        payload_capacity_t=physical.payload_capacity_t,
         axle_count=trailer.axle_count,
-        max_axle_load_kg=trailer.max_axle_load_kg,
-        max_cargo_length_mm=trailer.max_cargo_length_mm,
-        max_cargo_width_mm=trailer.max_cargo_width_mm,
-        max_cargo_height_mm=trailer.max_cargo_height_mm,
-        max_cargo_weight_kg=trailer.max_cargo_weight_kg,
+        axle_load_t=physical.axle_load_t,
+        max_cargo_length_m=physical.max_cargo_length_m,
+        max_cargo_width_m=physical.max_cargo_width_m,
+        max_cargo_height_m=physical.max_cargo_height_m,
+        max_cargo_weight_t=physical.max_cargo_weight_t,
     )
 
 
@@ -236,11 +227,17 @@ def vehicle_equipment_snapshot(
 def default_slot_cabin(settings: Mapping[str, Any]) -> CargoDimensions:
     """Return configurable conservative cabin dimensions for profile calculation."""
 
+    length_m = millimetres_to_metres(int(settings.get("slot_cabin_length_mm", 6_000)))
+    width_m = millimetres_to_metres(int(settings.get("slot_cabin_width_mm", 2_400)))
+    height_m = millimetres_to_metres(int(settings.get("slot_cabin_height_mm", 2_400)))
+    weight_t = kilograms_to_tonnes(int(settings.get("slot_cabin_weight_kg", 1_200)))
+    assert length_m is not None and width_m is not None
+    assert height_m is not None and weight_t is not None
     return CargoDimensions(
-        length_mm=int(settings.get("slot_cabin_length_mm", 6_000)),
-        width_mm=int(settings.get("slot_cabin_width_mm", 2_400)),
-        height_mm=int(settings.get("slot_cabin_height_mm", 2_400)),
-        weight_kg=int(settings.get("slot_cabin_weight_kg", 1_200)),
+        length_m=length_m,
+        width_m=width_m,
+        height_m=height_m,
+        weight_t=weight_t,
     )
 
 

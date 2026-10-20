@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.db import utc_now
+from app.domain.vehicle import metres_to_millimetres, tonnes_to_kilograms
 from app.errors import ApiError, not_found
 from app.geo.policy_classification import (
     PolicyZoneClassification,
@@ -1338,6 +1339,10 @@ class SlotPlanningApplication:
                 "The recalculated insertion no longer represents the complete order",
             )
         cargo = default_slot_cabin(context.warehouse.settings)
+        cargo_length_mm = metres_to_millimetres(cargo.length_m)
+        cargo_width_mm = metres_to_millimetres(cargo.width_m)
+        cargo_height_mm = metres_to_millimetres(cargo.height_m)
+        cargo_weight_kg = tonnes_to_kilograms(cargo.weight_t)
         request = LogisticsRequest(
             warehouse_id=context.warehouse.id,
             source_system="CUSTOMER_SLOT_HOLD",
@@ -1353,10 +1358,10 @@ class SlotPlanningApplication:
             latitude=command.latitude,
             longitude=command.longitude,
             quantity=command.cabin_count,
-            cargo_length_mm=cargo.length_mm,
-            cargo_width_mm=cargo.width_mm,
-            cargo_height_mm=cargo.height_mm,
-            cargo_weight_kg=cargo.weight_kg,
+            cargo_length_mm=cargo_length_mm,
+            cargo_width_mm=cargo_width_mm,
+            cargo_height_mm=cargo_height_mm,
+            cargo_weight_kg=cargo_weight_kg,
             service_minutes=(
                 command.service_duration_minutes
                 or context.configuration.delivery_service_minutes
@@ -1394,10 +1399,10 @@ class SlotPlanningApplication:
                 request_id=request.id,
                 part_number=part_number,
                 quantity=quantity,
-                cargo_length_mm=cargo.length_mm,
-                cargo_width_mm=cargo.width_mm,
-                cargo_height_mm=cargo.height_mm,
-                cargo_weight_kg=cargo.weight_kg,
+                cargo_length_mm=cargo_length_mm,
+                cargo_width_mm=cargo_width_mm,
+                cargo_height_mm=cargo_height_mm,
+                cargo_weight_kg=cargo_weight_kg,
                 type=RequestType.DELIVERY,
                 latitude=command.latitude,
                 longitude=command.longitude,
@@ -1524,7 +1529,7 @@ class SlotPlanningApplication:
                     str(item.driver.external_worker_id),
                     item.vehicle.active,
                     item.vehicle.capacity,
-                    item.vehicle.can_use_trailer,
+                    item.vehicle.has_trailer,
                     str(item.vehicle.default_trailer_id),
                 )
                 for item in sorted(warehouse.shifts, key=lambda value: str(value.id))

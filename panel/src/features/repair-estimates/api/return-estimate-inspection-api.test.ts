@@ -57,7 +57,7 @@ describe("return estimate inventory inspection", () => {
         )
       )
     )
-    const wait = vi.fn(async (_delayMs: number) => undefined)
+    const wait = vi.fn<(delayMs: number) => Promise<void>>().mockResolvedValue(undefined)
 
     const result = await awaitReturnEstimateInspection(
       "token",

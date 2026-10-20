@@ -677,32 +677,37 @@ work.
 - Resolution and date: none. Operational backlog/age metrics are present, but
   this implementation deletes or archives no production evidence.
 
-## Canonical Vehicle Model Versus Routing-Extension Equipment Fields
+## Canonical Vehicle And Trailer Model Versus Routing-Extension Equipment Fields
 
 - Status: `Open`
 - Affected owner and consumers: standalone `logistics` planner/backend and
   frontend, RWMS Panel fleet administration, routing profiles persisted in
   historical plans.
-- Requested behavior: one canonical vehicle model containing only masses in
-  tonnes, dimensions in metres and a `has_trailer` boolean.
+- Requested behavior: one canonical vehicle and trailer model containing masses
+  in tonnes, dimensions in metres and a required `has_trailer` boolean.
 - Conflicting contract or invariant: exact Valhalla truck profiles still need
-  platform dimensions and height, per-unit cargo limits, coupled length,
-  coupling distance and safety margins. These values are not derivable from the
-  canonical seven measurements without changing route feasibility, so they are
-  retained as deprecated routing-extension fields (kilogram/millimetre wire
-  units) during a compatibility window. `platform_width_mm` is required by the
-  profile validator but is used by no calculation.
+  platform dimensions and height, per-unit cargo limits, coupling distance and
+  safety margins. These values are not derivable from the canonical base
+  measurements without changing route feasibility, so they are retained as
+  canonical routing-extension equipment fields. The mass safety margin is added
+  to the routing weight but is not included in the `tare + cargo <= max_gross`
+  check; its intended semantics remain a product decision.
 - Evidence:
   [`vehicle.py`](../../logistics/backend/app/domain/vehicle.py),
-  [`20260908_0038`](../../logistics/backend/migrations/versions/20260908_0038_canonical_vehicle_spec.py),
+  [`0038`](../../logistics/backend/migrations/versions/20260908_0038_canonical_vehicle_spec.py),
+  [`0039`](../../logistics/backend/migrations/versions/20261020_0039_canonical_trailer_and_extensions.py),
   [`vehicle-model-audit.md`](../../logistics/docs/vehicle-model-audit.md).
 - Smallest decision needed: keep the routing-extension block as an explicit
   technical equipment configuration, replace it with a different loading-profile
-  model, or accept less precise route checks. Separately decide whether
-  `platform_width_mm` and the tri-state legacy `can_use_trailer` can be removed
-  from the public contract.
+  model, or accept less precise route checks; separately decide whether the mass
+  safety margin must participate in the gross-weight check and when the inactive
+  legacy kg/mm columns can be dropped.
 - Resolution and date: none; the canonical model is authoritative for all new
-  writes, legacy fields are synchronized and preserved additively.
+  writes. The dead `platform_width_mm` and the redundant
+  `combined_length_with_trailer_mm` were removed from the active contract, and
+  the tri-state trailer flag was replaced by `has_trailer`. Combination length
+  is derived from the canonical vehicle, coupling and trailer lengths; legacy
+  kg/mm remains input-only during the transition.
 
 ## Question Template
 

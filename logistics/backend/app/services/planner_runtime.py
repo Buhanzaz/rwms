@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import utc_now
+from app.domain.vehicle import kilograms_to_tonnes, millimetres_to_metres
 from app.errors import ApiError, not_found
 from app.geo import geometry_to_geojson
 from app.geo.policy_classification import (
@@ -185,6 +186,22 @@ class _RuntimeSnapshot:
     support_source_revision: str | None
     day_mode: PlanningDayMode
     resource_restrictions: DayResourceRestrictions
+
+
+def _request_cargo_dimensions(
+    length_mm: int | None,
+    width_mm: int | None,
+    height_mm: int | None,
+    weight_kg: int | None,
+) -> CargoDimensions:
+    """Convert legacy request cargo units once at the runtime boundary."""
+
+    return CargoDimensions(
+        length_m=millimetres_to_metres(length_mm),
+        width_m=millimetres_to_metres(width_mm),
+        height_m=millimetres_to_metres(height_mm),
+        weight_t=kilograms_to_tonnes(weight_kg),
+    )
 
 
 def request_is_available_on_date(
@@ -2244,11 +2261,11 @@ class RuntimePlannerFacade:
             split_allowed=request.split_allowed,
             notes=request.notes,
             source_key=RuntimePlannerFacade._request_source_key(request),
-            cargo_dimensions=CargoDimensions(
-                length_mm=request.cargo_length_mm,
-                width_mm=request.cargo_width_mm,
-                height_mm=request.cargo_height_mm,
-                weight_kg=request.cargo_weight_kg,
+            cargo_dimensions=_request_cargo_dimensions(
+                request.cargo_length_mm,
+                request.cargo_width_mm,
+                request.cargo_height_mm,
+                request.cargo_weight_kg,
             ),
             trailer_access_allowed=(
                 request.trailer_access_allowed is not False
@@ -2436,11 +2453,11 @@ class RuntimePlannerFacade:
             is_last_available_date=(
                 bool(available_dates) and planning_date == max(available_dates)
             ),
-            cargo_dimensions=CargoDimensions(
-                length_mm=task.cargo_length_mm,
-                width_mm=task.cargo_width_mm,
-                height_mm=task.cargo_height_mm,
-                weight_kg=task.cargo_weight_kg,
+            cargo_dimensions=_request_cargo_dimensions(
+                task.cargo_length_mm,
+                task.cargo_width_mm,
+                task.cargo_height_mm,
+                task.cargo_weight_kg,
             ),
             trailer_access_allowed=request.trailer_access_allowed,
             mandatory=task.mandatory,

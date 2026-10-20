@@ -64,27 +64,26 @@ const physicalGroups = [
   {
     title: "Масса, габариты и оси",
     fields: [
-      ["tareWeightKg", "Снаряжённая масса, кг"],
-      ["maxGrossWeightKg", "Разрешённая полная масса, кг"],
-      ["lengthMm", "Длина транспорта, мм"],
-      ["widthMm", "Ширина транспорта, мм"],
-      ["heightMm", "Высота транспорта, мм"],
+      ["tareWeightT", "Снаряжённая масса, т"],
+      ["maxGrossWeightT", "Максимальная масса, т"],
+      ["lengthM", "Длина транспорта, м"],
+      ["widthM", "Ширина транспорта, м"],
+      ["heightM", "Высота транспорта, м"],
       ["axleCount", "Количество осей"],
-      ["maxAxleLoadKg", "Допустимая нагрузка на ось, кг"],
-      ["payloadCapacityKg", "Грузоподъёмность, кг"],
+      ["axleLoadT", "Допустимая нагрузка на ось, т"],
+      ["payloadCapacityT", "Грузоподъёмность, т"],
     ],
   },
   {
     title: "Платформа и груз",
     fields: [
-      ["platformLengthMm", "Длина платформы, мм"],
-      ["platformWidthMm", "Ширина платформы, мм"],
-      ["platformHeightFromGroundMm", "Высота платформы от земли, мм"],
-      ["maxPlatformPayloadKg", "Нагрузка на платформу, кг"],
-      ["maxCargoLengthMm", "Максимальная длина груза, мм"],
-      ["maxCargoWidthMm", "Максимальная ширина груза, мм"],
-      ["maxCargoHeightMm", "Максимальная высота груза, мм"],
-      ["maxCargoWeightKg", "Максимальная масса груза, кг"],
+      ["platformLengthM", "Длина платформы, м"],
+      ["platformHeightFromGroundM", "Высота платформы от земли, м"],
+      ["maxPlatformPayloadT", "Нагрузка на платформу, т"],
+      ["maxCargoLengthM", "Максимальная длина груза, м"],
+      ["maxCargoWidthM", "Максимальная ширина груза, м"],
+      ["maxCargoHeightM", "Максимальная высота груза, м"],
+      ["maxCargoWeightT", "Максимальная масса груза, т"],
     ],
   },
 ] as const satisfies ReadonlyArray<{
@@ -93,22 +92,21 @@ const physicalGroups = [
 }>
 
 const vehicleNumbers = [
-  ["combinedLengthWithTrailerMm", "Полная длина автопоезда, мм", true, 1],
-  ["couplingLengthMm", "Длина сцепки, мм", true, 1],
-  ["heightSafetyMarginMm", "Запас по высоте, мм", false, 0],
-  ["widthSafetyMarginMm", "Запас по ширине, мм", false, 0],
-  ["weightSafetyMarginKg", "Запас по массе, кг", false, 0],
+  ["couplingLengthM", "Длина сцепки, м", true, 0],
+  ["heightSafetyMarginM", "Запас по высоте, м", false, 0],
+  ["widthSafetyMarginM", "Запас по ширине, м", false, 0],
+  ["weightSafetyMarginT", "Запас по массе, т", false, 0],
   ["averageSpeedCity", "Средняя скорость в городе, км/ч", false, 1],
-  ["averageSpeedRegion", "Средняя скорость за городом, км/ч", false, 1],
+  ["averageSpeedRegion", "Средняя скорость по региону, км/ч", false, 1],
 ] as const
 
 const axleLabels: Record<VehicleLoadProfileType, string> = {
-  EMPTY_TRUCK: "Пустой автомобиль, кг",
-  CARGO_ON_TRUCK: "Автомобиль с грузом, кг",
-  EMPTY_COMBINATION: "Пустой автомобиль с прицепом, кг",
-  CARGO_ON_TRUCK_WITH_TRAILER: "Груз на автомобиле, прицеп пустой, кг",
-  CARGO_ON_TRAILER_WITH_TRAILER: "Автомобиль пустой, груз на прицепе, кг",
-  TWO_CARGO_SPLIT: "Груз на автомобиле и прицепе, кг",
+  EMPTY_TRUCK: "Пустой автомобиль, т",
+  CARGO_ON_TRUCK: "Автомобиль с грузом, т",
+  EMPTY_COMBINATION: "Пустой автомобиль с прицепом, т",
+  CARGO_ON_TRUCK_WITH_TRAILER: "Груз на автомобиле, прицеп пустой, т",
+  CARGO_ON_TRAILER_WITH_TRAILER: "Автомобиль пустой, груз на прицепе, т",
+  TWO_CARGO_SPLIT: "Груз на автомобиле и прицепе, т",
 }
 
 function initialValues(
@@ -134,8 +132,7 @@ function initialValues(
     manufacturer: vehicle.manufacturer ?? "",
     model: vehicle.model ?? "",
     isHgv: vehicle.isHgv == null ? "unknown" : String(vehicle.isHgv),
-    canUseTrailer:
-      vehicle.canUseTrailer == null ? "unknown" : String(vehicle.canUseTrailer),
+    hasTrailer: String(vehicle.hasTrailer),
     defaultTrailerId: vehicle.defaultTrailerId ?? "none",
     ...Object.fromEntries(
       vehicleLoadProfileTypes.map((type) => [
@@ -143,7 +140,7 @@ function initialValues(
         String(
           vehicle.loadProfiles.find(
             (profile) => profile.configurationType === type
-          )?.maxActualAxleLoadKg ?? ""
+          )?.maxActualAxleLoadT ?? ""
         ),
       ])
     ),
@@ -173,7 +170,7 @@ function parseInput(
       !validSyntax ||
       !Number.isFinite(parsed) ||
       (!decimal && !Number.isSafeInteger(parsed)) ||
-      (decimal ? parsed <= 0 : parsed < minimum)
+      (minimum === 0 ? parsed < 0 : parsed <= 0)
     ) {
       errors[key] = decimal
         ? "Введите положительное число."
@@ -191,24 +188,24 @@ function parseInput(
   if (kind === "vehicle" && capacity !== 1 && capacity !== 2)
     errors.capacity = "Выберите вместимость."
   const physical = Object.fromEntries(
-    Object.keys(physicalFieldNames).map((key) => [key, number(key)])
+    Object.keys(physicalFieldNames).map((key) => [
+      key,
+      number(key, true, 1, key !== "axleCount"),
+    ])
   ) as AdminPhysicalSpecification
   let vehicle: AdminVehicleSpecification | null = null
   if (kind === "vehicle") {
     const numbers = Object.fromEntries(
       vehicleNumbers.map(([key, , nullable, minimum]) => [
         key,
-        number(key, nullable, minimum, key.startsWith("averageSpeed")),
+        number(key, nullable, minimum, true),
       ])
     ) as Pick<AdminVehicleSpecification, (typeof vehicleNumbers)[number][0]>
-    const canUseTrailer =
-      read("canUseTrailer") === "unknown"
-        ? null
-        : read("canUseTrailer") === "true"
+    const hasTrailer = read("hasTrailer") === "true"
     const defaultTrailerId =
       read("defaultTrailerId") === "none" ? null : read("defaultTrailerId")
-    if (defaultTrailerId && canUseTrailer !== true)
-      errors.canUseTrailer =
+    if (defaultTrailerId && !hasTrailer)
+      errors.hasTrailer =
         "Для назначенного прицепа выберите «Да» или снимите назначение."
     vehicle = {
       ...numbers,
@@ -216,13 +213,13 @@ function parseInput(
       manufacturer: read("manufacturer") || null,
       model: read("model") || null,
       isHgv: read("isHgv") === "unknown" ? null : read("isHgv") === "true",
-      canUseTrailer,
+      hasTrailer,
       defaultTrailerId,
       loadProfiles: vehicleLoadProfileTypes.flatMap((type) => {
-        const load = number(type)
+        const load = number(type, true, 1, true)
         return load === null
           ? []
-          : [{ configurationType: type, maxActualAxleLoadKg: load }]
+          : [{ configurationType: type, maxActualAxleLoadT: load }]
       }),
     }
   }
@@ -354,6 +351,30 @@ export function AdminCatalogResourceEditor({
     )
   }
 
+  function booleanFlag(key: string, label: string) {
+    const id = `catalog-resource-${key}`
+    return (
+      <Field data-invalid={Boolean(errors[key])} data-disabled={pending}>
+        <Field orientation="horizontal">
+          <Checkbox
+            id={id}
+            checked={values[key] === "true"}
+            disabled={pending}
+            aria-invalid={Boolean(errors[key])}
+            aria-describedby={errors[key] ? `${id}-error` : undefined}
+            onCheckedChange={(value) => setValue(key, String(value === true))}
+          />
+          <FieldContent>
+            <FieldLabel htmlFor={id}>{label}</FieldLabel>
+          </FieldContent>
+        </Field>
+        {errors[key] ? (
+          <FieldError id={`${id}-error`}>{errors[key]}</FieldError>
+        ) : null}
+      </Field>
+    )
+  }
+
   function nullableFlag(key: string, label: string) {
     const id = `catalog-resource-${key}`
     return (
@@ -455,7 +476,7 @@ export function AdminCatalogResourceEditor({
               </>
             ) : null}
             <FieldDescription>
-              Размеры вводятся в миллиметрах, массы и нагрузки — в килограммах.
+              Размеры вводятся в метрах, массы и нагрузки — в тоннах.
               Заполняйте по документам и фактическим замерам: неполные данные
               могут ограничить доступные маршруты.
             </FieldDescription>
@@ -467,7 +488,7 @@ export function AdminCatalogResourceEditor({
               >
                 <FieldGroup className="grid gap-4 sm:grid-cols-2">
                   {group.fields.map(([key, label]) =>
-                    inputField(key, label, true)
+                    inputField(key, label, true, key !== "axleCount")
                   )}
                 </FieldGroup>
               </SpecificationSection>
@@ -477,11 +498,11 @@ export function AdminCatalogResourceEditor({
                 <SpecificationSection
                   title="Прицеп"
                   invalid={
-                    Boolean(errors.canUseTrailer) ||
-                    vehicleKeys.slice(0, 2).some((key) => Boolean(errors[key]))
+                    Boolean(errors.hasTrailer) ||
+                    vehicleKeys.slice(0, 1).some((key) => Boolean(errors[key]))
                   }
                 >
-                  {nullableFlag("canUseTrailer", "Можно использовать прицеп")}
+                  {booleanFlag("hasTrailer", "Можно использовать прицеп")}
                   <Field data-disabled={pending}>
                     <FieldLabel htmlFor="catalog-resource-defaultTrailerId">
                       Прицеп по умолчанию
@@ -543,8 +564,8 @@ export function AdminCatalogResourceEditor({
                   ) : null}
                   <FieldGroup className="grid gap-4 sm:grid-cols-2">
                     {vehicleNumbers
-                      .slice(0, 2)
-                      .map(([key, label]) => inputField(key, label, true))}
+                      .slice(0, 1)
+                      .map(([key, label]) => inputField(key, label, true, true))}
                   </FieldGroup>
                 </SpecificationSection>
                 <SpecificationSection
@@ -560,14 +581,14 @@ export function AdminCatalogResourceEditor({
                   </FieldDescription>
                   <FieldGroup className="grid gap-4 sm:grid-cols-2">
                     {vehicleLoadProfileTypes.map((key) =>
-                      inputField(key, axleLabels[key], true)
+                      inputField(key, axleLabels[key], true, true)
                     )}
                   </FieldGroup>
                 </SpecificationSection>
                 <SpecificationSection
                   title="Расчёт маршрута"
                   invalid={vehicleKeys
-                    .slice(2)
+                    .slice(1)
                     .some((key) => Boolean(errors[key]))}
                 >
                   <FieldDescription>
@@ -577,13 +598,13 @@ export function AdminCatalogResourceEditor({
                   </FieldDescription>
                   <FieldGroup className="grid gap-4 sm:grid-cols-2">
                     {vehicleNumbers
-                      .slice(2)
+                      .slice(1)
                       .map(([key, label]) =>
                         inputField(
                           key,
                           label,
                           true,
-                          key.startsWith("averageSpeed")
+                          true
                         )
                       )}
                   </FieldGroup>

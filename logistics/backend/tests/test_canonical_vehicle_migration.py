@@ -6,6 +6,7 @@ import importlib
 import os
 import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from sqlalchemy import create_engine, text
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _PREVIOUS_REVISION = "20260907_0037"
-_REVISION = "20260908_0038"
+_REVISION = "20261020_0039"
 pytest_plugins = ("tests.migration_database",)
 
 
@@ -50,7 +51,7 @@ def _alembic(database_url: str, revision: str, *, check: bool = True) -> None:
 def test_canonical_vehicle_migration_backfills_exact_units(
     disposable_migration_database_url: str,
 ) -> None:
-    """V38 derives canonical tonnes/metres and preserves every legacy column."""
+    """V39 derives canonical tonnes/metres and preserves every legacy column."""
 
     database_url = disposable_migration_database_url
     models = importlib.import_module("app.models")
@@ -84,8 +85,19 @@ def test_canonical_vehicle_migration_backfills_exact_units(
             connection.execute(
                 text(
                     """
-                    INSERT INTO trailers (id, warehouse_id, name, registration_number)
-                    VALUES (:id, :warehouse_id, 'Migration trailer', 'MIG-01')
+                    INSERT INTO trailers (
+                        id, warehouse_id, name, registration_number, active,
+                        tare_weight_kg, max_gross_weight_kg, length_mm, width_mm,
+                        height_mm, platform_length_mm, platform_width_mm,
+                        platform_height_from_ground_mm, max_platform_payload_kg,
+                        payload_capacity_kg, axle_count, max_axle_load_kg,
+                        max_cargo_length_mm, max_cargo_width_mm,
+                        max_cargo_height_mm, max_cargo_weight_kg
+                    ) VALUES (
+                        :id, :warehouse_id, 'Migration trailer', 'MIG-01', true,
+                        3000, 10000, 8000, 2500, 1800, 6000, 2500, 900,
+                        6000, 7000, 2, 10000, 7000, 2600, 3000, 6000
+                    )
                     """
                 ),
                 {"id": trailer_id, "warehouse_id": warehouse_id},
@@ -98,13 +110,19 @@ def test_canonical_vehicle_migration_backfills_exact_units(
                         capacity, active, average_speed_city, average_speed_region,
                         notes, tare_weight_kg, max_gross_weight_kg, length_mm,
                         width_mm, height_mm, axle_count, max_axle_load_kg,
-                        payload_capacity_kg, can_use_trailer, default_trailer_id,
-                        combined_length_with_trailer_mm, coupling_length_mm
+                        payload_capacity_kg, platform_length_mm, platform_width_mm,
+                        platform_height_from_ground_mm, max_platform_payload_kg,
+                        max_cargo_length_mm, max_cargo_width_mm, max_cargo_height_mm,
+                        max_cargo_weight_kg, can_use_trailer, default_trailer_id,
+                        combined_length_with_trailer_mm, coupling_length_mm,
+                        height_safety_margin_mm, width_safety_margin_mm,
+                        weight_safety_margin_kg
                     ) VALUES (
                         :id, :warehouse_id, 'Migration truck', 'MIG-02',
                         2, true, 35, 65, '', 12000, 22000, 9200,
-                        2500, 3200, 3, 10000, 8000, true, :trailer_id,
-                        18500, 1300
+                        2500, 3200, 3, 10000, 8000, 6000, 2500, 1300, 7000,
+                        7000, 2600, 3000, 6000, true, :trailer_id,
+                        18500, 1300, 100, 50, 200
                     )
                     """
                 ),
@@ -133,12 +151,32 @@ def test_canonical_vehicle_migration_backfills_exact_units(
                     """
                     SELECT tare_weight_t, max_gross_weight_t, axle_load_t,
                            payload_capacity_t, length_m, width_m, height_m,
+                           platform_length_m, platform_height_from_ground_m,
+                           max_platform_payload_t, max_cargo_length_m,
+                           max_cargo_width_m, max_cargo_height_m,
+                           max_cargo_weight_t, coupling_length_m,
+                           height_safety_margin_m, width_safety_margin_m,
+                           weight_safety_margin_t,
                            has_trailer, can_use_trailer, tare_weight_kg, length_mm,
-                           platform_length_mm
+                           platform_width_mm
                     FROM vehicles WHERE id = :id
                     """
                 ),
                 {"id": vehicle_id},
+            ).one()
+            trailer = connection.execute(
+                text(
+                    """
+                    SELECT tare_weight_t, max_gross_weight_t, axle_load_t,
+                           payload_capacity_t, length_m, width_m, height_m,
+                           platform_length_m, platform_height_from_ground_m,
+                           max_platform_payload_t, max_cargo_length_m,
+                           max_cargo_width_m, max_cargo_height_m,
+                           max_cargo_weight_t, platform_width_mm
+                    FROM trailers WHERE id = :id
+                    """
+                ),
+                {"id": trailer_id},
             ).one()
             profile = connection.execute(
                 text(
@@ -154,6 +192,12 @@ def test_canonical_vehicle_migration_backfills_exact_units(
             name: str(value)
             for name, value in vehicle._mapping.items()
             if name.endswith(("_t", "_m"))
+            and name
+            not in {
+                "height_safety_margin_m",
+                "width_safety_margin_m",
+                "weight_safety_margin_t",
+            }
         }
         assert canonical == {
             "tare_weight_t": "12.000",
@@ -163,13 +207,28 @@ def test_canonical_vehicle_migration_backfills_exact_units(
             "length_m": "9.200",
             "width_m": "2.500",
             "height_m": "3.200",
+            "platform_length_m": "6.000",
+            "platform_height_from_ground_m": "1.300",
+            "max_platform_payload_t": "7.000",
+            "max_cargo_length_m": "7.000",
+            "max_cargo_width_m": "2.600",
+            "max_cargo_height_m": "3.000",
+            "max_cargo_weight_t": "6.000",
+            "coupling_length_m": "1.300",
         }
         assert vehicle.has_trailer is True
         assert vehicle.can_use_trailer is True
+        assert str(vehicle.height_safety_margin_m) == "0.100"
+        assert str(vehicle.width_safety_margin_m) == "0.050"
+        assert str(vehicle.weight_safety_margin_t) == "0.200"
         # The legacy projection is preserved unchanged for old consumers.
         assert vehicle.tare_weight_kg == 12000
         assert vehicle.length_mm == 9200
-        assert vehicle.platform_length_mm is None
+        assert vehicle.platform_width_mm == 2500
+        assert trailer.tare_weight_t == Decimal("3.000")
+        assert trailer.length_m == Decimal("8.000")
+        assert trailer.max_cargo_weight_t == Decimal("6.000")
+        assert trailer.platform_width_mm == 2500
         assert str(profile.max_actual_axle_load_t) == "7.800"
         assert profile.max_actual_axle_load_kg == 7800
     finally:

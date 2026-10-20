@@ -185,7 +185,7 @@ async def test_day_plan_appends_routed_support_shift_without_repositioning(
     if failed_trailer:
         trailer_id = uuid4()
         support_vehicle.capacity = 2
-        support_vehicle.can_use_trailer = True
+        support_vehicle.has_trailer = True
         support_vehicle.default_trailer = Trailer(id=trailer_id, active=True)
         original = replace(
             original,

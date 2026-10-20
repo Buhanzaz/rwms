@@ -81,35 +81,34 @@ async def _confirmed_plan(
             warehouse_id=warehouse.id,
             name="Test trailer",
             registration_number=str(uuid4()),
-            tare_weight_kg=3_000,
-            max_gross_weight_kg=10_000,
-            length_mm=7_000,
-            width_mm=2_500,
-            height_mm=1_600,
-            platform_length_mm=6_500,
-            platform_width_mm=2_500,
-            platform_height_from_ground_mm=900,
-            max_platform_payload_kg=5_000,
-            payload_capacity_kg=5_000,
+            tare_weight_t=Decimal("3"),
+            max_gross_weight_t=Decimal("10"),
+            length_m=Decimal("7"),
+            width_m=Decimal("2.5"),
+            height_m=Decimal("1.6"),
+            platform_length_m=Decimal("6.5"),
+            platform_height_from_ground_m=Decimal("0.9"),
+            max_platform_payload_t=Decimal("5"),
+            payload_capacity_t=Decimal("5"),
             axle_count=2,
-            max_axle_load_kg=8_000,
-            max_cargo_length_mm=6_500,
-            max_cargo_width_mm=2_500,
-            max_cargo_height_mm=2_600,
-            max_cargo_weight_kg=5_000,
+            axle_load_t=Decimal("8"),
+            max_cargo_length_m=Decimal("6.5"),
+            max_cargo_width_m=Decimal("2.5"),
+            max_cargo_height_m=Decimal("2.6"),
+            max_cargo_weight_t=Decimal("5"),
         )
         session.add(trailer)
         await session.flush()
         vehicle.capacity = 2
-        vehicle.can_use_trailer = True
+        vehicle.has_trailer = True
         vehicle.default_trailer = trailer
-        vehicle.combined_length_with_trailer_mm = 15_000
+        vehicle.coupling_length_m = Decimal("1.3")
         session.add_all(
             [
                 VehicleLoadProfile(
                     vehicle_id=vehicle.id,
                     configuration_type=configuration,
-                    max_actual_axle_load_kg=7_500,
+                    max_actual_axle_load_t=Decimal("7.5"),
                 )
                 for configuration in (
                     "EMPTY_COMBINATION",
@@ -192,11 +191,9 @@ async def test_post_confirmation_change_prevents_owner_post(
     if change == "disabled_vehicle":
         plan.cycles[0].driver_shift.vehicle.active = False
     elif change == "truck_height":
-        # The canonical metre value is authoritative; the legacy millimetre
-        # projection is kept in sync by every catalogue command.
+        # The canonical metre value is authoritative.
         vehicle = plan.cycles[0].driver_shift.vehicle
         vehicle.height_m = vehicle.height_m + Decimal("0.1")
-        vehicle.height_mm = vehicle.height_mm + 100
     elif change == "forbidden":
         zone = _zone(plan.warehouse_id, PolicyZoneKind.NO_TRAILER, "Changed restriction")
         db_session.add(zone)

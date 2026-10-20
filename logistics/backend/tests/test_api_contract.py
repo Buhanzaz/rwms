@@ -131,12 +131,22 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
         "length_m",
         "width_m",
         "height_m",
+        "platform_length_m",
+        "platform_height_from_ground_m",
+        "max_platform_payload_t",
+        "max_cargo_length_m",
+        "max_cargo_width_m",
+        "max_cargo_height_m",
+        "max_cargo_weight_t",
+        "coupling_length_m",
+        "height_safety_margin_m",
+        "width_safety_margin_m",
+        "weight_safety_margin_t",
     }.issubset(vehicle["properties"])
     assert "has_trailer" in document["components"]["schemas"]["VehicleCreate"]["properties"]
-    profile = document["components"]["schemas"]["VehicleLoadProfileCreate-Output"]
+    profile = document["components"]["schemas"]["VehicleLoadProfileRead"]
     assert set(profile["properties"]) == {
         "configuration_type",
-        "max_actual_axle_load_kg",
         "max_actual_axle_load_t",
     }
     planning_day = document["components"]["schemas"]["PlanningDayStatusRead"]

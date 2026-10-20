@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type RequestRescheduleInput, type RequestRescheduleOptionsRead } from '../src/api/client';
 import { UnassignedDeliveryRescheduleDialog } from '../src/features/planning/UnassignedDeliveryRescheduleDialog';
 import { requestFixture } from './fixtures';
@@ -70,6 +70,15 @@ async function selectTargetDate(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: 'Новая дата доставки' }));
   await user.click(await screen.findByRole('button', { name: /^среда, 2 сентября 2026 г\.$/u }));
 }
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-01T12:00:00+03:00'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('unassigned delivery reschedule', () => {
   it('calculates all slots for the chosen date and submits only the selected fresh slot fences', async () => {

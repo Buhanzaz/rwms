@@ -3,22 +3,21 @@ import { bearerRequest, invalidApiResponseError } from "@/lib/api-client"
 export type AdminCatalogKind = "vehicle" | "trailer"
 
 export const physicalFieldNames = {
-  tareWeightKg: "tare_weight_kg",
-  maxGrossWeightKg: "max_gross_weight_kg",
-  lengthMm: "length_mm",
-  widthMm: "width_mm",
-  heightMm: "height_mm",
+  tareWeightT: "tare_weight_t",
+  maxGrossWeightT: "max_gross_weight_t",
+  lengthM: "length_m",
+  widthM: "width_m",
+  heightM: "height_m",
   axleCount: "axle_count",
-  maxAxleLoadKg: "max_axle_load_kg",
-  payloadCapacityKg: "payload_capacity_kg",
-  platformLengthMm: "platform_length_mm",
-  platformWidthMm: "platform_width_mm",
-  platformHeightFromGroundMm: "platform_height_from_ground_mm",
-  maxPlatformPayloadKg: "max_platform_payload_kg",
-  maxCargoLengthMm: "max_cargo_length_mm",
-  maxCargoWidthMm: "max_cargo_width_mm",
-  maxCargoHeightMm: "max_cargo_height_mm",
-  maxCargoWeightKg: "max_cargo_weight_kg",
+  axleLoadT: "axle_load_t",
+  payloadCapacityT: "payload_capacity_t",
+  platformLengthM: "platform_length_m",
+  platformHeightFromGroundM: "platform_height_from_ground_m",
+  maxPlatformPayloadT: "max_platform_payload_t",
+  maxCargoLengthM: "max_cargo_length_m",
+  maxCargoWidthM: "max_cargo_width_m",
+  maxCargoHeightM: "max_cargo_height_m",
+  maxCargoWeightT: "max_cargo_weight_t",
 } as const
 
 export type AdminPhysicalSpecification = Record<
@@ -38,7 +37,7 @@ export const vehicleLoadProfileTypes = [
 export type VehicleLoadProfileType = (typeof vehicleLoadProfileTypes)[number]
 export type AdminVehicleLoadProfile = {
   configurationType: VehicleLoadProfileType
-  maxActualAxleLoadKg: number
+  maxActualAxleLoadT: number
 }
 
 export type AdminVehicleSpecification = {
@@ -46,13 +45,12 @@ export type AdminVehicleSpecification = {
   manufacturer: string | null
   model: string | null
   isHgv: boolean | null
-  canUseTrailer: boolean | null
+  hasTrailer: boolean
   defaultTrailerId: string | null
-  combinedLengthWithTrailerMm: number | null
-  couplingLengthMm: number | null
-  heightSafetyMarginMm: number
-  widthSafetyMarginMm: number
-  weightSafetyMarginKg: number
+  couplingLengthM: number | null
+  heightSafetyMarginM: number
+  widthSafetyMarginM: number
+  weightSafetyMarginT: number
   averageSpeedCity: number
   averageSpeedRegion: number
   loadProfiles: AdminVehicleLoadProfile[]
@@ -70,13 +68,12 @@ export function defaultAdminVehicleSpecification(): AdminVehicleSpecification {
     manufacturer: null,
     model: null,
     isHgv: null,
-    canUseTrailer: null,
+    hasTrailer: false,
     defaultTrailerId: null,
-    combinedLengthWithTrailerMm: null,
-    couplingLengthMm: null,
-    heightSafetyMarginMm: 0,
-    widthSafetyMarginMm: 0,
-    weightSafetyMarginKg: 0,
+    couplingLengthM: null,
+    heightSafetyMarginM: 0,
+    widthSafetyMarginM: 0,
+    weightSafetyMarginT: 0,
     averageSpeedCity: 35,
     averageSpeedRegion: 65,
     loadProfiles: [],
@@ -125,15 +122,26 @@ function nullablePositiveInteger(value: unknown): number | null {
   return value === null ? null : positiveInteger(value)
 }
 
-function nonNegativeInteger(value: unknown): number {
-  if (value === 0) return 0
-  return positiveInteger(value)
-}
-
 function positiveNumber(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     throw new Error("Expected a positive number")
   }
+  return value
+}
+
+function nonNegativeNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error("Expected a non-negative number")
+  }
+  return value
+}
+
+function nullablePositiveNumber(value: unknown): number | null {
+  return value === null ? null : positiveNumber(value)
+}
+
+function booleanValue(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("Expected a boolean")
   return value
 }
 
@@ -155,7 +163,9 @@ function parsePhysical(
   return Object.fromEntries(
     Object.entries(physicalFieldNames).map(([key, wireName]) => [
       key,
-      nullablePositiveInteger(value[wireName]),
+      key === "axleCount"
+        ? nullablePositiveInteger(value[wireName])
+        : nullablePositiveNumber(value[wireName]),
     ])
   ) as AdminPhysicalSpecification
 }
@@ -166,7 +176,8 @@ function parseVehicle(
   const trailerId = nullableString(value.default_trailer_id)
   if (trailerId !== null && !UUID_PATTERN.test(trailerId))
     throw new Error("Invalid trailer UUID")
-  if (trailerId !== null && value.can_use_trailer !== true)
+  const hasTrailer = booleanValue(value.has_trailer)
+  if (trailerId !== null && hasTrailer !== true)
     throw new Error("A default trailer requires confirmed trailer capability")
   if (!Array.isArray(value.load_profiles))
     throw new Error("Missing vehicle axle-load profiles")
@@ -184,7 +195,7 @@ function parseVehicle(
       seen.add(profile.configuration_type as string)
       return {
         configurationType: profile.configuration_type as VehicleLoadProfileType,
-        maxActualAxleLoadKg: positiveInteger(profile.max_actual_axle_load_kg),
+        maxActualAxleLoadT: positiveNumber(profile.max_actual_axle_load_t),
       }
     }
   )
@@ -193,15 +204,12 @@ function parseVehicle(
     manufacturer: nullableString(value.manufacturer),
     model: nullableString(value.model),
     isHgv: nullableBoolean(value.is_hgv),
-    canUseTrailer: nullableBoolean(value.can_use_trailer),
+    hasTrailer,
     defaultTrailerId: trailerId,
-    combinedLengthWithTrailerMm: nullablePositiveInteger(
-      value.combined_length_with_trailer_mm
-    ),
-    couplingLengthMm: nullablePositiveInteger(value.coupling_length_mm),
-    heightSafetyMarginMm: nonNegativeInteger(value.height_safety_margin_mm),
-    widthSafetyMarginMm: nonNegativeInteger(value.width_safety_margin_mm),
-    weightSafetyMarginKg: nonNegativeInteger(value.weight_safety_margin_kg),
+    couplingLengthM: nullablePositiveNumber(value.coupling_length_m),
+    heightSafetyMarginM: nonNegativeNumber(value.height_safety_margin_m),
+    widthSafetyMarginM: nonNegativeNumber(value.width_safety_margin_m),
+    weightSafetyMarginT: nonNegativeNumber(value.weight_safety_margin_t),
     averageSpeedCity: positiveNumber(value.average_speed_city),
     averageSpeedRegion: positiveNumber(value.average_speed_region),
     loadProfiles,
@@ -294,7 +302,7 @@ function validateResourceInput(
         ...vehiclePayload(input.vehicle),
         load_profiles: profilePayload(input.vehicle),
       })
-      if (vehicle.defaultTrailerId !== null && vehicle.canUseTrailer !== true) {
+      if (vehicle.defaultTrailerId !== null && !vehicle.hasTrailer) {
         throw new Error("Trailer capability is not confirmed")
       }
     } else if (input.vehicle !== null || input.capacity !== null) {
@@ -302,7 +310,7 @@ function validateResourceInput(
     }
   } catch {
     throw new Error(
-      "Проверьте характеристики: размеры и массы — положительные целые числа, запасы — неотрицательные. Для прицепа подтвердите возможность буксировки."
+      "Проверьте характеристики: размеры и массы — положительные числа, запасы — неотрицательные. Для прицепа подтвердите возможность буксировки."
     )
   }
 }
@@ -328,13 +336,12 @@ function vehiclePayload(vehicle: AdminVehicleSpecification) {
     manufacturer: vehicle.manufacturer?.trim() || null,
     model: vehicle.model?.trim() || null,
     is_hgv: vehicle.isHgv,
-    can_use_trailer: vehicle.canUseTrailer,
+    has_trailer: vehicle.hasTrailer,
     default_trailer_id: vehicle.defaultTrailerId,
-    combined_length_with_trailer_mm: vehicle.combinedLengthWithTrailerMm,
-    coupling_length_mm: vehicle.couplingLengthMm,
-    height_safety_margin_mm: vehicle.heightSafetyMarginMm,
-    width_safety_margin_mm: vehicle.widthSafetyMarginMm,
-    weight_safety_margin_kg: vehicle.weightSafetyMarginKg,
+    coupling_length_m: vehicle.couplingLengthM,
+    height_safety_margin_m: vehicle.heightSafetyMarginM,
+    width_safety_margin_m: vehicle.widthSafetyMarginM,
+    weight_safety_margin_t: vehicle.weightSafetyMarginT,
     average_speed_city: vehicle.averageSpeedCity,
     average_speed_region: vehicle.averageSpeedRegion,
   }
@@ -343,7 +350,7 @@ function vehiclePayload(vehicle: AdminVehicleSpecification) {
 function profilePayload(vehicle: AdminVehicleSpecification) {
   return vehicle.loadProfiles.map((profile) => ({
     configuration_type: profile.configurationType,
-    max_actual_axle_load_kg: profile.maxActualAxleLoadKg,
+    max_actual_axle_load_t: profile.maxActualAxleLoadT,
   }))
 }
 

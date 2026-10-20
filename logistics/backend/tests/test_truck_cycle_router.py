@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from itertools import pairwise
 from zoneinfo import ZoneInfo
 
@@ -54,7 +55,10 @@ START = datetime(2026, 8, 25, 8, tzinfo=UTC)
 DEPOT = GeoPoint(lon=37.4, lat=55.75)
 FIRST = GeoPoint(lon=37.5, lat=55.75)
 SECOND = GeoPoint(lon=37.6, lat=55.75)
-CARGO = CargoDimensions(length_mm=6_000, width_mm=2_400, height_mm=2_400, weight_kg=2_500)
+CARGO = CargoDimensions(
+    length_m=Decimal("6"), width_m=Decimal("2.4"), height_m=Decimal("2.4"),
+    weight_t=Decimal("2.5"),
+)
 
 
 class RecordingTruckProvider:
@@ -144,49 +148,48 @@ def _vehicle() -> Vehicle:
 
     trailer = TrailerSpec(
         trailer_id="trailer-1",
-        tare_weight_kg=3_500,
-        max_gross_weight_kg=10_000,
-        length_mm=8_000,
-        width_mm=2_500,
-        height_mm=1_600,
-        platform_length_mm=6_500,
-        platform_width_mm=2_500,
-        platform_height_from_ground_mm=900,
-        max_platform_payload_kg=5_000,
-        payload_capacity_kg=5_000,
+        tare_weight_t=Decimal("3.5"),
+        max_gross_weight_t=Decimal("10"),
+        length_m=Decimal("8"),
+        width_m=Decimal("2.5"),
+        height_m=Decimal("1.6"),
+        platform_length_m=Decimal("6.5"),
+        platform_height_from_ground_m=Decimal("0.9"),
+        max_platform_payload_t=Decimal("5"),
+        payload_capacity_t=Decimal("5"),
         axle_count=2,
-        max_axle_load_kg=8_000,
-        max_cargo_length_mm=6_500,
-        max_cargo_width_mm=2_500,
-        max_cargo_height_mm=2_600,
-        max_cargo_weight_kg=5_000,
+        axle_load_t=Decimal("8"),
+        max_cargo_length_m=Decimal("6.5"),
+        max_cargo_width_m=Decimal("2.5"),
+        max_cargo_height_m=Decimal("2.6"),
+        max_cargo_weight_t=Decimal("5"),
     )
     spec = VehicleRoutingSpec(
         vehicle_id="vehicle-1",
         is_hgv=True,
-        tare_weight_kg=9_000,
-        max_gross_weight_kg=18_000,
-        length_mm=9_200,
-        width_mm=2_500,
-        height_mm=3_200,
+        tare_weight_t=Decimal("9"),
+        max_gross_weight_t=Decimal("18"),
+        length_m=Decimal("9.2"),
+        width_m=Decimal("2.5"),
+        height_m=Decimal("3.2"),
         axle_count=2,
-        max_axle_load_kg=9_000,
-        payload_capacity_kg=6_000,
-        platform_length_mm=6_500,
-        platform_width_mm=2_500,
-        platform_height_from_ground_mm=1_200,
-        max_platform_payload_kg=6_000,
-        max_cargo_length_mm=6_500,
-        max_cargo_width_mm=2_500,
-        max_cargo_height_mm=2_600,
-        max_cargo_weight_kg=5_000,
-        can_use_trailer=True,
-        combined_length_with_trailer_mm=18_500,
-        coupling_length_mm=1_300,
-        height_safety_margin_mm=100,
+        axle_load_t=Decimal("9"),
+        payload_capacity_t=Decimal("6"),
+        platform_length_m=Decimal("6.5"),
+        platform_height_from_ground_m=Decimal("1.2"),
+        max_platform_payload_t=Decimal("6"),
+        max_cargo_length_m=Decimal("6.5"),
+        max_cargo_width_m=Decimal("2.5"),
+        max_cargo_height_m=Decimal("2.6"),
+        max_cargo_weight_t=Decimal("5"),
+        has_trailer=True,
+        coupling_length_m=Decimal("1.3"),
+        height_safety_margin_m=Decimal("0.1"),
     )
     axle_profiles = tuple(
-        OperationalAxleLoadProfile(configuration_type=value, max_actual_axle_load_kg=7_500)
+        OperationalAxleLoadProfile(
+            configuration_type=value, max_actual_axle_load_t=Decimal("7.5")
+        )
         for value in TruckConfigurationType
     )
     return Vehicle(
@@ -781,15 +784,18 @@ async def test_saved_truck_proof_rejects_changed_routing_inputs(change: str) -> 
     if change == "vehicle":
         assert vehicle.routing_spec is not None
         vehicle = replace(vehicle, routing_spec=replace(
-            vehicle.routing_spec, height_safety_margin_mm=250,
+            vehicle.routing_spec, height_safety_margin_m=Decimal("0.25"),
         ))
     elif change == "trailer":
         assert vehicle.default_trailer is not None
         vehicle = replace(vehicle, default_trailer=replace(
-            vehicle.default_trailer, tare_weight_kg=3_600,
+            vehicle.default_trailer, tare_weight_t=Decimal("3.6"),
         ))
     elif change == "cargo":
-        tasks = (replace(tasks[0], cargo_dimensions=replace(CARGO, weight_kg=2_600)), tasks[1])
+        tasks = (
+            replace(tasks[0], cargo_dimensions=replace(CARGO, weight_t=Decimal("2.6"))),
+            tasks[1],
+        )
     elif change == "graph":
         router = ExactTruckCycleRouter(
             provider, provider_name="valhalla", osm_data_version="new-graph", now=lambda: START,
