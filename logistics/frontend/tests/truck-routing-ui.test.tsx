@@ -47,7 +47,7 @@ function setNumber(label: string, value: number): void {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('truck vehicle editor', () => {
-  it('keeps the vehicle form business-oriented and converts visible metric units for the API', async () => {
+  it('keeps the vehicle form business-oriented and sends canonical metric units to the API', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
     render(<CatalogDialog busy={false} onClose={() => undefined} onSubmit={submit} />);
@@ -55,10 +55,15 @@ describe('truck vehicle editor', () => {
     await user.type(screen.getByLabelText('Название'), 'МАЗ 1');
     await user.type(screen.getByLabelText('Марка авто'), 'МАЗ');
     await user.type(screen.getByLabelText('Госномер'), 'А123БВ');
+    setNumber('Фактическая масса, т', 4.2);
+    setNumber('Разрешённая масса, т', 9.5);
+    setNumber('Нагрузка на ось, т', 3.5);
     setNumber('Грузоподъёмность, т', 8);
-    setNumber('Габариты (длина), м', 9);
-    setNumber('Габариты (ширина), м', 2.5);
-    setNumber('Габариты (высота), м', 3);
+    setNumber('Длина, м', 9);
+    setNumber('Ширина, м', 2.5);
+    setNumber('Высота, м', 3);
+    setNumber('Точная полная длина автопоезда, м', 12.5);
+    setNumber('Запас по массе, т', 0.25);
 
     expect(screen.queryByLabelText('Основной прицеп')).not.toBeInTheDocument();
     expect(screen.queryByTestId('one-cargo-preview')).not.toBeInTheDocument();
@@ -72,12 +77,20 @@ describe('truck vehicle editor', () => {
       manufacturer: 'МАЗ',
       registration_number: 'А123БВ',
       capacity: 1,
-      payload_capacity_kg: 8000,
-      length_mm: 9000,
-      width_mm: 2500,
-      height_mm: 3000,
+      tare_weight_t: 4.2,
+      max_gross_weight_t: 9.5,
+      axle_load_t: 3.5,
+      payload_capacity_t: 8,
+      length_m: 9,
+      width_m: 2.5,
+      height_m: 3,
+      has_trailer: false,
+      combined_length_with_trailer_mm: 12_500,
+      weight_safety_margin_kg: 250,
       default_trailer_id: null,
     });
+    expect(input).not.toHaveProperty('payload_capacity_kg');
+    expect(input).not.toHaveProperty('length_mm');
     expect(input?.load_profiles).toEqual([]);
   });
 
@@ -87,14 +100,18 @@ describe('truck vehicle editor', () => {
     const vehicle = {
       ...workspaceFixture().vehicles[0]!,
       manufacturer: 'КАМАЗ',
-      payload_capacity_kg: 10_000,
-      length_mm: 7_200,
-      width_mm: 2_500,
-      height_mm: 3_200,
-      can_use_trailer: true,
-      default_trailer_id: 'trailer-1',
+      payload_capacity_t: 6.5,
+      length_m: 7_200 / 1_000,
       axle_count: 3,
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT' as const, max_actual_axle_load_kg: 8_700 }],
+      has_trailer: true,
+      default_trailer_id: 'trailer-1',
+      platform_length_mm: 6_000,
+      max_cargo_length_mm: 6_500,
+      combined_length_with_trailer_mm: 12_000,
+      coupling_length_mm: 900,
+      height_safety_margin_mm: 100,
+      weight_safety_margin_kg: 250,
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT' as const, max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
     };
     render(<CatalogDialog value={vehicle} busy={false} onClose={() => undefined} onSubmit={submit} />);
 
@@ -105,11 +122,114 @@ describe('truck vehicle editor', () => {
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(submit.mock.calls[0]?.[0]).toMatchObject({
       name: 'КАМАЗ 65115',
-      can_use_trailer: true,
+      tare_weight_t: 4.2,
+      max_gross_weight_t: 9.5,
+      axle_load_t: 3.5,
+      payload_capacity_t: 6.5,
+      length_m: 7.2,
+      width_m: 2.5,
+      height_m: 3.1,
+      has_trailer: true,
       default_trailer_id: 'trailer-1',
       axle_count: 3,
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8_700 }],
+      platform_length_mm: 6_000,
+      max_cargo_length_mm: 6_500,
+      combined_length_with_trailer_mm: 12_000,
+      coupling_length_mm: 900,
+      height_safety_margin_mm: 100,
+      weight_safety_margin_kg: 250,
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
     });
+  });
+
+  it('converts an edited vehicle between operator units and canonical API numbers while preserving routing data', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
+    const vehicle = {
+      ...workspaceFixture().vehicles[0]!,
+      has_trailer: true,
+      default_trailer_id: 'trailer-1',
+      platform_length_mm: 6_000,
+      max_cargo_length_mm: 6_500,
+      max_cargo_weight_kg: 2_500,
+      combined_length_with_trailer_mm: 12_000,
+      coupling_length_mm: 900,
+      height_safety_margin_mm: 100,
+      width_safety_margin_mm: 50,
+      weight_safety_margin_kg: 250,
+      load_profiles: [{ configuration_type: 'EMPTY_TRUCK' as const, max_actual_axle_load_kg: 7_500 }],
+    };
+    render(<CatalogDialog value={vehicle} busy={false} onClose={() => undefined} onSubmit={submit} />);
+
+    expect(screen.getByLabelText('Длина платформы машины, м')).toHaveValue(6);
+    expect(screen.getByLabelText('Запас по массе, т')).toHaveValue(0.25);
+    setNumber('Фактическая масса, т', 4.125);
+    setNumber('Грузоподъёмность, т', 6.75);
+    setNumber('Длина, м', 9.25);
+    setNumber('Длина платформы машины, м', 6.4);
+    setNumber('Максимальная масса груза на машине, т', 2.25);
+    setNumber('Запас по высоте, м', 0.2);
+
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    const input = submit.mock.calls[0]?.[0];
+    expect(input).toMatchObject({
+      tare_weight_t: 4.125,
+      max_gross_weight_t: 9.5,
+      axle_load_t: 3.5,
+      payload_capacity_t: 6.75,
+      length_m: 9.25,
+      width_m: 2.5,
+      height_m: 3.1,
+      has_trailer: true,
+      default_trailer_id: 'trailer-1',
+      platform_length_mm: 6_400,
+      max_cargo_length_mm: 6_500,
+      max_cargo_weight_kg: 2_250,
+      combined_length_with_trailer_mm: 12_000,
+      coupling_length_mm: 900,
+      height_safety_margin_mm: 200,
+      width_safety_margin_mm: 50,
+      weight_safety_margin_kg: 250,
+      load_profiles: [{ configuration_type: 'EMPTY_TRUCK', max_actual_axle_load_t: 7.5, max_actual_axle_load_kg: 7_500 }],
+    });
+    expect(input).not.toHaveProperty('payload_capacity_kg');
+    expect(input).not.toHaveProperty('tare_weight_kg');
+    expect(input).not.toHaveProperty('length_mm');
+  });
+
+  it('round-trips the Есть прицеп selection for vehicles without and with a trailer', async () => {
+    const user = userEvent.setup();
+    const withoutTrailer = {
+      ...workspaceFixture().vehicles[0]!,
+      has_trailer: false,
+      can_use_trailer: false,
+      default_trailer_id: null,
+    };
+    const firstSubmit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
+    const first = render(<CatalogDialog value={withoutTrailer} busy={false} onClose={() => undefined} onSubmit={firstSubmit} />);
+
+    expect(screen.getByLabelText('Есть прицеп')).toHaveValue('false');
+    await user.selectOptions(screen.getByLabelText('Есть прицеп'), 'true');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(firstSubmit).toHaveBeenCalledOnce());
+    expect(firstSubmit.mock.calls[0]?.[0]).toMatchObject({ has_trailer: true, default_trailer_id: null });
+    first.unmount();
+
+    const withTrailer = {
+      ...workspaceFixture().vehicles[0]!,
+      has_trailer: true,
+      can_use_trailer: true,
+      default_trailer_id: 'trailer-9',
+    };
+    const secondSubmit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
+    render(<CatalogDialog value={withTrailer} busy={false} onClose={() => undefined} onSubmit={secondSubmit} />);
+
+    expect(screen.getByLabelText('Есть прицеп')).toHaveValue('true');
+    await user.selectOptions(screen.getByLabelText('Есть прицеп'), 'false');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(secondSubmit).toHaveBeenCalledOnce());
+    expect(secondSubmit.mock.calls[0]?.[0]).toMatchObject({ has_trailer: false, default_trailer_id: null });
   });
 
   it('creates a simple trailer record without manufacturing routing properties', async () => {
@@ -138,8 +258,10 @@ describe('truck vehicle editor', () => {
       vehicle: {
         name: 'МАЗ', registration_number: 'А123БВ', capacity: 2, active: true,
         average_speed_city: 30, average_speed_region: 60, notes: '',
+        tare_weight_t: 4.2, max_gross_weight_t: 9.5, axle_load_t: 3.5, payload_capacity_t: 6.75,
+        length_m: 9.25, width_m: 2.5, height_m: 3.1, has_trailer: true,
       },
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 }],
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
     }, 'vehicle-intent');
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/trailers');
@@ -148,8 +270,14 @@ describe('truck vehicle editor', () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses/warehouse-1/vehicle-configurations');
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Idempotency-Key')).toBe('vehicle-intent');
     expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toMatchObject({
-      vehicle: { name: 'МАЗ', registration_number: 'А123БВ' },
-      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 }],
+      vehicle: {
+        name: 'МАЗ',
+        registration_number: 'А123БВ',
+        payload_capacity_t: 6.75,
+        length_m: 9.25,
+        has_trailer: true,
+      },
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_t: 8.7, max_actual_axle_load_kg: 8_700 }],
     });
   });
 });

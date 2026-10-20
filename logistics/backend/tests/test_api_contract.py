@@ -122,10 +122,22 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     )
     vehicle = document["components"]["schemas"]["VehicleRead"]
     assert "load_profiles" in vehicle["required"]
-    profile = document["components"]["schemas"]["VehicleLoadProfileCreate"]
+    assert "has_trailer" in vehicle["required"]
+    assert {
+        "tare_weight_t",
+        "max_gross_weight_t",
+        "axle_load_t",
+        "payload_capacity_t",
+        "length_m",
+        "width_m",
+        "height_m",
+    }.issubset(vehicle["properties"])
+    assert "has_trailer" in document["components"]["schemas"]["VehicleCreate"]["properties"]
+    profile = document["components"]["schemas"]["VehicleLoadProfileCreate-Output"]
     assert set(profile["properties"]) == {
         "configuration_type",
         "max_actual_axle_load_kg",
+        "max_actual_axle_load_t",
     }
     planning_day = document["components"]["schemas"]["PlanningDayStatusRead"]
     assert set(planning_day["required"]) == {

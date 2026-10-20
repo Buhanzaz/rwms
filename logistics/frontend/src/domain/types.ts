@@ -179,6 +179,16 @@ export interface Vehicle {
   manufacturer?: string | null;
   model?: string | null;
   is_hgv?: boolean | null;
+  /** Canonical physical model: masses in tonnes, dimensions in metres. */
+  tare_weight_t?: number | null;
+  max_gross_weight_t?: number | null;
+  axle_load_t?: number | null;
+  payload_capacity_t?: number | null;
+  length_m?: number | null;
+  width_m?: number | null;
+  height_m?: number | null;
+  has_trailer?: boolean | null;
+  /** Deprecated legacy projection kept for one transition period. */
   tare_weight_kg?: number | null;
   max_gross_weight_kg?: number | null;
   length_mm?: number | null;
@@ -241,6 +251,9 @@ export type VehicleLoadConfigurationType =
 
 export interface VehicleLoadProfile {
   configuration_type: VehicleLoadConfigurationType;
+  /** Canonical measured peak axle load in tonnes. */
+  max_actual_axle_load_t?: number | null;
+  /** Deprecated legacy projection kept for one transition period. */
   max_actual_axle_load_kg: number;
 }
 

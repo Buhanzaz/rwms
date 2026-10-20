@@ -339,6 +339,18 @@ acceptance boundary. Ordinary delivery polygons and request-to-zone ownership
 do not return; exceptional access/price policies are separate versioned,
 warehouse-owned MultiPolygons and never extend normal delivery reach.
 
+The vehicle physical model is canonical: masses (`tare_weight_t`,
+`max_gross_weight_t`, `axle_load_t`, `payload_capacity_t`) are in tonnes,
+dimensions (`length_m`, `width_m`, `height_m`) are in metres and trailer
+availability is one `has_trailer` boolean. Values persist as `NUMERIC(12, 3)`,
+so the former kilogram/millimetre precision is retained exactly. One domain
+module, [`vehicle.py`](backend/app/domain/vehicle.py), normalizes units,
+validates contradictions and produces the exact integer projection used by
+Valhalla truck routing; calculations never mix units. The deprecated
+kilogram/millimetre fields and the routing-extension platform/coupled-length
+fields remain accepted and returned for backward compatibility. Additive Alembic
+migration `20260908_0038` backfills existing rows and drops no legacy data.
+
 ## Logistics rules
 
 - Vehicle capacity defaults to two cabins and every stop preserves

@@ -105,8 +105,6 @@ from app.routing import (
 )
 from app.routing.truck_profile import (
     CargoDimensions,
-    OperationalAxleLoadProfile,
-    TruckConfigurationType,
 )
 from app.schemas.domain import (
     CyclePatch,
@@ -136,6 +134,7 @@ from app.simulation import DelayOverride, DriverUnavailableOverride, propagate_d
 from app.slot_planning.configuration import (
     effective_vehicle_cabin_capacity,
     trailer_routing_spec,
+    vehicle_axle_profiles,
     vehicle_equipment_snapshot,
     vehicle_has_available_trailer,
     vehicle_routing_spec,
@@ -2455,6 +2454,11 @@ class RuntimePlannerFacade:
     ) -> Vehicle:
         """Translate one active-or-inactive catalog vehicle without changing ownership."""
 
+        available_trailer = (
+            vehicle.default_trailer
+            if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
+            else None
+        )
         return Vehicle(
             id=str(vehicle.id),
             name=vehicle.name,
@@ -2462,17 +2466,11 @@ class RuntimePlannerFacade:
             active=vehicle.active,
             routing_spec=vehicle_routing_spec(vehicle),
             default_trailer=(
-                trailer_routing_spec(vehicle.default_trailer)
-                if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
+                trailer_routing_spec(available_trailer)
+                if available_trailer is not None
                 else None
             ),
-            axle_load_profiles=tuple(
-                OperationalAxleLoadProfile(
-                    configuration_type=TruckConfigurationType(profile.configuration_type),
-                    max_actual_axle_load_kg=profile.max_actual_axle_load_kg,
-                )
-                for profile in vehicle.load_profiles
-            ),
+            axle_load_profiles=vehicle_axle_profiles(vehicle),
         )
 
     @staticmethod

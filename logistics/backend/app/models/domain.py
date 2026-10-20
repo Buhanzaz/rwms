@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -18,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Time,
@@ -800,6 +802,21 @@ class Vehicle(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
             "weight_safety_margin_kg >= 0",
             name="nonnegative_routing_safety_margins",
         ),
+        CheckConstraint(
+            "(tare_weight_t IS NULL OR tare_weight_t > 0) AND "
+            "(max_gross_weight_t IS NULL OR max_gross_weight_t > 0) AND "
+            "(axle_load_t IS NULL OR axle_load_t > 0) AND "
+            "(payload_capacity_t IS NULL OR payload_capacity_t > 0) AND "
+            "(length_m IS NULL OR length_m > 0) AND "
+            "(width_m IS NULL OR width_m > 0) AND "
+            "(height_m IS NULL OR height_m > 0)",
+            name="positive_canonical_vehicle_values",
+        ),
+        CheckConstraint(
+            "max_gross_weight_t IS NULL OR tare_weight_t IS NULL OR "
+            "max_gross_weight_t >= tare_weight_t",
+            name="canonical_gross_not_below_tare",
+        ),
         CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_vehicles_warehouse_active", "warehouse_id", "active"),
         Index("ix_vehicles_default_trailer_id", "default_trailer_id"),
@@ -823,6 +840,17 @@ class Vehicle(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
     length_mm: Mapped[int | None] = mapped_column(Integer)
     width_mm: Mapped[int | None] = mapped_column(Integer)
     height_mm: Mapped[int | None] = mapped_column(Integer)
+    # Canonical physical model: masses in tonnes, dimensions in metres.
+    # These columns are authoritative; the millimetre/kilogram columns above
+    # are retained only for backward compatibility and routing extensions.
+    tare_weight_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    max_gross_weight_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    axle_load_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    payload_capacity_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    width_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    height_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    has_trailer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     axle_count: Mapped[int | None] = mapped_column(Integer)
     max_axle_load_kg: Mapped[int | None] = mapped_column(Integer)
     payload_capacity_kg: Mapped[int | None] = mapped_column(Integer)
@@ -869,6 +897,10 @@ class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
             "vehicle_id", "configuration_type", name="uq_vehicle_load_profiles_configuration"
         ),
         CheckConstraint("max_actual_axle_load_kg > 0", name="positive_actual_axle_load"),
+        CheckConstraint(
+            "max_actual_axle_load_t IS NULL OR max_actual_axle_load_t > 0",
+            name="positive_canonical_actual_axle_load",
+        ),
         Index("ix_vehicle_load_profiles_vehicle_id", "vehicle_id"),
     )
 
@@ -877,6 +909,10 @@ class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
     )
     configuration_type: Mapped[str] = mapped_column(String(64), nullable=False)
     max_actual_axle_load_kg: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Canonical measured axle load in tonnes. Backfilled from the legacy column
+    # and kept in sync by the API layer; the kilogram value above is the
+    # backward-compatible projection consumed by older clients and routing.
+    max_actual_axle_load_t: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="load_profiles")
 

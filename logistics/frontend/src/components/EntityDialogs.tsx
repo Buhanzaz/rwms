@@ -68,6 +68,8 @@ export function WarehouseDialog({ warehouse, busy, onClose, onSubmit }: {
 }
 
 const nullablePositiveInteger = z.number().int().positive('Укажите положительное значение').nullable();
+const nullablePositiveDecimal = z.number().positive('Укажите положительное значение').nullable();
+const nullableNonNegativeDecimal = z.number().min(0, 'Значение не может быть отрицательным').nullable();
 const nullableBoolean = z.boolean().nullable();
 const loadConfigurationTypes = [
   'EMPTY_TRUCK',
@@ -86,6 +88,12 @@ const loadProfileLabels: Record<VehicleLoadConfigurationType, string> = {
   TWO_CARGO_SPLIT: 'Две бытовки: машина + прицеп',
 };
 
+/**
+ * Vehicle editor values. The physical block and routing extensions are stored
+ * in the canonical tonnes/metres units shown to the operator; the submit
+ * mapping converts routing extensions back to the legacy kilogram/millimetre
+ * wire fields the backend still accepts.
+ */
 const catalogSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
   registration_number: z.string(),
@@ -98,37 +106,35 @@ const catalogSchema = z.object({
   manufacturer: z.string(),
   model: z.string(),
   is_hgv: nullableBoolean,
-  tare_weight_kg: nullablePositiveInteger,
-  max_gross_weight_kg: nullablePositiveInteger,
-  length_mm: nullablePositiveInteger,
-  width_mm: nullablePositiveInteger,
-  height_mm: nullablePositiveInteger,
+  // Canonical physical model, tonnes and metres.
+  tare_weight_t: nullablePositiveDecimal,
+  max_gross_weight_t: nullablePositiveDecimal,
+  axle_load_t: nullablePositiveDecimal,
+  payload_capacity_t: nullablePositiveDecimal,
+  length_m: nullablePositiveDecimal,
+  width_m: nullablePositiveDecimal,
+  height_m: nullablePositiveDecimal,
+  has_trailer: nullableBoolean,
   axle_count: nullablePositiveInteger,
-  max_axle_load_kg: nullablePositiveInteger,
-  payload_capacity_kg: nullablePositiveInteger,
-  platform_length_mm: nullablePositiveInteger,
-  platform_width_mm: nullablePositiveInteger,
-  platform_height_from_ground_mm: nullablePositiveInteger,
-  max_platform_payload_kg: nullablePositiveInteger,
-  max_cargo_length_mm: nullablePositiveInteger,
-  max_cargo_width_mm: nullablePositiveInteger,
-  max_cargo_height_mm: nullablePositiveInteger,
-  max_cargo_weight_kg: nullablePositiveInteger,
-  can_use_trailer: nullableBoolean,
+  // Routing extensions shown in the same metric units.
+  platform_length_m: nullablePositiveDecimal,
+  platform_width_m: nullablePositiveDecimal,
+  platform_height_from_ground_m: nullablePositiveDecimal,
+  max_platform_payload_t: nullablePositiveDecimal,
+  max_cargo_length_m: nullablePositiveDecimal,
+  max_cargo_width_m: nullablePositiveDecimal,
+  max_cargo_height_m: nullablePositiveDecimal,
+  max_cargo_weight_t: nullablePositiveDecimal,
   default_trailer_id: z.string(),
-  combined_length_with_trailer_mm: nullablePositiveInteger,
-  coupling_length_mm: nullablePositiveInteger,
-  height_safety_margin_mm: z.number().int().min(0),
-  width_safety_margin_mm: z.number().int().min(0),
-  weight_safety_margin_kg: z.number().int().min(0),
-  preview_cargo_length_mm: nullablePositiveInteger,
-  preview_cargo_width_mm: nullablePositiveInteger,
-  preview_cargo_height_mm: nullablePositiveInteger,
-  preview_cargo_weight_kg: nullablePositiveInteger,
+  combined_length_with_trailer_m: nullablePositiveDecimal,
+  coupling_length_m: nullablePositiveDecimal,
+  height_safety_margin_m: nullableNonNegativeDecimal,
+  width_safety_margin_m: nullableNonNegativeDecimal,
+  weight_safety_margin_t: nullableNonNegativeDecimal,
   load_profiles: z.array(z.object({
     id: z.string().optional(),
     configuration_type: z.enum(loadConfigurationTypes),
-    max_actual_axle_load_kg: nullablePositiveInteger,
+    max_actual_axle_load_t: nullablePositiveDecimal,
   })),
 });
 type CatalogValues = z.infer<typeof catalogSchema>;
@@ -137,9 +143,37 @@ export interface VehicleEditorInput extends VehicleInput {
   load_profiles: VehicleLoadProfileInput[];
 }
 
-const optionalNumber = (value: unknown): number | null => typeof value !== 'string' || value.trim() === '' ? null : Number(value);
+/**
+ * Normalize a registered numeric field. React Hook Form also applies
+ * `setValueAs` to numeric default values, so numbers must pass through.
+ */
+const optionalNumber = (value: unknown): number | null => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
 const optionalNumberRegistration = () => ({ setValueAs: optionalNumber } as const);
-const optionalBoolean = (value: unknown): boolean | null => value === 'true' ? true : value === 'false' ? false : null;
+/** Normalize a registered nullable select value, including its boolean default. */
+const optionalBoolean = (value: unknown): boolean | null => {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+};
+
+/** Legacy integer millimetres/kilograms projected into the metres/tonnes shown to the operator. */
+const fromLegacyUnit = (value: number | null | undefined): number | null => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Number((value / 1_000).toFixed(3));
+};
+/** Operator-facing metres/tonnes projected back into the legacy integer wire field. */
+const toLegacyUnit = (value: number | null): number | null => value === null ? null : Math.round(value * 1_000);
+/** Prefer the canonical value; fall back to the deprecated kilogram/millimetre projection. */
+const canonicalUnit = (
+  canonical: number | null | undefined,
+  legacy: number | null | undefined,
+): number | null => typeof canonical === 'number' && Number.isFinite(canonical) ? canonical : fromLegacyUnit(legacy);
 
 export function CatalogDialog({ value, busy, onClose, onSubmit }: {
   value?: Vehicle | undefined;
@@ -149,169 +183,144 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
 }) {
   const vehicle = value;
   const existingProfiles = vehicle?.load_profiles ?? [];
-  const { register, handleSubmit, watch, setValue, formState: { errors, dirtyFields } } = useForm<CatalogValues>({
+  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<CatalogValues>({
     resolver: zodResolver(catalogSchema),
     defaultValues: {
       name: vehicle?.name ?? '', registration_number: vehicle?.registration_number ?? '',
       capacity: vehicle?.capacity ?? 1, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
       notes: vehicle?.notes ?? '', active: vehicle?.active ?? true,
       vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
-      tare_weight_kg: vehicle?.tare_weight_kg ?? null, max_gross_weight_kg: vehicle?.max_gross_weight_kg ?? null,
-      length_mm: vehicle?.length_mm ?? null, width_mm: vehicle?.width_mm ?? null, height_mm: vehicle?.height_mm ?? null,
-      axle_count: vehicle?.axle_count ?? null, max_axle_load_kg: vehicle?.max_axle_load_kg ?? null, payload_capacity_kg: vehicle?.payload_capacity_kg ?? null,
-      platform_length_mm: vehicle?.platform_length_mm ?? null, platform_width_mm: vehicle?.platform_width_mm ?? null,
-      platform_height_from_ground_mm: vehicle?.platform_height_from_ground_mm ?? null, max_platform_payload_kg: vehicle?.max_platform_payload_kg ?? null,
-      max_cargo_length_mm: vehicle?.max_cargo_length_mm ?? null, max_cargo_width_mm: vehicle?.max_cargo_width_mm ?? null,
-      max_cargo_height_mm: vehicle?.max_cargo_height_mm ?? null, max_cargo_weight_kg: vehicle?.max_cargo_weight_kg ?? null,
-      can_use_trailer: vehicle?.can_use_trailer ?? null, default_trailer_id: vehicle?.default_trailer_id ?? '',
-      combined_length_with_trailer_mm: vehicle?.combined_length_with_trailer_mm ?? null, coupling_length_mm: vehicle?.coupling_length_mm ?? null,
-      height_safety_margin_mm: vehicle?.height_safety_margin_mm ?? 0, width_safety_margin_mm: vehicle?.width_safety_margin_mm ?? 0,
-      weight_safety_margin_kg: vehicle?.weight_safety_margin_kg ?? 0,
-      preview_cargo_length_mm: null, preview_cargo_width_mm: null, preview_cargo_height_mm: null, preview_cargo_weight_kg: null,
+      tare_weight_t: canonicalUnit(vehicle?.tare_weight_t, vehicle?.tare_weight_kg),
+      max_gross_weight_t: canonicalUnit(vehicle?.max_gross_weight_t, vehicle?.max_gross_weight_kg),
+      axle_load_t: canonicalUnit(vehicle?.axle_load_t, vehicle?.max_axle_load_kg),
+      payload_capacity_t: canonicalUnit(vehicle?.payload_capacity_t, vehicle?.payload_capacity_kg),
+      length_m: canonicalUnit(vehicle?.length_m, vehicle?.length_mm),
+      width_m: canonicalUnit(vehicle?.width_m, vehicle?.width_mm),
+      height_m: canonicalUnit(vehicle?.height_m, vehicle?.height_mm),
+      has_trailer: vehicle ? (vehicle.has_trailer ?? vehicle.can_use_trailer ?? false) : false,
+      axle_count: vehicle?.axle_count ?? null,
+      platform_length_m: fromLegacyUnit(vehicle?.platform_length_mm),
+      platform_width_m: fromLegacyUnit(vehicle?.platform_width_mm),
+      platform_height_from_ground_m: fromLegacyUnit(vehicle?.platform_height_from_ground_mm),
+      max_platform_payload_t: fromLegacyUnit(vehicle?.max_platform_payload_kg),
+      max_cargo_length_m: fromLegacyUnit(vehicle?.max_cargo_length_mm),
+      max_cargo_width_m: fromLegacyUnit(vehicle?.max_cargo_width_mm),
+      max_cargo_height_m: fromLegacyUnit(vehicle?.max_cargo_height_mm),
+      max_cargo_weight_t: fromLegacyUnit(vehicle?.max_cargo_weight_kg),
+      default_trailer_id: vehicle?.default_trailer_id ?? '',
+      combined_length_with_trailer_m: fromLegacyUnit(vehicle?.combined_length_with_trailer_mm),
+      coupling_length_m: fromLegacyUnit(vehicle?.coupling_length_mm),
+      height_safety_margin_m: fromLegacyUnit(vehicle?.height_safety_margin_mm ?? 0),
+      width_safety_margin_m: fromLegacyUnit(vehicle?.width_safety_margin_mm ?? 0),
+      weight_safety_margin_t: fromLegacyUnit(vehicle?.weight_safety_margin_kg ?? 0),
       load_profiles: loadConfigurationTypes.map((configurationType) => {
         const existing = existingProfiles.find((profile) => profile.configuration_type === configurationType);
-        return { configuration_type: configurationType, max_actual_axle_load_kg: existing?.max_actual_axle_load_kg ?? null };
+        return {
+          configuration_type: configurationType,
+          max_actual_axle_load_t: existing ? canonicalUnit(existing.max_actual_axle_load_t, existing.max_actual_axle_load_kg) : null,
+        };
       }),
     },
   });
   const values = watch();
   const active = values.active;
-  const preserveVehicleValue = <K extends keyof Vehicle & keyof CatalogValues>(key: K, current: CatalogValues[K]): CatalogValues[K] => {
-    if (dirtyFields[key]) return current;
-    const existing = vehicle?.[key];
-    return existing === undefined ? current : existing as unknown as CatalogValues[K];
-  };
   const submit = (formValues: CatalogValues) => {
-    const loadProfiles = formValues.load_profiles.flatMap((profile, index) => {
-      const existing = existingProfiles.find((candidate) => candidate.configuration_type === profile.configuration_type);
-      const maxActualAxleLoad = dirtyFields.load_profiles?.[index]?.max_actual_axle_load_kg
-        ? profile.max_actual_axle_load_kg
-        : existing?.max_actual_axle_load_kg ?? profile.max_actual_axle_load_kg;
-      return maxActualAxleLoad === null ? [] : [{
+    const loadProfiles = formValues.load_profiles.flatMap((profile) => (
+      profile.max_actual_axle_load_t === null ? [] : [{
         configuration_type: profile.configuration_type,
-        max_actual_axle_load_kg: maxActualAxleLoad,
-      }];
-    });
+        max_actual_axle_load_t: profile.max_actual_axle_load_t,
+        max_actual_axle_load_kg: Math.round(profile.max_actual_axle_load_t * 1_000),
+      }]
+    ));
+    const hasTrailer = formValues.has_trailer;
     return onSubmit({
-      name: preserveVehicleValue('name', formValues.name),
-      registration_number: preserveVehicleValue('registration_number', formValues.registration_number),
-      capacity: preserveVehicleValue('capacity', formValues.capacity),
-      active: preserveVehicleValue('active', formValues.active),
-      average_speed_city: preserveVehicleValue('average_speed_city', formValues.average_speed_city),
-      average_speed_region: preserveVehicleValue('average_speed_region', formValues.average_speed_region),
-      notes: preserveVehicleValue('notes', formValues.notes),
-      vehicle_type: preserveVehicleValue('vehicle_type', formValues.vehicle_type).trim() || null,
-      manufacturer: preserveVehicleValue('manufacturer', formValues.manufacturer).trim() || null,
-      model: preserveVehicleValue('model', formValues.model).trim() || null,
-      is_hgv: preserveVehicleValue('is_hgv', formValues.is_hgv),
-      tare_weight_kg: preserveVehicleValue('tare_weight_kg', formValues.tare_weight_kg),
-      max_gross_weight_kg: preserveVehicleValue('max_gross_weight_kg', formValues.max_gross_weight_kg),
-      length_mm: preserveVehicleValue('length_mm', formValues.length_mm),
-      width_mm: preserveVehicleValue('width_mm', formValues.width_mm),
-      height_mm: preserveVehicleValue('height_mm', formValues.height_mm),
-      axle_count: preserveVehicleValue('axle_count', formValues.axle_count),
-      max_axle_load_kg: preserveVehicleValue('max_axle_load_kg', formValues.max_axle_load_kg),
-      payload_capacity_kg: preserveVehicleValue('payload_capacity_kg', formValues.payload_capacity_kg),
-      platform_length_mm: preserveVehicleValue('platform_length_mm', formValues.platform_length_mm),
-      platform_width_mm: preserveVehicleValue('platform_width_mm', formValues.platform_width_mm),
-      platform_height_from_ground_mm: preserveVehicleValue('platform_height_from_ground_mm', formValues.platform_height_from_ground_mm),
-      max_platform_payload_kg: preserveVehicleValue('max_platform_payload_kg', formValues.max_platform_payload_kg),
-      max_cargo_length_mm: preserveVehicleValue('max_cargo_length_mm', formValues.max_cargo_length_mm),
-      max_cargo_width_mm: preserveVehicleValue('max_cargo_width_mm', formValues.max_cargo_width_mm),
-      max_cargo_height_mm: preserveVehicleValue('max_cargo_height_mm', formValues.max_cargo_height_mm),
-      max_cargo_weight_kg: preserveVehicleValue('max_cargo_weight_kg', formValues.max_cargo_weight_kg),
-      can_use_trailer: preserveVehicleValue('can_use_trailer', formValues.can_use_trailer),
-      default_trailer_id: preserveVehicleValue('default_trailer_id', formValues.default_trailer_id) || null,
-      combined_length_with_trailer_mm: preserveVehicleValue('combined_length_with_trailer_mm', formValues.combined_length_with_trailer_mm),
-      coupling_length_mm: preserveVehicleValue('coupling_length_mm', formValues.coupling_length_mm),
-      height_safety_margin_mm: preserveVehicleValue('height_safety_margin_mm', formValues.height_safety_margin_mm),
-      width_safety_margin_mm: preserveVehicleValue('width_safety_margin_mm', formValues.width_safety_margin_mm),
-      weight_safety_margin_kg: preserveVehicleValue('weight_safety_margin_kg', formValues.weight_safety_margin_kg),
+      name: formValues.name,
+      registration_number: formValues.registration_number,
+      capacity: formValues.capacity,
+      active: formValues.active,
+      average_speed_city: formValues.average_speed_city,
+      average_speed_region: formValues.average_speed_region,
+      notes: formValues.notes,
+      vehicle_type: formValues.vehicle_type.trim() || null,
+      manufacturer: formValues.manufacturer.trim() || null,
+      model: formValues.model.trim() || null,
+      is_hgv: formValues.is_hgv,
+      tare_weight_t: formValues.tare_weight_t,
+      max_gross_weight_t: formValues.max_gross_weight_t,
+      axle_load_t: formValues.axle_load_t,
+      payload_capacity_t: formValues.payload_capacity_t,
+      length_m: formValues.length_m,
+      width_m: formValues.width_m,
+      height_m: formValues.height_m,
+      has_trailer: hasTrailer,
+      axle_count: formValues.axle_count,
+      platform_length_mm: toLegacyUnit(formValues.platform_length_m),
+      platform_width_mm: toLegacyUnit(formValues.platform_width_m),
+      platform_height_from_ground_mm: toLegacyUnit(formValues.platform_height_from_ground_m),
+      max_platform_payload_kg: toLegacyUnit(formValues.max_platform_payload_t),
+      max_cargo_length_mm: toLegacyUnit(formValues.max_cargo_length_m),
+      max_cargo_width_mm: toLegacyUnit(formValues.max_cargo_width_m),
+      max_cargo_height_mm: toLegacyUnit(formValues.max_cargo_height_m),
+      max_cargo_weight_kg: toLegacyUnit(formValues.max_cargo_weight_t),
+      default_trailer_id: hasTrailer === true ? (formValues.default_trailer_id || null) : null,
+      combined_length_with_trailer_mm: toLegacyUnit(formValues.combined_length_with_trailer_m),
+      coupling_length_mm: toLegacyUnit(formValues.coupling_length_m),
+      height_safety_margin_mm: toLegacyUnit(formValues.height_safety_margin_m) ?? 0,
+      width_safety_margin_mm: toLegacyUnit(formValues.width_safety_margin_m) ?? 0,
+      weight_safety_margin_kg: toLegacyUnit(formValues.weight_safety_margin_t) ?? 0,
       load_profiles: loadProfiles,
     });
   };
   return (
     <Modal wide title={`${value ? 'Изменить' : 'Добавить'} транспортное средство`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(submit)}>
-        <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} />
+        <Field className="span-2" label="Название" defaultValue={values.name} {...register('name')} error={errors.name?.message} />
         <>
-          <Field label="Марка авто" {...register('manufacturer')} />
-          <Field label="Госномер" {...register('registration_number')} />
-          <Field label="Вместимость, бытовок" type="number" min="1" {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Количество бытовок на одну машину" />
-          <Field
-            label="Грузоподъёмность, т"
-            type="number"
-            min="0.1"
-            step="0.1"
-            value={values.payload_capacity_kg === null ? '' : values.payload_capacity_kg / 1_000}
-            onChange={(event) => setValue('payload_capacity_kg', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
-            error={errors.payload_capacity_kg?.message}
-          />
-          <Field
-            label="Габариты (длина), м"
-            type="number"
-            min="0.1"
-            step="0.1"
-            value={values.length_mm === null ? '' : values.length_mm / 1_000}
-            onChange={(event) => setValue('length_mm', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
-            error={errors.length_mm?.message}
-          />
-          <Field
-            label="Габариты (ширина), м"
-            type="number"
-            min="0.1"
-            step="0.1"
-            value={values.width_mm === null ? '' : values.width_mm / 1_000}
-            onChange={(event) => setValue('width_mm', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
-            error={errors.width_mm?.message}
-          />
-          <Field
-            label="Габариты (высота), м"
-            type="number"
-            min="0.1"
-            step="0.1"
-            value={values.height_mm === null ? '' : values.height_mm / 1_000}
-            onChange={(event) => setValue('height_mm', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
-            error={errors.height_mm?.message}
-          />
+          <Field label="Марка авто" defaultValue={values.manufacturer} {...register('manufacturer')} />
+          <Field label="Госномер" defaultValue={values.registration_number} {...register('registration_number')} />
+          <Field label="Вместимость, бытовок" type="number" min="1" defaultValue={Number.isFinite(values.capacity) ? values.capacity : undefined} {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Количество бытовок на одну машину" />
+          <Field label="Фактическая масса, т" type="number" min="0.001" step="0.001" defaultValue={values.tare_weight_t ?? undefined} {...register('tare_weight_t', optionalNumberRegistration())} error={errors.tare_weight_t?.message} hint="Снаряжённая масса машины по документам" />
+          <Field label="Разрешённая масса, т" type="number" min="0.001" step="0.001" defaultValue={values.max_gross_weight_t ?? undefined} {...register('max_gross_weight_t', optionalNumberRegistration())} error={errors.max_gross_weight_t?.message} hint="Разрешённая полная масса машины" />
+          <Field label="Нагрузка на ось, т" type="number" min="0.001" step="0.001" defaultValue={values.axle_load_t ?? undefined} {...register('axle_load_t', optionalNumberRegistration())} error={errors.axle_load_t?.message} hint="Допустимая нагрузка на одну ось" />
+          <Field label="Грузоподъёмность, т" type="number" min="0.001" step="0.001" defaultValue={values.payload_capacity_t ?? undefined} {...register('payload_capacity_t', optionalNumberRegistration())} error={errors.payload_capacity_t?.message} />
+          <Field label="Длина, м" type="number" min="0.001" step="0.001" defaultValue={values.length_m ?? undefined} {...register('length_m', optionalNumberRegistration())} error={errors.length_m?.message} />
+          <Field label="Ширина, м" type="number" min="0.001" step="0.001" defaultValue={values.width_m ?? undefined} {...register('width_m', optionalNumberRegistration())} error={errors.width_m?.message} />
+          <Field label="Высота, м" type="number" min="0.001" step="0.001" defaultValue={values.height_m ?? undefined} {...register('height_m', optionalNumberRegistration())} error={errors.height_m?.message} />
+          <SelectField label="Есть прицеп" value={values.has_trailer === null ? '' : String(values.has_trailer)} onChange={(event) => setValue('has_trailer', optionalBoolean(event.target.value), { shouldValidate: true })} error={errors.has_trailer?.message}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
 
           <details className="span-2">
             <summary><strong>Дополнительные настройки</strong></summary>
-            <p className="field__hint">Маршрутизация использует эти эксплуатационные данные. Заполняйте их по документам; неизвестные критические параметры не будут подменены.</p>
+            <p className="field__hint">Маршрутизация использует эти эксплуатационные данные. Заполняйте их по документам; неизвестные критические параметры не будут подменены. Длины указаны в метрах, массы — в тоннах.</p>
             <div className="form-grid" style={{ marginTop: 10 }}>
-              <Field label="Тип транспорта" {...register('vehicle_type')} />
-              <SelectField label="Грузовой автомобиль" {...register('is_hgv', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
-              <Field label="Модель" {...register('model')} />
-              <Field label="Собственная масса машины, кг" type="number" min="1" {...register('tare_weight_kg', optionalNumberRegistration())} error={errors.tare_weight_kg?.message} />
-              <Field label="Максимальная полная масса машины, кг" type="number" min="1" {...register('max_gross_weight_kg', optionalNumberRegistration())} error={errors.max_gross_weight_kg?.message} />
-              <Field label="Количество осей машины" type="number" min="1" {...register('axle_count', optionalNumberRegistration())} error={errors.axle_count?.message} />
-              <Field label="Допустимая нагрузка на ось машины, кг" type="number" min="1" {...register('max_axle_load_kg', optionalNumberRegistration())} error={errors.max_axle_load_kg?.message} />
+              <Field label="Тип транспорта" defaultValue={values.vehicle_type} {...register('vehicle_type')} />
+              <SelectField label="Грузовой автомобиль" defaultValue={values.is_hgv === null ? '' : String(values.is_hgv)} {...register('is_hgv', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
+              <Field label="Модель" defaultValue={values.model} {...register('model')} />
+              <Field label="Количество осей машины" type="number" min="1" defaultValue={values.axle_count ?? undefined} {...register('axle_count', optionalNumberRegistration())} error={errors.axle_count?.message} />
             </div>
 
             <div className="form-grid" style={{ marginTop: 10 }}>
-              <Field label="Длина платформы машины, мм" type="number" min="1" {...register('platform_length_mm', optionalNumberRegistration())} error={errors.platform_length_mm?.message} />
-              <Field label="Ширина платформы машины, мм" type="number" min="1" {...register('platform_width_mm', optionalNumberRegistration())} error={errors.platform_width_mm?.message} />
-              <Field label="Высота платформы машины от земли, мм" type="number" min="1" {...register('platform_height_from_ground_mm', optionalNumberRegistration())} error={errors.platform_height_from_ground_mm?.message} />
-              <Field label="Максимальная масса на платформе машины, кг" type="number" min="1" {...register('max_platform_payload_kg', optionalNumberRegistration())} error={errors.max_platform_payload_kg?.message} />
-              <Field label="Максимальная длина груза на машине, мм" type="number" min="1" {...register('max_cargo_length_mm', optionalNumberRegistration())} error={errors.max_cargo_length_mm?.message} />
-              <Field label="Максимальная ширина груза на машине, мм" type="number" min="1" {...register('max_cargo_width_mm', optionalNumberRegistration())} error={errors.max_cargo_width_mm?.message} />
-              <Field label="Максимальная высота груза на машине, мм" type="number" min="1" {...register('max_cargo_height_mm', optionalNumberRegistration())} error={errors.max_cargo_height_mm?.message} />
-              <Field label="Максимальная масса груза на машине, кг" type="number" min="1" {...register('max_cargo_weight_kg', optionalNumberRegistration())} error={errors.max_cargo_weight_kg?.message} />
+              <Field label="Длина платформы машины, м" type="number" min="0.001" step="0.001" defaultValue={values.platform_length_m ?? undefined} {...register('platform_length_m', optionalNumberRegistration())} error={errors.platform_length_m?.message} />
+              <Field label="Ширина платформы машины, м" type="number" min="0.001" step="0.001" defaultValue={values.platform_width_m ?? undefined} {...register('platform_width_m', optionalNumberRegistration())} error={errors.platform_width_m?.message} />
+              <Field label="Высота платформы машины от земли, м" type="number" min="0.001" step="0.001" defaultValue={values.platform_height_from_ground_m ?? undefined} {...register('platform_height_from_ground_m', optionalNumberRegistration())} error={errors.platform_height_from_ground_m?.message} />
+              <Field label="Максимальная масса на платформе машины, т" type="number" min="0.001" step="0.001" defaultValue={values.max_platform_payload_t ?? undefined} {...register('max_platform_payload_t', optionalNumberRegistration())} error={errors.max_platform_payload_t?.message} />
+              <Field label="Максимальная длина груза на машине, м" type="number" min="0.001" step="0.001" defaultValue={values.max_cargo_length_m ?? undefined} {...register('max_cargo_length_m', optionalNumberRegistration())} error={errors.max_cargo_length_m?.message} />
+              <Field label="Максимальная ширина груза на машине, м" type="number" min="0.001" step="0.001" defaultValue={values.max_cargo_width_m ?? undefined} {...register('max_cargo_width_m', optionalNumberRegistration())} error={errors.max_cargo_width_m?.message} />
+              <Field label="Максимальная высота груза на машине, м" type="number" min="0.001" step="0.001" defaultValue={values.max_cargo_height_m ?? undefined} {...register('max_cargo_height_m', optionalNumberRegistration())} error={errors.max_cargo_height_m?.message} />
+              <Field label="Максимальная масса груза на машине, т" type="number" min="0.001" step="0.001" defaultValue={values.max_cargo_weight_t ?? undefined} {...register('max_cargo_weight_t', optionalNumberRegistration())} error={errors.max_cargo_weight_t?.message} />
             </div>
             <div className="form-grid" style={{ marginTop: 10 }}>
-              <SelectField label="Транспорт поддерживает работу с прицепом" {...register('can_use_trailer', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
-              <Field label="Точная полная длина автопоезда, мм" type="number" min="1" {...register('combined_length_with_trailer_mm', optionalNumberRegistration())} error={errors.combined_length_with_trailer_mm?.message} />
-              <Field label="Длина сцепки, мм" type="number" min="1" {...register('coupling_length_mm', optionalNumberRegistration())} error={errors.coupling_length_mm?.message} hint="Используется только если точная полная длина не задана" />
-              <Field label="Запас по высоте, мм" type="number" min="0" {...register('height_safety_margin_mm', { valueAsNumber: true })} error={errors.height_safety_margin_mm?.message} />
-              <Field label="Запас по ширине, мм" type="number" min="0" {...register('width_safety_margin_mm', { valueAsNumber: true })} error={errors.width_safety_margin_mm?.message} />
-              <Field label="Запас по массе, кг" type="number" min="0" {...register('weight_safety_margin_kg', { valueAsNumber: true })} error={errors.weight_safety_margin_kg?.message} />
+              <Field label="Точная полная длина автопоезда, м" type="number" min="0.001" step="0.001" defaultValue={values.combined_length_with_trailer_m ?? undefined} {...register('combined_length_with_trailer_m', optionalNumberRegistration())} error={errors.combined_length_with_trailer_m?.message} />
+              <Field label="Длина сцепки, м" type="number" min="0.001" step="0.001" defaultValue={values.coupling_length_m ?? undefined} {...register('coupling_length_m', optionalNumberRegistration())} error={errors.coupling_length_m?.message} hint="Используется только если точная полная длина не задана" />
+              <Field label="Запас по высоте, м" type="number" min="0" step="0.001" defaultValue={values.height_safety_margin_m ?? undefined} {...register('height_safety_margin_m', optionalNumberRegistration())} error={errors.height_safety_margin_m?.message} />
+              <Field label="Запас по ширине, м" type="number" min="0" step="0.001" defaultValue={values.width_safety_margin_m ?? undefined} {...register('width_safety_margin_m', optionalNumberRegistration())} error={errors.width_safety_margin_m?.message} />
+              <Field label="Запас по массе, т" type="number" min="0" step="0.001" defaultValue={values.weight_safety_margin_t ?? undefined} {...register('weight_safety_margin_t', optionalNumberRegistration())} error={errors.weight_safety_margin_t?.message} />
             </div>
             <div className="form-grid" style={{ marginTop: 10 }}>
-              {values.load_profiles.map((profile, index) => <Field key={profile.configuration_type} label={`${loadProfileLabels[profile.configuration_type]}, кг`} type="number" min="1" {...register(`load_profiles.${index}.max_actual_axle_load_kg`, optionalNumberRegistration())} error={errors.load_profiles?.[index]?.max_actual_axle_load_kg?.message} />)}
+              {values.load_profiles.map((profile, index) => <Field key={profile.configuration_type} label={`${loadProfileLabels[profile.configuration_type]}, т`} type="number" min="0.001" step="0.001" defaultValue={profile.max_actual_axle_load_t ?? undefined} {...register(`load_profiles.${index}.max_actual_axle_load_t`, optionalNumberRegistration())} error={errors.load_profiles?.[index]?.max_actual_axle_load_t?.message} />)}
             </div>
           </details>
         </>
-        <label className="field span-2"><span className="field__label">Заметки</span><textarea className="input" {...register('notes')} /></label>
+        <label className="field span-2"><span className="field__label">Заметки</span><textarea className="input" defaultValue={values.notes} {...register('notes')} /></label>
         <div className="span-2"><CheckboxField label="Активен" checked={active} onChange={(checked) => setValue('active', checked)} /></div>
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить</Button></div>
       </form>

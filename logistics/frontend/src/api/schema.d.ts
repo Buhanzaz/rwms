@@ -1885,6 +1885,7 @@ export interface components {
             average_speed_region: number;
             /** Axle Count */
             axle_count: number | null;
+            axle_load_t: number | null;
             /** Can Use Trailer */
             can_use_trailer: boolean | null;
             /** Capacity */
@@ -1895,6 +1896,9 @@ export interface components {
             coupling_length_mm: number | null;
             /** Default Trailer Id */
             default_trailer_id: string | null;
+            /** Has Trailer */
+            has_trailer: boolean;
+            height_m: number | null;
             /** Height Mm */
             height_mm: number | null;
             /** Height Safety Margin Mm */
@@ -1906,10 +1910,11 @@ export interface components {
             id: string;
             /** Is Hgv */
             is_hgv: boolean | null;
+            length_m: number | null;
             /** Length Mm */
             length_mm: number | null;
             /** Load Profiles */
-            load_profiles: components["schemas"]["VehicleLoadProfileCreate"][];
+            load_profiles: components["schemas"]["VehicleLoadProfileCreate-Output"][];
             /** Manufacturer */
             manufacturer: string | null;
             /** Max Axle Load Kg */
@@ -1924,6 +1929,7 @@ export interface components {
             max_cargo_width_mm: number | null;
             /** Max Gross Weight Kg */
             max_gross_weight_kg: number | null;
+            max_gross_weight_t: number | null;
             /** Max Platform Payload Kg */
             max_platform_payload_kg: number | null;
             /** Model */
@@ -1933,6 +1939,7 @@ export interface components {
             notes: string;
             /** Payload Capacity Kg */
             payload_capacity_kg: number | null;
+            payload_capacity_t: number | null;
             /** Platform Height From Ground Mm */
             platform_height_from_ground_mm: number | null;
             /** Platform Length Mm */
@@ -1942,6 +1949,7 @@ export interface components {
             registration_number: components["schemas"]["NonBlank"];
             /** Tare Weight Kg */
             tare_weight_kg: number | null;
+            tare_weight_t: number | null;
             /** Vehicle Type */
             vehicle_type: string | null;
             /** Version */
@@ -1954,6 +1962,7 @@ export interface components {
             warehouse_id: string;
             /** Weight Safety Margin Kg */
             weight_safety_margin_kg: number;
+            width_m: number | null;
             /** Width Mm */
             width_mm: number | null;
             /** Width Safety Margin Mm */
@@ -2005,6 +2014,8 @@ export interface components {
             /** Warehouse Version */
             warehouse_version: number;
         };
+        "CanonicalDecimal-Input": number | string;
+        "CanonicalDecimal-Output": string;
         /**
          * ConfirmPlanRequest
          * @description Plan confirmation with warning consent and audited empty-positioning approval.
@@ -5231,7 +5242,7 @@ export interface components {
          */
         VehicleConfigurationCreate: {
             /** Load Profiles */
-            load_profiles?: components["schemas"]["VehicleLoadProfileCreate"][];
+            load_profiles?: components["schemas"]["VehicleLoadProfileCreate-Input"][];
             vehicle: components["schemas"]["VehicleCreate"];
         };
         /**
@@ -5240,12 +5251,17 @@ export interface components {
          */
         VehicleConfigurationUpdate: {
             /** Load Profiles */
-            load_profiles: components["schemas"]["VehicleLoadProfileCreate"][];
+            load_profiles: components["schemas"]["VehicleLoadProfileCreate-Input"][];
             vehicle: components["schemas"]["VehicleUpdate"];
         };
         /**
          * VehicleCreate
-         * @description Input for a vehicle, routing speeds, and optional physical truck data.
+         * @description Input for a vehicle, routing speeds, and its canonical physical data.
+         *
+         *     The canonical physical model contains only masses in tonnes, dimensions in
+         *     metres and a ``has_trailer`` boolean.  The kilogram/millimetre fields below
+         *     remain accepted for backward compatibility and are kept in sync with the
+         *     canonical values; new clients should send only the canonical fields.
          */
         VehicleCreate: {
             /**
@@ -5265,7 +5281,13 @@ export interface components {
             average_speed_region: number;
             /** Axle Count */
             axle_count?: number | null;
-            /** Can Use Trailer */
+            /** @description Допустимая нагрузка на ось, т */
+            axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
+            /**
+             * Can Use Trailer
+             * @deprecated
+             * @description Устаревшее: используйте has_trailer
+             */
             can_use_trailer?: boolean | null;
             /**
              * Capacity
@@ -5278,7 +5300,18 @@ export interface components {
             coupling_length_mm?: number | null;
             /** Default Trailer Id */
             default_trailer_id?: string | null;
-            /** Height Mm */
+            /**
+             * Has Trailer
+             * @description Есть ли у транспортного средства прицеп
+             */
+            has_trailer?: boolean | null;
+            /** @description Высота, м */
+            height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
+            /**
+             * Height Mm
+             * @deprecated
+             * @description Устаревшее: высота в мм; используйте height_m
+             */
             height_mm?: number | null;
             /**
              * Height Safety Margin Mm
@@ -5287,11 +5320,21 @@ export interface components {
             height_safety_margin_mm: number;
             /** Is Hgv */
             is_hgv?: boolean | null;
-            /** Length Mm */
+            /** @description Длина, м */
+            length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
+            /**
+             * Length Mm
+             * @deprecated
+             * @description Устаревшее: длина в мм; используйте length_m
+             */
             length_mm?: number | null;
             /** Manufacturer */
             manufacturer?: string | null;
-            /** Max Axle Load Kg */
+            /**
+             * Max Axle Load Kg
+             * @deprecated
+             * @description Устаревшее: нагрузка на ось в кг; используйте axle_load_t
+             */
             max_axle_load_kg?: number | null;
             /** Max Cargo Height Mm */
             max_cargo_height_mm?: number | null;
@@ -5301,8 +5344,14 @@ export interface components {
             max_cargo_weight_kg?: number | null;
             /** Max Cargo Width Mm */
             max_cargo_width_mm?: number | null;
-            /** Max Gross Weight Kg */
+            /**
+             * Max Gross Weight Kg
+             * @deprecated
+             * @description Устаревшее: разрешённая масса в кг; используйте max_gross_weight_t
+             */
             max_gross_weight_kg?: number | null;
+            /** @description Разрешённая полная масса, т */
+            max_gross_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Max Platform Payload Kg */
             max_platform_payload_kg?: number | null;
             /** Model */
@@ -5313,8 +5362,14 @@ export interface components {
              * @default
              */
             notes: string;
-            /** Payload Capacity Kg */
+            /**
+             * Payload Capacity Kg
+             * @deprecated
+             * @description Устаревшее: грузоподъёмность в кг; используйте payload_capacity_t
+             */
             payload_capacity_kg?: number | null;
+            /** @description Грузоподъёмность, т */
+            payload_capacity_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Platform Height From Ground Mm */
             platform_height_from_ground_mm?: number | null;
             /** Platform Length Mm */
@@ -5322,8 +5377,14 @@ export interface components {
             /** Platform Width Mm */
             platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
-            /** Tare Weight Kg */
+            /**
+             * Tare Weight Kg
+             * @deprecated
+             * @description Устаревшее: фактическая масса в кг; используйте tare_weight_t
+             */
             tare_weight_kg?: number | null;
+            /** @description Фактическая (снаряжённая) масса, т */
+            tare_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
             /**
@@ -5331,7 +5392,13 @@ export interface components {
              * @default 0
              */
             weight_safety_margin_kg: number;
-            /** Width Mm */
+            /** @description Ширина, м */
+            width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
+            /**
+             * Width Mm
+             * @deprecated
+             * @description Устаревшее: ширина в мм; используйте width_m
+             */
             width_mm?: number | null;
             /**
              * Width Safety Margin Mm
@@ -5343,10 +5410,31 @@ export interface components {
          * VehicleLoadProfileCreate
          * @description One measured operational peak axle-load value embedded in a vehicle.
          */
-        VehicleLoadProfileCreate: {
+        "VehicleLoadProfileCreate-Input": {
             configuration_type: components["schemas"]["VehicleLoadProfileType"];
-            /** Max Actual Axle Load Kg */
-            max_actual_axle_load_kg: number;
+            /**
+             * Max Actual Axle Load Kg
+             * @deprecated
+             * @description Устаревшее: нагрузка на ось в кг; используйте max_actual_axle_load_t
+             */
+            max_actual_axle_load_kg?: number | null;
+            /** @description Измеренная пиковая нагрузка на ось, т */
+            max_actual_axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
+        };
+        /**
+         * VehicleLoadProfileCreate
+         * @description One measured operational peak axle-load value embedded in a vehicle.
+         */
+        "VehicleLoadProfileCreate-Output": {
+            configuration_type: components["schemas"]["VehicleLoadProfileType"];
+            /**
+             * Max Actual Axle Load Kg
+             * @deprecated
+             * @description Устаревшее: нагрузка на ось в кг; используйте max_actual_axle_load_t
+             */
+            max_actual_axle_load_kg?: number | null;
+            /** @description Измеренная пиковая нагрузка на ось, т */
+            max_actual_axle_load_t?: number | null;
         };
         /**
          * VehicleLoadProfileType
@@ -5357,6 +5445,9 @@ export interface components {
         /**
          * VehicleRead
          * @description Persisted vehicle with its complete operational axle-load profile set.
+         *
+         *     The response keeps the deprecated kilogram/millimetre projection for one
+         *     transition period while the canonical tonne/metre values are authoritative.
          */
         VehicleRead: {
             /**
@@ -5376,7 +5467,13 @@ export interface components {
             average_speed_region: number;
             /** Axle Count */
             axle_count?: number | null;
-            /** Can Use Trailer */
+            /** @description Допустимая нагрузка на ось, т */
+            axle_load_t?: number | null;
+            /**
+             * Can Use Trailer
+             * @deprecated
+             * @description Устаревшее: используйте has_trailer
+             */
             can_use_trailer?: boolean | null;
             /**
              * Capacity
@@ -5389,7 +5486,15 @@ export interface components {
             coupling_length_mm?: number | null;
             /** Default Trailer Id */
             default_trailer_id?: string | null;
-            /** Height Mm */
+            /** Has Trailer */
+            has_trailer: boolean;
+            /** @description Высота, м */
+            height_m?: number | null;
+            /**
+             * Height Mm
+             * @deprecated
+             * @description Устаревшее: высота в мм; используйте height_m
+             */
             height_mm?: number | null;
             /**
              * Height Safety Margin Mm
@@ -5403,13 +5508,23 @@ export interface components {
             id: string;
             /** Is Hgv */
             is_hgv?: boolean | null;
-            /** Length Mm */
+            /** @description Длина, м */
+            length_m?: number | null;
+            /**
+             * Length Mm
+             * @deprecated
+             * @description Устаревшее: длина в мм; используйте length_m
+             */
             length_mm?: number | null;
             /** Load Profiles */
-            load_profiles: components["schemas"]["VehicleLoadProfileCreate"][];
+            load_profiles: components["schemas"]["VehicleLoadProfileCreate-Output"][];
             /** Manufacturer */
             manufacturer?: string | null;
-            /** Max Axle Load Kg */
+            /**
+             * Max Axle Load Kg
+             * @deprecated
+             * @description Устаревшее: нагрузка на ось в кг; используйте axle_load_t
+             */
             max_axle_load_kg?: number | null;
             /** Max Cargo Height Mm */
             max_cargo_height_mm?: number | null;
@@ -5419,8 +5534,14 @@ export interface components {
             max_cargo_weight_kg?: number | null;
             /** Max Cargo Width Mm */
             max_cargo_width_mm?: number | null;
-            /** Max Gross Weight Kg */
+            /**
+             * Max Gross Weight Kg
+             * @deprecated
+             * @description Устаревшее: разрешённая масса в кг; используйте max_gross_weight_t
+             */
             max_gross_weight_kg?: number | null;
+            /** @description Разрешённая полная масса, т */
+            max_gross_weight_t?: number | null;
             /** Max Platform Payload Kg */
             max_platform_payload_kg?: number | null;
             /** Model */
@@ -5431,8 +5552,14 @@ export interface components {
              * @default
              */
             notes: string;
-            /** Payload Capacity Kg */
+            /**
+             * Payload Capacity Kg
+             * @deprecated
+             * @description Устаревшее: грузоподъёмность в кг; используйте payload_capacity_t
+             */
             payload_capacity_kg?: number | null;
+            /** @description Грузоподъёмность, т */
+            payload_capacity_t?: number | null;
             /** Platform Height From Ground Mm */
             platform_height_from_ground_mm?: number | null;
             /** Platform Length Mm */
@@ -5440,8 +5567,14 @@ export interface components {
             /** Platform Width Mm */
             platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
-            /** Tare Weight Kg */
+            /**
+             * Tare Weight Kg
+             * @deprecated
+             * @description Устаревшее: фактическая масса в кг; используйте tare_weight_t
+             */
             tare_weight_kg?: number | null;
+            /** @description Фактическая (снаряжённая) масса, т */
+            tare_weight_t?: number | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
             /** Version */
@@ -5456,7 +5589,13 @@ export interface components {
              * @default 0
              */
             weight_safety_margin_kg: number;
-            /** Width Mm */
+            /** @description Ширина, м */
+            width_m?: number | null;
+            /**
+             * Width Mm
+             * @deprecated
+             * @description Устаревшее: ширина в мм; используйте width_m
+             */
             width_mm?: number | null;
             /**
              * Width Safety Margin Mm
@@ -5477,6 +5616,7 @@ export interface components {
             average_speed_region?: number | null;
             /** Axle Count */
             axle_count?: number | null;
+            axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Can Use Trailer */
             can_use_trailer?: boolean | null;
             /** Capacity */
@@ -5489,12 +5629,16 @@ export interface components {
             default_trailer_id?: string | null;
             /** Expected Version */
             expected_version: number;
+            /** Has Trailer */
+            has_trailer?: boolean | null;
+            height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Height Mm */
             height_mm?: number | null;
             /** Height Safety Margin Mm */
             height_safety_margin_mm?: number | null;
             /** Is Hgv */
             is_hgv?: boolean | null;
+            length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Length Mm */
             length_mm?: number | null;
             /** Manufacturer */
@@ -5511,6 +5655,7 @@ export interface components {
             max_cargo_width_mm?: number | null;
             /** Max Gross Weight Kg */
             max_gross_weight_kg?: number | null;
+            max_gross_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Max Platform Payload Kg */
             max_platform_payload_kg?: number | null;
             /** Model */
@@ -5520,6 +5665,7 @@ export interface components {
             notes?: string | null;
             /** Payload Capacity Kg */
             payload_capacity_kg?: number | null;
+            payload_capacity_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Platform Height From Ground Mm */
             platform_height_from_ground_mm?: number | null;
             /** Platform Length Mm */
@@ -5529,10 +5675,12 @@ export interface components {
             registration_number?: components["schemas"]["NonBlank"] | null;
             /** Tare Weight Kg */
             tare_weight_kg?: number | null;
+            tare_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
             /** Weight Safety Margin Kg */
             weight_safety_margin_kg?: number | null;
+            width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Width Mm */
             width_mm?: number | null;
             /** Width Safety Margin Mm */

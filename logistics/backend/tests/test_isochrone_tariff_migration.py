@@ -31,7 +31,10 @@ def _psycopg_database_url(database_url: str) -> str:
 def _alembic(database_url: str, revision: str) -> None:
     environment = os.environ.copy()
     environment["LOGISTICS_DATABASE_URL"] = _psycopg_database_url(database_url)
-    environment["PYTHONPATH"] = str(_BACKEND_ROOT)
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = str(_BACKEND_ROOT) + (
+        os.pathsep + existing_pythonpath if existing_pythonpath else ""
+    )
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", revision],
         cwd=_BACKEND_ROOT,

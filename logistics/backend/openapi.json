@@ -562,6 +562,16 @@
             ],
             "title": "Axle Count"
           },
+          "axle_load_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "can_use_trailer": {
             "anyOf": [
               {
@@ -615,6 +625,20 @@
             ],
             "title": "Default Trailer Id"
           },
+          "has_trailer": {
+            "title": "Has Trailer",
+            "type": "boolean"
+          },
+          "height_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "height_mm": {
             "anyOf": [
               {
@@ -648,6 +672,16 @@
             ],
             "title": "Is Hgv"
           },
+          "length_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "length_mm": {
             "anyOf": [
               {
@@ -662,7 +696,7 @@
           },
           "load_profiles": {
             "items": {
-              "$ref": "#/components/schemas/VehicleLoadProfileCreate"
+              "$ref": "#/components/schemas/VehicleLoadProfileCreate-Output"
             },
             "title": "Load Profiles",
             "type": "array"
@@ -750,6 +784,16 @@
             ],
             "title": "Max Gross Weight Kg"
           },
+          "max_gross_weight_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_platform_payload_kg": {
             "anyOf": [
               {
@@ -791,6 +835,16 @@
               }
             ],
             "title": "Payload Capacity Kg"
+          },
+          "payload_capacity_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "platform_height_from_ground_mm": {
             "anyOf": [
@@ -843,6 +897,16 @@
             ],
             "title": "Tare Weight Kg"
           },
+          "tare_weight_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "vehicle_type": {
             "anyOf": [
               {
@@ -869,6 +933,16 @@
             "minimum": 0.0,
             "title": "Weight Safety Margin Kg",
             "type": "integer"
+          },
+          "width_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "width_mm": {
             "anyOf": [
@@ -899,6 +973,14 @@
           "manufacturer",
           "model",
           "is_hgv",
+          "tare_weight_t",
+          "max_gross_weight_t",
+          "axle_load_t",
+          "payload_capacity_t",
+          "length_m",
+          "width_m",
+          "height_m",
+          "has_trailer",
           "tare_weight_kg",
           "max_gross_weight_kg",
           "length_mm",
@@ -1056,6 +1138,20 @@
         ],
         "title": "AvailableWarehouseRead",
         "type": "object"
+      },
+      "CanonicalDecimal-Input": {
+        "anyOf": [
+          {
+            "exclusiveMinimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CanonicalDecimal-Output": {
+        "type": "string"
       },
       "ConfirmPlanRequest": {
         "additionalProperties": false,
@@ -8740,7 +8836,7 @@
         "properties": {
           "load_profiles": {
             "items": {
-              "$ref": "#/components/schemas/VehicleLoadProfileCreate"
+              "$ref": "#/components/schemas/VehicleLoadProfileCreate-Input"
             },
             "title": "Load Profiles",
             "type": "array"
@@ -8761,7 +8857,7 @@
         "properties": {
           "load_profiles": {
             "items": {
-              "$ref": "#/components/schemas/VehicleLoadProfileCreate"
+              "$ref": "#/components/schemas/VehicleLoadProfileCreate-Input"
             },
             "title": "Load Profiles",
             "type": "array"
@@ -8779,7 +8875,7 @@
       },
       "VehicleCreate": {
         "additionalProperties": false,
-        "description": "Input for a vehicle, routing speeds, and optional physical truck data.",
+        "description": "Input for a vehicle, routing speeds, and its canonical physical data.\n\nThe canonical physical model contains only masses in tonnes, dimensions in\nmetres and a ``has_trailer`` boolean.  The kilogram/millimetre fields below\nremain accepted for backward compatibility and are kept in sync with the\ncanonical values; new clients should send only the canonical fields.",
         "properties": {
           "active": {
             "default": true,
@@ -8810,6 +8906,17 @@
             ],
             "title": "Axle Count"
           },
+          "axle_load_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Допустимая нагрузка на ось, т"
+          },
           "can_use_trailer": {
             "anyOf": [
               {
@@ -8819,6 +8926,8 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
+            "description": "Устаревшее: используйте has_trailer",
             "title": "Can Use Trailer"
           },
           "capacity": {
@@ -8864,6 +8973,29 @@
             ],
             "title": "Default Trailer Id"
           },
+          "has_trailer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Есть ли у транспортного средства прицеп",
+            "title": "Has Trailer"
+          },
+          "height_m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Высота, м"
+          },
           "height_mm": {
             "anyOf": [
               {
@@ -8874,7 +9006,10 @@
                 "type": "null"
               }
             ],
-            "title": "Height Mm"
+            "deprecated": true,
+            "description": "Устаревшее: высота в мм; используйте height_m",
+            "title": "Height Mm",
+            "x-legacy-unit": "mm"
           },
           "height_safety_margin_mm": {
             "default": 0,
@@ -8893,6 +9028,17 @@
             ],
             "title": "Is Hgv"
           },
+          "length_m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Длина, м"
+          },
           "length_mm": {
             "anyOf": [
               {
@@ -8903,7 +9049,10 @@
                 "type": "null"
               }
             ],
-            "title": "Length Mm"
+            "deprecated": true,
+            "description": "Устаревшее: длина в мм; используйте length_m",
+            "title": "Length Mm",
+            "x-legacy-unit": "mm"
           },
           "manufacturer": {
             "anyOf": [
@@ -8926,7 +9075,10 @@
                 "type": "null"
               }
             ],
-            "title": "Max Axle Load Kg"
+            "deprecated": true,
+            "description": "Устаревшее: нагрузка на ось в кг; используйте axle_load_t",
+            "title": "Max Axle Load Kg",
+            "x-legacy-unit": "kg"
           },
           "max_cargo_height_mm": {
             "anyOf": [
@@ -8986,7 +9138,21 @@
                 "type": "null"
               }
             ],
-            "title": "Max Gross Weight Kg"
+            "deprecated": true,
+            "description": "Устаревшее: разрешённая масса в кг; используйте max_gross_weight_t",
+            "title": "Max Gross Weight Kg",
+            "x-legacy-unit": "kg"
+          },
+          "max_gross_weight_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Разрешённая полная масса, т"
           },
           "max_platform_payload_kg": {
             "anyOf": [
@@ -9029,7 +9195,21 @@
                 "type": "null"
               }
             ],
-            "title": "Payload Capacity Kg"
+            "deprecated": true,
+            "description": "Устаревшее: грузоподъёмность в кг; используйте payload_capacity_t",
+            "title": "Payload Capacity Kg",
+            "x-legacy-unit": "kg"
+          },
+          "payload_capacity_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Грузоподъёмность, т"
           },
           "platform_height_from_ground_mm": {
             "anyOf": [
@@ -9080,7 +9260,21 @@
                 "type": "null"
               }
             ],
-            "title": "Tare Weight Kg"
+            "deprecated": true,
+            "description": "Устаревшее: фактическая масса в кг; используйте tare_weight_t",
+            "title": "Tare Weight Kg",
+            "x-legacy-unit": "kg"
+          },
+          "tare_weight_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Фактическая (снаряжённая) масса, т"
           },
           "vehicle_type": {
             "anyOf": [
@@ -9099,6 +9293,17 @@
             "title": "Weight Safety Margin Kg",
             "type": "integer"
           },
+          "width_m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ширина, м"
+          },
           "width_mm": {
             "anyOf": [
               {
@@ -9109,7 +9314,10 @@
                 "type": "null"
               }
             ],
-            "title": "Width Mm"
+            "deprecated": true,
+            "description": "Устаревшее: ширина в мм; используйте width_m",
+            "title": "Width Mm",
+            "x-legacy-unit": "mm"
           },
           "width_safety_margin_mm": {
             "default": 0,
@@ -9125,7 +9333,7 @@
         "title": "VehicleCreate",
         "type": "object"
       },
-      "VehicleLoadProfileCreate": {
+      "VehicleLoadProfileCreate-Input": {
         "additionalProperties": false,
         "description": "One measured operational peak axle-load value embedded in a vehicle.",
         "properties": {
@@ -9133,14 +9341,74 @@
             "$ref": "#/components/schemas/VehicleLoadProfileType"
           },
           "max_actual_axle_load_kg": {
-            "exclusiveMinimum": 0.0,
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Устаревшее: нагрузка на ось в кг; используйте max_actual_axle_load_t",
             "title": "Max Actual Axle Load Kg",
-            "type": "integer"
+            "x-legacy-unit": "kg"
+          },
+          "max_actual_axle_load_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Измеренная пиковая нагрузка на ось, т"
           }
         },
         "required": [
-          "configuration_type",
-          "max_actual_axle_load_kg"
+          "configuration_type"
+        ],
+        "title": "VehicleLoadProfileCreate",
+        "type": "object"
+      },
+      "VehicleLoadProfileCreate-Output": {
+        "additionalProperties": false,
+        "description": "One measured operational peak axle-load value embedded in a vehicle.",
+        "properties": {
+          "configuration_type": {
+            "$ref": "#/components/schemas/VehicleLoadProfileType"
+          },
+          "max_actual_axle_load_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Устаревшее: нагрузка на ось в кг; используйте max_actual_axle_load_t",
+            "title": "Max Actual Axle Load Kg",
+            "x-legacy-unit": "kg"
+          },
+          "max_actual_axle_load_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Измеренная пиковая нагрузка на ось, т"
+          }
+        },
+        "required": [
+          "configuration_type"
         ],
         "title": "VehicleLoadProfileCreate",
         "type": "object"
@@ -9160,7 +9428,7 @@
       },
       "VehicleRead": {
         "additionalProperties": false,
-        "description": "Persisted vehicle with its complete operational axle-load profile set.",
+        "description": "Persisted vehicle with its complete operational axle-load profile set.\n\nThe response keeps the deprecated kilogram/millimetre projection for one\ntransition period while the canonical tonne/metre values are authoritative.",
         "properties": {
           "active": {
             "default": true,
@@ -9191,6 +9459,17 @@
             ],
             "title": "Axle Count"
           },
+          "axle_load_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Допустимая нагрузка на ось, т"
+          },
           "can_use_trailer": {
             "anyOf": [
               {
@@ -9200,6 +9479,8 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
+            "description": "Устаревшее: используйте has_trailer",
             "title": "Can Use Trailer"
           },
           "capacity": {
@@ -9245,6 +9526,21 @@
             ],
             "title": "Default Trailer Id"
           },
+          "has_trailer": {
+            "title": "Has Trailer",
+            "type": "boolean"
+          },
+          "height_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Высота, м"
+          },
           "height_mm": {
             "anyOf": [
               {
@@ -9255,7 +9551,10 @@
                 "type": "null"
               }
             ],
-            "title": "Height Mm"
+            "deprecated": true,
+            "description": "Устаревшее: высота в мм; используйте height_m",
+            "title": "Height Mm",
+            "x-legacy-unit": "mm"
           },
           "height_safety_margin_mm": {
             "default": 0,
@@ -9279,6 +9578,17 @@
             ],
             "title": "Is Hgv"
           },
+          "length_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Длина, м"
+          },
           "length_mm": {
             "anyOf": [
               {
@@ -9289,11 +9599,14 @@
                 "type": "null"
               }
             ],
-            "title": "Length Mm"
+            "deprecated": true,
+            "description": "Устаревшее: длина в мм; используйте length_m",
+            "title": "Length Mm",
+            "x-legacy-unit": "mm"
           },
           "load_profiles": {
             "items": {
-              "$ref": "#/components/schemas/VehicleLoadProfileCreate"
+              "$ref": "#/components/schemas/VehicleLoadProfileCreate-Output"
             },
             "title": "Load Profiles",
             "type": "array"
@@ -9319,7 +9632,10 @@
                 "type": "null"
               }
             ],
-            "title": "Max Axle Load Kg"
+            "deprecated": true,
+            "description": "Устаревшее: нагрузка на ось в кг; используйте axle_load_t",
+            "title": "Max Axle Load Kg",
+            "x-legacy-unit": "kg"
           },
           "max_cargo_height_mm": {
             "anyOf": [
@@ -9379,7 +9695,21 @@
                 "type": "null"
               }
             ],
-            "title": "Max Gross Weight Kg"
+            "deprecated": true,
+            "description": "Устаревшее: разрешённая масса в кг; используйте max_gross_weight_t",
+            "title": "Max Gross Weight Kg",
+            "x-legacy-unit": "kg"
+          },
+          "max_gross_weight_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Разрешённая полная масса, т"
           },
           "max_platform_payload_kg": {
             "anyOf": [
@@ -9422,7 +9752,21 @@
                 "type": "null"
               }
             ],
-            "title": "Payload Capacity Kg"
+            "deprecated": true,
+            "description": "Устаревшее: грузоподъёмность в кг; используйте payload_capacity_t",
+            "title": "Payload Capacity Kg",
+            "x-legacy-unit": "kg"
+          },
+          "payload_capacity_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Грузоподъёмность, т"
           },
           "platform_height_from_ground_mm": {
             "anyOf": [
@@ -9473,7 +9817,21 @@
                 "type": "null"
               }
             ],
-            "title": "Tare Weight Kg"
+            "deprecated": true,
+            "description": "Устаревшее: фактическая масса в кг; используйте tare_weight_t",
+            "title": "Tare Weight Kg",
+            "x-legacy-unit": "kg"
+          },
+          "tare_weight_t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Фактическая (снаряжённая) масса, т"
           },
           "vehicle_type": {
             "anyOf": [
@@ -9501,6 +9859,17 @@
             "title": "Weight Safety Margin Kg",
             "type": "integer"
           },
+          "width_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ширина, м"
+          },
           "width_mm": {
             "anyOf": [
               {
@@ -9511,7 +9880,10 @@
                 "type": "null"
               }
             ],
-            "title": "Width Mm"
+            "deprecated": true,
+            "description": "Устаревшее: ширина в мм; используйте width_m",
+            "title": "Width Mm",
+            "x-legacy-unit": "mm"
           },
           "width_safety_margin_mm": {
             "default": 0,
@@ -9523,6 +9895,7 @@
         "required": [
           "name",
           "registration_number",
+          "has_trailer",
           "id",
           "version",
           "warehouse_id",
@@ -9581,6 +9954,16 @@
               }
             ],
             "title": "Axle Count"
+          },
+          "axle_load_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "can_use_trailer": {
             "anyOf": [
@@ -9647,6 +10030,27 @@
             "title": "Expected Version",
             "type": "integer"
           },
+          "has_trailer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Trailer"
+          },
+          "height_m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "height_mm": {
             "anyOf": [
               {
@@ -9681,6 +10085,16 @@
               }
             ],
             "title": "Is Hgv"
+          },
+          "length_m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "length_mm": {
             "anyOf": [
@@ -9777,6 +10191,16 @@
             ],
             "title": "Max Gross Weight Kg"
           },
+          "max_gross_weight_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_platform_payload_kg": {
             "anyOf": [
               {
@@ -9832,6 +10256,16 @@
               }
             ],
             "title": "Payload Capacity Kg"
+          },
+          "payload_capacity_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "platform_height_from_ground_mm": {
             "anyOf": [
@@ -9891,6 +10325,16 @@
             ],
             "title": "Tare Weight Kg"
           },
+          "tare_weight_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "vehicle_type": {
             "anyOf": [
               {
@@ -9913,6 +10357,16 @@
               }
             ],
             "title": "Weight Safety Margin Kg"
+          },
+          "width_m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalDecimal-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "width_mm": {
             "anyOf": [

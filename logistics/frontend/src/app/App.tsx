@@ -1381,10 +1381,7 @@ export function App() {
         const { load_profiles: loadProfiles, ...vehicleInput } = input;
         const configuration = {
           vehicle: vehicleInput,
-          load_profiles: loadProfiles.map(({ configuration_type, max_actual_axle_load_kg }) => ({
-            configuration_type,
-            max_actual_axle_load_kg,
-          })),
+          load_profiles: loadProfiles.map((profile) => ({ ...profile })),
         };
         if (dialog.value) await api.updateVehicleConfiguration(dialog.value.id, configuration, dialog.value.version);
         else await api.createVehicleConfiguration(workspace.warehouse.id, configuration, dialog.intentKey);

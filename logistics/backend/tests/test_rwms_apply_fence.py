@@ -1,6 +1,7 @@
 """Publication rechecks current facts without replaying unsafe work or changing history."""
 
 from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -191,7 +192,11 @@ async def test_post_confirmation_change_prevents_owner_post(
     if change == "disabled_vehicle":
         plan.cycles[0].driver_shift.vehicle.active = False
     elif change == "truck_height":
-        plan.cycles[0].driver_shift.vehicle.height_mm += 100
+        # The canonical metre value is authoritative; the legacy millimetre
+        # projection is kept in sync by every catalogue command.
+        vehicle = plan.cycles[0].driver_shift.vehicle
+        vehicle.height_m = vehicle.height_m + Decimal("0.1")
+        vehicle.height_mm = vehicle.height_mm + 100
     elif change == "forbidden":
         zone = _zone(plan.warehouse_id, PolicyZoneKind.NO_TRAILER, "Changed restriction")
         db_session.add(zone)

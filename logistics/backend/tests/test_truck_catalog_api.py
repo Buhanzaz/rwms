@@ -131,9 +131,27 @@ async def test_full_vehicle_configuration_and_cargo_flow(db_session: AsyncSessio
         assert vehicle.status_code == 201, vehicle.text
         assert len(vehicle.json()["load_profiles"]) == 4
         assert all(
-            set(profile) == {"configuration_type", "max_actual_axle_load_kg"}
+            set(profile) == {
+                "configuration_type",
+                "max_actual_axle_load_kg",
+                "max_actual_axle_load_t",
+            }
             for profile in vehicle.json()["load_profiles"]
         )
+        assert {
+            "tare_weight_t",
+            "max_gross_weight_t",
+            "axle_load_t",
+            "payload_capacity_t",
+            "length_m",
+            "width_m",
+            "height_m",
+            "has_trailer",
+        }.issubset(vehicle.json())
+        assert vehicle.json()["tare_weight_t"] == 12.0
+        assert vehicle.json()["length_m"] == 9.2
+        assert vehicle.json()["has_trailer"] is True
+        assert vehicle.json()["tare_weight_kg"] == 12_000
 
         request = await client.post(
             f"/api/warehouses/{warehouse.id}/requests",

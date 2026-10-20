@@ -7,6 +7,11 @@ from datetime import time
 from typing import Any
 
 from app.config import Settings
+from app.domain.vehicle import (
+    effective_trailer_capability,
+    load_profile_axle_load_kg,
+    vehicle_specification,
+)
 from app.errors import ApiError
 from app.models import Trailer, Vehicle, Warehouse
 from app.routing import (
@@ -35,7 +40,11 @@ def vehicle_has_available_trailer(
     """Return whether the current vehicle snapshot can actually use its assigned trailer."""
 
     return (
-        vehicle.can_use_trailer is True
+        effective_trailer_capability(
+            getattr(vehicle, "has_trailer", None),
+            vehicle.can_use_trailer,
+        )
+        is True
         and vehicle.default_trailer is not None
         and vehicle.default_trailer.active
         and str(vehicle.default_trailer.id) not in unavailable_trailer_ids
@@ -56,19 +65,26 @@ def effective_vehicle_cabin_capacity(
 
 
 def vehicle_routing_spec(vehicle: Vehicle) -> VehicleRoutingSpec:
-    """Translate nullable persisted vehicle values without inventing defaults."""
+    """Translate the canonical physical model into exact integer routing units.
 
+    The canonical tonne/metre values are authoritative.  The deprecated
+    kilogram/millimetre columns are read only when the canonical value is absent
+    (rows created before the canonical migration and in-memory equipment
+    snapshots used by tests).
+    """
+
+    physical = vehicle_specification(vehicle).routing_values()
     return VehicleRoutingSpec(
         vehicle_id=vehicle.id,
         is_hgv=vehicle.is_hgv,
-        tare_weight_kg=vehicle.tare_weight_kg,
-        max_gross_weight_kg=vehicle.max_gross_weight_kg,
-        length_mm=vehicle.length_mm,
-        width_mm=vehicle.width_mm,
-        height_mm=vehicle.height_mm,
+        tare_weight_kg=physical["tare_weight_kg"],
+        max_gross_weight_kg=physical["max_gross_weight_kg"],
+        length_mm=physical["length_mm"],
+        width_mm=physical["width_mm"],
+        height_mm=physical["height_mm"],
         axle_count=vehicle.axle_count,
-        max_axle_load_kg=vehicle.max_axle_load_kg,
-        payload_capacity_kg=vehicle.payload_capacity_kg,
+        max_axle_load_kg=physical["max_axle_load_kg"],
+        payload_capacity_kg=physical["payload_capacity_kg"],
         platform_length_mm=vehicle.platform_length_mm,
         platform_width_mm=vehicle.platform_width_mm,
         platform_height_from_ground_mm=vehicle.platform_height_from_ground_mm,
@@ -77,12 +93,26 @@ def vehicle_routing_spec(vehicle: Vehicle) -> VehicleRoutingSpec:
         max_cargo_width_mm=vehicle.max_cargo_width_mm,
         max_cargo_height_mm=vehicle.max_cargo_height_mm,
         max_cargo_weight_kg=vehicle.max_cargo_weight_kg,
-        can_use_trailer=vehicle.can_use_trailer,
+        can_use_trailer=effective_trailer_capability(
+            vehicle.has_trailer, vehicle.can_use_trailer
+        ),
         combined_length_with_trailer_mm=vehicle.combined_length_with_trailer_mm,
         coupling_length_mm=vehicle.coupling_length_mm,
         height_safety_margin_mm=vehicle.height_safety_margin_mm,
         width_safety_margin_mm=vehicle.width_safety_margin_mm,
         weight_safety_margin_kg=vehicle.weight_safety_margin_kg,
+    )
+
+
+def vehicle_axle_profiles(vehicle: Vehicle) -> tuple[OperationalAxleLoadProfile, ...]:
+    """Translate every measured operational axle load into routing units."""
+
+    return tuple(
+        OperationalAxleLoadProfile(
+            configuration_type=TruckConfigurationType(profile.configuration_type),
+            max_actual_axle_load_kg=load_profile_axle_load_kg(profile),
+        )
+        for profile in vehicle.load_profiles
     )
 
 
@@ -198,13 +228,7 @@ def vehicle_equipment_snapshot(
         vehicle_id=str(vehicle.id),
         vehicle=vehicle_routing_spec(vehicle),
         trailer=trailer_routing_spec(trailer) if trailer is not None else None,
-        axle_profiles=tuple(
-            OperationalAxleLoadProfile(
-                configuration_type=TruckConfigurationType(profile.configuration_type),
-                max_actual_axle_load_kg=profile.max_actual_axle_load_kg,
-            )
-            for profile in vehicle.load_profiles
-        ),
+        axle_profiles=vehicle_axle_profiles(vehicle),
         cabin=default_slot_cabin(settings),
     )
 

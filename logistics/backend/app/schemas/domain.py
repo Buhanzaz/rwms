@@ -20,6 +20,12 @@ from pydantic import (
     model_validator,
 )
 
+from app.domain.vehicle import (
+    VehicleSpecificationError,
+    kilograms_to_tonnes,
+    normalize_vehicle_fields,
+    tonnes_to_kilograms,
+)
 from app.models.domain import (
     CustomerDeliveryPurpose,
     OptimizationStatus,
@@ -33,6 +39,15 @@ from app.models.domain import (
 from app.schemas.policy_zones import GeoJsonMultiPolygon
 
 type NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+type CanonicalDecimal = Annotated[
+    Decimal,
+    Field(gt=0, max_digits=12, decimal_places=3),
+]
+_LEGACY_LENGTH_FIELD_OPTIONS: dict[str, Any] = {
+    "deprecated": True,
+    "x-legacy-unit": "mm",
+}
+_LEGACY_MASS_FIELD_OPTIONS: dict[str, Any] = {"deprecated": True, "x-legacy-unit": "kg"}
 
 
 def _shift_duration_seconds(start: time, end: time) -> int:
@@ -343,7 +358,13 @@ class AvailableDriverRead(ApiModel):
 
 
 class VehicleCreate(ApiModel):
-    """Input for a vehicle, routing speeds, and optional physical truck data."""
+    """Input for a vehicle, routing speeds, and its canonical physical data.
+
+    The canonical physical model contains only masses in tonnes, dimensions in
+    metres and a ``has_trailer`` boolean.  The kilogram/millimetre fields below
+    remain accepted for backward compatibility and are kept in sync with the
+    canonical values; new clients should send only the canonical fields.
+    """
 
     name: NonBlank
     registration_number: NonBlank
@@ -355,14 +376,71 @@ class VehicleCreate(ApiModel):
     manufacturer: str | None = None
     model: str | None = None
     is_hgv: bool | None = None
-    tare_weight_kg: int | None = Field(default=None, gt=0)
-    max_gross_weight_kg: int | None = Field(default=None, gt=0)
-    length_mm: int | None = Field(default=None, gt=0)
-    width_mm: int | None = Field(default=None, gt=0)
-    height_mm: int | None = Field(default=None, gt=0)
+    # Canonical physical model: tonnes and metres.
+    tare_weight_t: CanonicalDecimal | None = Field(
+        default=None, description="Фактическая (снаряжённая) масса, т"
+    )
+    max_gross_weight_t: CanonicalDecimal | None = Field(
+        default=None, description="Разрешённая полная масса, т"
+    )
+    axle_load_t: CanonicalDecimal | None = Field(
+        default=None, description="Допустимая нагрузка на ось, т"
+    )
+    payload_capacity_t: CanonicalDecimal | None = Field(
+        default=None, description="Грузоподъёмность, т"
+    )
+    length_m: CanonicalDecimal | None = Field(default=None, description="Длина, м")
+    width_m: CanonicalDecimal | None = Field(default=None, description="Ширина, м")
+    height_m: CanonicalDecimal | None = Field(default=None, description="Высота, м")
+    has_trailer: bool | None = Field(
+        default=None,
+        description="Есть ли у транспортного средства прицеп",  # noqa: RUF001
+    )
+    # Legacy kilogram/millimetre projection, accepted and returned only for
+    # backward compatibility until every consumer has migrated.
+    tare_weight_kg: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: фактическая масса в кг; используйте tare_weight_t",
+        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
+    )
+    max_gross_weight_kg: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: разрешённая масса в кг; используйте max_gross_weight_t",
+        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
+    )
+    length_mm: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: длина в мм; используйте length_m",
+        json_schema_extra=_LEGACY_LENGTH_FIELD_OPTIONS,
+    )
+    width_mm: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: ширина в мм; используйте width_m",
+        json_schema_extra=_LEGACY_LENGTH_FIELD_OPTIONS,
+    )
+    height_mm: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: высота в мм; используйте height_m",
+        json_schema_extra=_LEGACY_LENGTH_FIELD_OPTIONS,
+    )
     axle_count: int | None = Field(default=None, gt=0)
-    max_axle_load_kg: int | None = Field(default=None, gt=0)
-    payload_capacity_kg: int | None = Field(default=None, gt=0)
+    max_axle_load_kg: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: нагрузка на ось в кг; используйте axle_load_t",
+        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
+    )
+    payload_capacity_kg: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: грузоподъёмность в кг; используйте payload_capacity_t",
+        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
+    )
     platform_length_mm: int | None = Field(default=None, gt=0)
     platform_width_mm: int | None = Field(default=None, gt=0)
     platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
@@ -371,7 +449,11 @@ class VehicleCreate(ApiModel):
     max_cargo_width_mm: int | None = Field(default=None, gt=0)
     max_cargo_height_mm: int | None = Field(default=None, gt=0)
     max_cargo_weight_kg: int | None = Field(default=None, gt=0)
-    can_use_trailer: bool | None = None
+    can_use_trailer: bool | None = Field(
+        default=None,
+        description="Устаревшее: используйте has_trailer",
+        json_schema_extra={"deprecated": True},
+    )
     default_trailer_id: UUID | None = None
     combined_length_with_trailer_mm: int | None = Field(default=None, gt=0)
     coupling_length_mm: int | None = Field(default=None, gt=0)
@@ -381,12 +463,35 @@ class VehicleCreate(ApiModel):
     notes: str = ""
 
     @model_validator(mode="after")
-    def validate_trailer_configuration(self) -> VehicleCreate:
-        """Reject contradictory trailer settings while allowing incomplete profiles."""
+    def normalize_physical_units(self) -> VehicleCreate:
+        """Reconcile canonical and legacy units into one consistent payload."""
 
-        if self.default_trailer_id is not None and self.can_use_trailer is False:
-            raise ValueError("default_trailer_id requires can_use_trailer")
+        try:
+            updates = normalize_vehicle_fields(
+                self.model_dump(exclude_unset=True),
+                create=True,
+            )
+        except VehicleSpecificationError as exc:
+            fields = ", ".join(exc.fields) if exc.fields else "vehicle"
+            raise ValueError(f"{exc.detail} ({fields})") from exc
+        for field, value in updates.items():
+            setattr(self, field, value)
         return self
+
+    @field_serializer(
+        "tare_weight_t",
+        "max_gross_weight_t",
+        "axle_load_t",
+        "payload_capacity_t",
+        "length_m",
+        "width_m",
+        "height_m",
+        when_used="json",
+    )
+    def serialize_canonical_decimal(self, value: Decimal | None) -> float | None:
+        """Emit canonical decimals as JSON numbers with millimetre precision."""
+
+        return None if value is None else float(value)
 
 
 class VehicleUpdate(ApiModel):
@@ -403,6 +508,16 @@ class VehicleUpdate(ApiModel):
     manufacturer: str | None = None
     model: str | None = None
     is_hgv: bool | None = None
+    # Canonical physical model: tonnes and metres.
+    tare_weight_t: CanonicalDecimal | None = None
+    max_gross_weight_t: CanonicalDecimal | None = None
+    axle_load_t: CanonicalDecimal | None = None
+    payload_capacity_t: CanonicalDecimal | None = None
+    length_m: CanonicalDecimal | None = None
+    width_m: CanonicalDecimal | None = None
+    height_m: CanonicalDecimal | None = None
+    has_trailer: bool | None = None
+    # Legacy projection.
     tare_weight_kg: int | None = Field(default=None, gt=0)
     max_gross_weight_kg: int | None = Field(default=None, gt=0)
     length_mm: int | None = Field(default=None, gt=0)
@@ -433,16 +548,61 @@ class VehicleLoadProfileCreate(ApiModel):
     """One measured operational peak axle-load value embedded in a vehicle."""
 
     configuration_type: VehicleLoadProfileType
-    max_actual_axle_load_kg: int = Field(gt=0)
+    max_actual_axle_load_t: CanonicalDecimal | None = Field(
+        default=None, description="Измеренная пиковая нагрузка на ось, т"
+    )
+    max_actual_axle_load_kg: int | None = Field(
+        default=None,
+        gt=0,
+        description="Устаревшее: нагрузка на ось в кг; используйте max_actual_axle_load_t",
+        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
+    )
+
+    @model_validator(mode="after")
+    def normalize_axle_load_units(self) -> VehicleLoadProfileCreate:
+        """Keep the canonical tonne value and its legacy kilogram projection equal."""
+
+        if self.max_actual_axle_load_t is None and self.max_actual_axle_load_kg is None:
+            raise ValueError(
+                "max_actual_axle_load_t or max_actual_axle_load_kg is required"
+            )
+        if self.max_actual_axle_load_t is None:
+            assert self.max_actual_axle_load_kg is not None
+            self.max_actual_axle_load_t = kilograms_to_tonnes(
+                self.max_actual_axle_load_kg
+            )
+        elif self.max_actual_axle_load_kg is None:
+            self.max_actual_axle_load_kg = tonnes_to_kilograms(
+                self.max_actual_axle_load_t
+            )
+        elif tonnes_to_kilograms(
+            self.max_actual_axle_load_t
+        ) != self.max_actual_axle_load_kg:
+            raise ValueError(
+                "max_actual_axle_load_t and max_actual_axle_load_kg describe "
+                "different values"
+            )
+        return self
+
+    @field_serializer("max_actual_axle_load_t", when_used="json")
+    def serialize_max_actual_axle_load(self, value: Decimal | None) -> float | None:
+        """Emit the canonical axle load as a JSON number."""
+
+        return None if value is None else float(value)
 
 
 class VehicleRead(VehicleCreate):
-    """Persisted vehicle with its complete operational axle-load profile set."""
+    """Persisted vehicle with its complete operational axle-load profile set.
+
+    The response keeps the deprecated kilogram/millimetre projection for one
+    transition period while the canonical tonne/metre values are authoritative.
+    """
 
     id: UUID
     version: int
     warehouse_id: UUID
     load_profiles: list[VehicleLoadProfileCreate]
+    has_trailer: bool
 
 
 class AdminVehicleRead(VehicleCreate):
@@ -460,6 +620,14 @@ class AdminVehicleRead(VehicleCreate):
     manufacturer: str | None
     model: str | None
     is_hgv: bool | None
+    tare_weight_t: CanonicalDecimal | None
+    max_gross_weight_t: CanonicalDecimal | None
+    axle_load_t: CanonicalDecimal | None
+    payload_capacity_t: CanonicalDecimal | None
+    length_m: CanonicalDecimal | None
+    width_m: CanonicalDecimal | None
+    height_m: CanonicalDecimal | None
+    has_trailer: bool
     tare_weight_kg: int | None = Field(gt=0)
     max_gross_weight_kg: int | None = Field(gt=0)
     length_mm: int | None = Field(gt=0)
@@ -488,6 +656,7 @@ class AdminVehicleRead(VehicleCreate):
         description="Canonical warehouse-service UUID, never the planner-local row UUID."
     )
     load_profiles: list[VehicleLoadProfileCreate]
+
 
 
 class TrailerCreate(ApiModel):
