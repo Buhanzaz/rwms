@@ -105,7 +105,6 @@ async def _make_vehicle(
                 name=name,
                 registration_number=registration_number,
                 capacity=2,
-                is_hgv=True,
                 tare_weight_t=Decimal("12"),
                 max_gross_weight_t=Decimal("22"),
                 axle_load_t=Decimal("10"),

@@ -31,7 +31,6 @@ def _profile(*, trailer: bool = False) -> EffectiveTruckProfile:
         vehicle_id="vehicle-1",
         trailer_id="trailer-1" if trailer else None,
         trailer_attached=trailer,
-        is_hgv=True,
         height_meters=4.05,
         width_meters=2.55,
         length_meters=18.5 if trailer else 9.0,

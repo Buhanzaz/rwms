@@ -178,7 +178,6 @@ export interface Vehicle {
   vehicle_type?: string | null;
   manufacturer?: string | null;
   model?: string | null;
-  is_hgv?: boolean | null;
   /** Canonical physical model: masses in tonnes, dimensions in metres. */
   tare_weight_t?: number | null;
   max_gross_weight_t?: number | null;
@@ -359,7 +358,6 @@ export interface RoutingProfileSnapshot {
   vehicleId: UUID;
   trailerId: UUID | null;
   trailerAttached: boolean;
-  isHgv: boolean;
   cargoCount: number;
   cargoPlacements: RoutingCargoPlacementSnapshot[];
   configurationType: VehicleLoadConfigurationType;

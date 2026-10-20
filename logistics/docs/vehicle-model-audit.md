@@ -1,8 +1,10 @@
 # Аудит и миграция модели транспортного средства и прицепа
 
 Статус: выполнен технический аудит, реализована каноническая модель машины и
-прицепа, аддитивные миграции `0038`/`0039` и регрессионные проверки. Публикация
-не выполнялась.
+прицепа. Аддитивные миграции `0038`/`0039` заполняют канонические данные, а
+`0040` удаляет всю legacy-проекцию (кг/мм, `can_use_trailer`, производная полная
+длина и мёртвый `is_hgv`); чистая схема содержит только канонические поля.
+Регрессионные проверки добавлены. Публикация не выполнялась.
 
 Область: `logistics/backend` (FastAPI, SQLAlchemy 2 async, Alembic,
 PostgreSQL/PostGIS), операторский `logistics/frontend` и настройки транспорта в
@@ -94,17 +96,21 @@ Routing-extension хранится в тех же канонических ед�
 вместимости в форме оператора приведено к значению `2`, совпадающему с
 backend/БД.
 
-### Legacy-совместимость
+### Удаление legacy
 
-Legacy-колонки кг/мм остаются в БД только как rollback-проекция; активный код их
-не читает и не пишет. API принимает legacy-поля на входе один переходный период
-и конвертирует их один раз; ответы содержат только канонические значения.
-`can_use_trailer` принимается как alias `has_trailer` с проверкой конфликта.
-Удалённые derived-поля `platform_width_mm` и
-`combined_length_with_trailer_mm` отклоняются. Длина автопоезда вычисляется из
+Проект собирается на чистой БД, поэтому переходная совместимость не нужна:
+удалены все legacy-колонки кг/мм, `can_use_trailer`, производная
+`combined_length_with_trailer_mm` и неиспользуемый `is_hgv`. API принимает и
+возвращает только канонические поля; старые имена отклоняются как неизвестные.
+`is_hgv` удалён как мёртвое поле: все маршруты и так считаются Valhalla
+`costing=truck`, флаг никогда не входил в costing, но блокировал профиль при
+`NULL`.
+
+Длина автопоезда вычисляется из
 `length_m + coupling_length_m + trailer.length_m`. Фронтенд разбирает как новые
 канонические snapshot-профили маршрута (`lengthM`/`weightT`), так и
-исторические профили в мм/кг (`lengthMm`/`weightKg`).
+исторические профили в мм/кг (`lengthMm`/`weightKg`); новые снапшоты
+записываются только в канонических полях.
 
 `default_trailer_id` требует `has_trailer=true`. Тройственное состояние
 прицепа удалено из активной модели.
@@ -128,22 +134,31 @@ Alembic `20261020_0039_canonical_trailer_and_extensions`:
 6. не удаляет legacy-колонки; downgrade удаляет только новые колонки и
    восстанавливает прежние ограничения.
 
-Синхронизация при записи: запрос может прислать каноническое или legacy-поле;
-сервер проверяет, что оба набора описывают одно значение, иначе `422`.
-Legacy-проекция больше не обновляется, потому что активным источником истины
-является только каноническая колонка.
+Alembic `20261020_0040_remove_legacy_vehicle_fields` удаляет legacy-проекцию:
+все колонки кг/мм у машины и прицепа, `can_use_trailer`, производную полную
+длину, `vehicle_load_profiles.max_actual_axle_load_kg` и `is_hgv`. Чистая схема
+после `head` содержит только канонические поля. Downgrade возвращает колонки и
+прежние CHECK-ограничения, заполняя кг/мм из канонических значений
+(`platform_width_mm`, `combined_length_with_trailer_mm` и `is_hgv` — как `NULL`,
+поскольку канонического источника у них нет).
+
+Запись: API принимает только канонические поля, поэтому синхронизации двух
+проекций больше нет; единственный источник истины — канонические колонки.
 
 ## 5. Проверка
 
 Добавлены:
 
 - `tests/test_vehicle_canonical_model.py` — точные преобразования, Decimal,
-  конфликты единиц, `has_trailer`, default_trailer, частичное обновление,
-  сериализация JSON и отклонение удалённых дублей (`platform_width_mm`,
-  `combined_length_with_trailer_mm`) на create, update и trailer;
-- `tests/test_canonical_vehicle_migration.py` — на одноразовой БД: upgrade 0038 →
+  `has_trailer`, default_trailer, частичное обновление, сериализация JSON и
+  отклонение всех удалённых полей (кг/мм, `can_use_trailer`,
+  `combined_length_with_trailer_mm`, `platform_width_mm`, `is_hgv`) на create,
+  update, trailer и осевом профиле;
+- `tests/test_canonical_vehicle_migration.py` — на одноразовой БД: upgrade 0037 →
   seed legacy-строк → upgrade 0039 → точные канонические значения машины,
-  прицепа и осевых профилей;
+  прицепа и осевых профилей → upgrade 0040 → legacy-колонок и `is_hgv` нет, а
+  канонические данные сохранены → downgrade 0039 → legacy-проекция восстановлена
+  и заполнена из канонических значений;
 - `tests/test_canonical_vehicle_scenario.py` — детерминированный сценарий: ТС без
   прицепа и с прицепом, создание через catalog, сериализация, вместимость 1/2,
   ограничения массы/габаритов, разные осевые профили, `derive_simulation_state`
@@ -155,23 +170,25 @@ Legacy-проекция больше не обновляется, потому �
 
 Фактические результаты (Windows, PostgreSQL/PostGIS в контейнере, mock-routing):
 
-- backend full suite с SQLAlchemy `2.0.55`: `718 passed, 12 skipped, 0 failed`
-  (315 с); skipped — optional solver, пять migration-probe и Valhalla
+- backend full suite с SQLAlchemy `2.0.55`: `750 passed, 12 skipped, 0 failed`
+  (127 с); рост числа тестов — параметризованная проверка отклонения всех
+  удалённых полей; skipped — optional solver, пять migration-probe и Valhalla
   tagged-graph без внешних ресурсов;
-- migration-проверки по отдельности на свежих одноразовых БД: canonical `0039`,
-  finite-capacity V36 и contact-name V35 — `1 + 1 + 1 passed`;
+- migration-проверки по отдельности на свежих одноразовых БД: canonical
+  `0038 → 0039 → 0040` (backfill, удаление legacy-колонок, downgrade-восстановление)
+  — `1 passed`; finite-capacity V36 — `1 passed`; contact-name V35 — `1 passed`;
   `alembic upgrade head` на свежей БД и `alembic check` — «No new upgrade
   operations detected»;
 - `ruff check app tests` — All checks passed; `mypy app` — Success: no issues
   found in 109 source files;
-- panel: focused fleet API/UI `46/46`, полный `npm run lint`, `npm run typecheck`
-  и `npm run build:admin` — успешно;
+- panel: typecheck, lint, focused fleet API/UI `45/45`, `npm run build:admin` —
+  успешно;
 - logistics frontend: полный Vitest `389/389`, `npm run typecheck`,
   `npm run lint`, `npm run build` — успешно;
-- `openapi.json` и `src/api/schema.d.ts` перегенерированы и совпадают
-  (sha256 сгенерированного `schema.d.ts` идентичен committed-файлу);
-  `contracts/openapi/logistics-planner-service.yaml` синхронизирован с
-  каноническими ответами (версия `1.4.0`).
+- `openapi.json` и `src/api/schema.d.ts` перегенерированы; sha256
+  сгенерированного `schema.d.ts` совпадает с committed-файлом;
+  `contracts/openapi/logistics-planner-service.yaml` содержит только
+  канонические поля (версия `1.5.0`).
 
 ## 6. Остаточные риски и продуктовые вопросы
 
@@ -182,18 +199,16 @@ Legacy-проекция больше не обновляется, потому �
 2. **Семантика запаса по массе:** `weight_safety_margin_t` входит в фактическую
    массу для Valhalla, но не в проверку `tare + cargo <= max_gross`. Решение не
    менялось; вопрос зафиксирован в `open-questions.md`.
-3. **Legacy-колонки кг/мм** остаются только для rollback и не являются
-   источником истины. Их окончательное удаление требует отдельного решения и
-   проверки внешних потребителей.
+3. **Чистая сборка.** Проект собирается на пустой БД, поэтому legacy-данные не
+   переносятся. Исторические route-снапшоты содержат `isHgv` и мм/кг-ключи;
+   фронтенд их по-прежнему читает, но `TruckRouteCycleRouter` считает такой
+   сохранённый proof устаревшим и требует перегенерации черновика. Подтверждённая
+   история при этом не переписывается. При развёртывании поверх старой БД
+   черновики планов нужно перегенерировать.
 4. **Тестовая среда:** jsdom получает явный URL и Storage из своего окна, а
    датовые сценарии фиксируют системное время. Полный frontend-набор теперь
    детерминирован и не зависит от Windows-локали или текущей даты.
-5. `is_hgv` остаётся обязательным для routing-профиля, хотя не влияет на
-   Valhalla costing; его роль стоит пересмотреть отдельно.
-6. **Точная полная длина автопоезда.** Legacy-колонка
-   `combined_length_with_trailer_mm` больше не читается: полная длина выводится
-   из `length_m + coupling_length_m + trailer.length_m`. Комбинация, у которой
-   ранее была задана только точная полная длина без длины сцепки, получит
-   `ROUTING_PROFILE_INCOMPLETE`, пока оператор не укажет `coupling_length_m`;
-   расхождение сохранённой полной длины с суммой канонических длин больше не
-   маскируется.
+5. **`is_hgv` удалён** как неиспользуемый флаг: маршрутизация всегда использует
+   Valhalla `costing=truck`. Если когда-нибудь понадобится отдельный профиль для
+   лёгкого транспорта, его нужно задавать явной конфигурацией costing, а не
+   скрытым boolean, который не влияет на расчёт.

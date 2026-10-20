@@ -67,7 +67,6 @@ def test_equipment_specs_are_identical_at_slot_and_day_planner_boundaries() -> N
         name="Mapped truck",
         capacity=2,
         active=True,
-        is_hgv=True,
         tare_weight_t=Decimal("7.201"),
         max_gross_weight_t=Decimal("18.202"),
         length_m=Decimal("9.203"),

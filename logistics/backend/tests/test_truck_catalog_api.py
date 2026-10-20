@@ -73,7 +73,6 @@ def _vehicle_payload(trailer_id: str) -> dict[str, object]:
             "vehicle_type": "FLATBED_CRANE",
             "manufacturer": "MAN",
             "model": "TGS",
-            "is_hgv": True,
             "tare_weight_t": 12,
             "max_gross_weight_t": 22,
             "length_m": 9.2,

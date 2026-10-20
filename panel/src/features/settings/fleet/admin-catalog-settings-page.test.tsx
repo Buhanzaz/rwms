@@ -4,7 +4,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import {
@@ -279,7 +278,7 @@ describe("AdminCatalogSettingsPage", () => {
     )
   })
 
-  it("lets the keyboard reach capacity and nullable vehicle flags", async () => {
+  it("lets the keyboard reach capacity", async () => {
     const user = userEvent.setup()
     renderPage()
     await user.click(await screen.findByRole("button", { name: "Изменить" }))
@@ -297,17 +296,6 @@ describe("AdminCatalogSettingsPage", () => {
         .getByRole("radio", { name: "1 бытовка" })
         .getAttribute("aria-checked")
     ).toBe("true")
-    await user.click(screen.getByRole("button", { name: "Автомобиль" }))
-    screen.getByRole("textbox", { name: "Модель" }).focus()
-    await user.tab()
-    const hgv = screen.getByRole("radiogroup", {
-      name: "Грузовой автомобиль (HGV)",
-    })
-    await waitFor(() =>
-      expect(document.activeElement).toBe(
-        within(hgv).getByRole("radio", { name: "Не указано" })
-      )
-    )
   })
 
   it("preserves every hidden specification when only the name changes", async () => {
@@ -407,11 +395,6 @@ describe("AdminCatalogSettingsPage", () => {
       "А123ВС77"
     )
     await user.click(screen.getByRole("button", { name: "Автомобиль" }))
-    await user.click(
-      within(
-        screen.getByRole("radiogroup", { name: "Грузовой автомобиль (HGV)" })
-      ).getByRole("radio", { name: "Нет" })
-    )
     await user.click(screen.getByRole("button", { name: "Расчёт маршрута" }))
     const speed = screen.getByRole("textbox", {
       name: "Средняя скорость в городе, км/ч",
@@ -430,7 +413,6 @@ describe("AdminCatalogSettingsPage", () => {
     expect(first.slice(0, 3)).toEqual(["admin-token", SOURCE_ID, "vehicle"])
     expect(first[3].physical).toEqual(emptyAdminPhysicalSpecification())
     expect(first[3].vehicle).toMatchObject({
-      isHgv: false,
       hasTrailer: false,
       defaultTrailerId: null,
       averageSpeedCity: 37.5,

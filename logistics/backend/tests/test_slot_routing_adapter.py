@@ -81,7 +81,6 @@ def _equipment() -> VehicleEquipmentSnapshot:
         vehicle_id=str(vehicle_id),
         vehicle=VehicleRoutingSpec(
             vehicle_id=vehicle_id,
-            is_hgv=True,
             tare_weight_t=Decimal("9"),
             max_gross_weight_t=Decimal("18"),
             length_m=Decimal("9.2"),

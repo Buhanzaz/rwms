@@ -343,16 +343,15 @@ The vehicle and trailer physical model is canonical: masses (`tare_weight_t`,
 `max_gross_weight_t`, `axle_load_t`, `payload_capacity_t`) are in tonnes,
 dimensions (`length_m`, `width_m`, `height_m`) are in metres and trailer
 availability is one required `has_trailer` boolean. Values persist as
-`NUMERIC(12, 3)`, so the former kilogram/millimetre precision is retained
-exactly. One domain module, [`vehicle.py`](backend/app/domain/vehicle.py),
-normalizes units, validates contradictions and produces the exact tonnes/metres
-input used by Valhalla truck routing; calculations never mix units. Deprecated
-kilogram/millimetre fields are accepted on input for one transition period and
-converted once; responses expose canonical values only, and the legacy columns
-remain only as a rollback projection. Routing-extension platform, cargo,
-coupling and safety-margin fields use the same canonical units. Additive Alembic
-migrations `20260908_0038` and `20261020_0039` backfill existing rows and drop no
-legacy data.
+`NUMERIC(12, 3)`, so kilogram and millimetre precision is retained exactly. One
+domain module, [`vehicle.py`](backend/app/domain/vehicle.py), validates
+contradictions and produces the exact tonnes/metres input used by Valhalla truck
+routing; calculations never mix units. Routing-extension platform, cargo,
+coupling and safety-margin fields use the same canonical units. The legacy
+kilogram/millimetre projection, the derived combined length and the unused
+`is_hgv` flag were removed: requests and responses use canonical values only.
+Additive Alembic migrations `20260908_0038` and `20261020_0039` backfill the
+canonical data, and `20261020_0040` drops the legacy projection.
 
 ## Logistics rules
 

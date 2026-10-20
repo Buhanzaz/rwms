@@ -58,16 +58,13 @@ the local-development default. Evidence:
   vehicle fields and profiles, while trailer mutations remain separate.
 - The vehicle and trailer physical model is canonical: masses in tonnes,
   dimensions in metres and one required `has_trailer` boolean.
-  `app/domain/vehicle.py` is the only conversion/validation layer (exact
-  1 t = 1000 kg and 1 m = 1000 mm). Deprecated kilogram/millimetre fields and
-  `can_use_trailer` are accepted on input for one transition period and
-  converted once; responses expose canonical values only, and the legacy
-  columns remain only as a rollback projection. Additive migrations
-  `20260908_0038` and `20261020_0039` backfill vehicles, trailers, routing
-  extensions and measured axle loads; no legacy column is dropped. The removed
-  duplicate fields `platform_width_mm` and
-  `combined_length_with_trailer_mm` are rejected; combination length is
-  derived from `length_m + coupling_length_m + trailer.length_m`.
+  `app/domain/vehicle.py` is the only validation layer. Kilogram/millimetre
+  fields, `can_use_trailer`, the derived combined length and the unused `is_hgv`
+  flag were removed; the schema contains canonical columns only. Additive
+  migrations `20260908_0038` and `20261020_0039` backfill vehicles, trailers,
+  routing extensions and measured axle loads, and `20261020_0040` drops the
+  legacy projection. Combination length is derived from
+  `length_m + coupling_length_m + trailer.length_m`.
 - Warehouse binding accepts an RWMS external UUID plus depot timing and a
   one-to-twelve-entry contiguous hourly isochrone tariff list. The server loads
   canonical name/address/timezone and always prefers owner-held coordinates.

@@ -2164,7 +2164,7 @@ def test_assigned_driver_command_contains_one_exact_vehicle_shift_snapshot() -> 
         name="MAN TGS",
         registration_number="A123AA78",
         capacity=2,
-        can_use_trailer=False,
+        has_trailer=False,
         vehicle_type="FLATBED_CRANE",
         manufacturer="MAN",
         model="TGS",

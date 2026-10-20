@@ -61,7 +61,6 @@ const vehicleSpecification = {
   ...defaultAdminVehicleSpecification(),
   vehicleType: "CRANE",
   manufacturer: "Test",
-  isHgv: true,
   hasTrailer: true,
   defaultTrailerId: TRAILER_ID,
   couplingLengthM: 0.9,
@@ -88,7 +87,6 @@ const vehicleResponse = {
   vehicle_type: "CRANE",
   manufacturer: "Test",
   model: null,
-  is_hgv: true,
   has_trailer: true,
   default_trailer_id: TRAILER_ID,
   coupling_length_m: 0.9,
@@ -205,8 +203,7 @@ describe("admin vehicle and trailer catalog API", () => {
         vehicle_type: "CRANE",
         manufacturer: "Test",
         model: null,
-        is_hgv: true,
-        has_trailer: true,
+              has_trailer: true,
         default_trailer_id: TRAILER_ID,
         coupling_length_m: 0.9,
         height_safety_margin_m: 0.1,
@@ -425,7 +422,6 @@ describe("admin vehicle and trailer catalog API", () => {
     { ...vehicleResponse, axle_count: 0 },
     { ...vehicleResponse, height_safety_margin_m: -1 },
     { ...vehicleResponse, average_speed_city: 0 },
-    { ...vehicleResponse, is_hgv: "false" },
     { ...vehicleResponse, has_trailer: undefined },
     {
       ...vehicleResponse,
@@ -473,7 +469,6 @@ describe("admin vehicle and trailer catalog API", () => {
     const response = {
       ...vehicleResponse,
       tare_weight_t: null,
-      is_hgv: false,
       has_trailer: false,
       default_trailer_id: null,
       weight_safety_margin_t: 0,
@@ -491,7 +486,6 @@ describe("admin vehicle and trailer catalog API", () => {
     )
     expect(loaded!.physical.tareWeightT).toBeNull()
     expect(loaded!.vehicle).toMatchObject({
-      isHgv: false,
       hasTrailer: false,
       defaultTrailerId: null,
       weightSafetyMarginT: 0,
@@ -506,7 +500,6 @@ describe("admin vehicle and trailer catalog API", () => {
     expect(body.vehicle).toMatchObject({
       expected_version: 4,
       tare_weight_t: null,
-      is_hgv: false,
       has_trailer: false,
       default_trailer_id: null,
       weight_safety_margin_t: 0,

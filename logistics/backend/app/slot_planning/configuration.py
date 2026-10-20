@@ -71,7 +71,6 @@ def vehicle_routing_spec(vehicle: Vehicle) -> VehicleRoutingSpec:
     physical = vehicle_specification(vehicle)
     return VehicleRoutingSpec(
         vehicle_id=vehicle.id,
-        is_hgv=vehicle.is_hgv,
         tare_weight_t=physical.tare_weight_t,
         max_gross_weight_t=physical.max_gross_weight_t,
         length_m=physical.length_m,

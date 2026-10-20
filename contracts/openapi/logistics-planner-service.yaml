@@ -1,16 +1,16 @@
 openapi: 3.1.0
 info:
   title: RWMS Logistics Planner Administration API
-  version: 1.4.0
+  version: 1.5.0
   x-rwms-owner: logistics-planner-service
   x-rwms-stability: admin-catalog-v1
   description: >-
     Canonical API for the logistics planner's catalog-home vehicles, trailers,
     warehouse planning settings and global map display settings.
     Vehicles and trailers use one canonical physical model: masses in tonnes,
-    dimensions in metres and one required has_trailer boolean. Deprecated kg/mm
-    fields are accepted on input only for one transition period and converted
-    once by the owner; responses expose canonical values only.
+    dimensions in metres and one required has_trailer boolean. The legacy
+    kilogram/millimetre projection, the derived combined length and the unused
+    HGV flag were removed; requests accept canonical values only.
     Administrator traffic enters through the same-origin gateway prefix
     /api/logistics-planner/v1/admin; the gateway rewrites that prefix to the
     planner's private FastAPI implementation path /api/admin. Operator map reads
@@ -828,12 +828,8 @@ components:
     VehicleLoadProfile:
       type: object
       additionalProperties: false
-      required: [configuration_type]
-      description: >-
-        One measured peak axle load. New clients send max_actual_axle_load_t;
-        the deprecated max_actual_axle_load_kg input projection is converted
-        once and both values must describe the same measurement when supplied
-        together.
+      required: [configuration_type, max_actual_axle_load_t]
+      description: One measured peak axle load in canonical tonnes.
       properties:
         configuration_type:
           type: string
@@ -845,11 +841,6 @@ components:
             - CARGO_ON_TRAILER_WITH_TRAILER
             - TWO_CARGO_SPLIT
         max_actual_axle_load_t: {$ref: '#/components/schemas/CanonicalTonnes'}
-        max_actual_axle_load_kg:
-          type: [integer, 'null']
-          minimum: 1
-          deprecated: true
-          description: Deprecated kilogram input projection; use max_actual_axle_load_t.
     VehicleLoadProfileRead:
       type: object
       additionalProperties: false
@@ -874,9 +865,7 @@ components:
       required: [name, registration_number]
       description: >-
         Canonical physical model: masses in tonnes, dimensions in metres and a
-        has_trailer boolean. Deprecated kilogram/millimetre fields remain
-        accepted on input for one transition period and are converted once
-        server-side; responses expose canonical values only.
+        required has_trailer boolean. Only canonical fields are accepted.
       properties:
         name: {$ref: '#/components/schemas/NonBlankString'}
         registration_number: {$ref: '#/components/schemas/NonBlankString'}
@@ -887,7 +876,6 @@ components:
         vehicle_type: {$ref: '#/components/schemas/NullableString'}
         manufacturer: {$ref: '#/components/schemas/NullableString'}
         model: {$ref: '#/components/schemas/NullableString'}
-        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
         tare_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         max_gross_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         axle_load_t: {$ref: '#/components/schemas/CanonicalTonnes'}
@@ -912,37 +900,6 @@ components:
           type: [string, 'null']
           format: uuid
         notes: {type: string, default: ''}
-        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        height_safety_margin_mm:
-          type: [integer, 'null']
-          minimum: 0
-          deprecated: true
-        width_safety_margin_mm:
-          type: [integer, 'null']
-          minimum: 0
-          deprecated: true
-        weight_safety_margin_kg:
-          type: [integer, 'null']
-          minimum: 0
-          deprecated: true
-        can_use_trailer:
-          type: [boolean, 'null']
-          deprecated: true
-          description: Deprecated alias for has_trailer; a conflicting pair is rejected.
     VehiclePatch:
       type: object
       additionalProperties: false
@@ -969,7 +926,6 @@ components:
         vehicle_type: {$ref: '#/components/schemas/NullableString'}
         manufacturer: {$ref: '#/components/schemas/NullableString'}
         model: {$ref: '#/components/schemas/NullableString'}
-        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
         tare_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         max_gross_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         axle_load_t: {$ref: '#/components/schemas/CanonicalTonnes'}
@@ -1003,37 +959,6 @@ components:
           type: [string, 'null']
           format: uuid
         notes: {$ref: '#/components/schemas/NullableString'}
-        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        height_safety_margin_mm:
-          type: [integer, 'null']
-          minimum: 0
-          deprecated: true
-        width_safety_margin_mm:
-          type: [integer, 'null']
-          minimum: 0
-          deprecated: true
-        weight_safety_margin_kg:
-          type: [integer, 'null']
-          minimum: 0
-          deprecated: true
-        can_use_trailer:
-          type: [boolean, 'null']
-          deprecated: true
-          description: Deprecated alias for has_trailer; a conflicting pair is rejected.
     VehicleConfigurationCreate:
       type: object
       additionalProperties: false
@@ -1058,9 +983,7 @@ components:
       additionalProperties: false
       required: [name, registration_number]
       description: >-
-        Canonical trailer model. Deprecated kilogram/millimetre fields remain
-        accepted on input for one transition period; responses expose canonical
-        values only.
+        Canonical trailer model. Requests accept canonical tonnes/metres only.
       properties:
         name: {$ref: '#/components/schemas/NonBlankString'}
         registration_number: {$ref: '#/components/schemas/NonBlankString'}
@@ -1081,20 +1004,6 @@ components:
         max_cargo_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
         notes: {type: string, default: ''}
-        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
     TrailerPatch:
       type: object
       additionalProperties: false
@@ -1124,20 +1033,6 @@ components:
         max_cargo_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
         notes: {$ref: '#/components/schemas/NullableString'}
-        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
-        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
     CatalogRehomeRequest:
       type: object
       additionalProperties: false
@@ -1161,7 +1056,6 @@ components:
         - vehicle_type
         - manufacturer
         - model
-        - is_hgv
         - has_trailer
         - default_trailer_id
         - notes
@@ -1179,7 +1073,6 @@ components:
         vehicle_type: {$ref: '#/components/schemas/NullableString'}
         manufacturer: {$ref: '#/components/schemas/NullableString'}
         model: {$ref: '#/components/schemas/NullableString'}
-        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
         tare_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         max_gross_weight_t: {$ref: '#/components/schemas/CanonicalTonnes'}
         axle_load_t: {$ref: '#/components/schemas/CanonicalTonnes'}

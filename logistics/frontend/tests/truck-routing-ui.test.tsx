@@ -292,7 +292,7 @@ function cycleFixture(): RouteCycle {
         geometry: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[37.6, 55.7], [37.7, 55.8]] } },
         routing_provider: 'valhalla', osm_data_version: '2026-08-24', routed_at: '2026-08-25T04:59:00Z',
         routing_profile_snapshot: {
-          vehicleId: 'vehicle-1', trailerId: 'trailer-1', trailerAttached: true, isHgv: true, cargoCount: 2,
+          vehicleId: 'vehicle-1', trailerId: 'trailer-1', trailerAttached: true, cargoCount: 2,
           cargoPlacements: [
             { cargoId: 'cargo-1', position: 'TRUCK_PLATFORM', lengthMm: 6000, widthMm: 2400, heightMm: 2400, weightKg: 2500 },
             { cargoId: 'cargo-2', position: 'TRAILER_PLATFORM', lengthMm: 6000, widthMm: 2400, heightMm: 2400, weightKg: 2500 },

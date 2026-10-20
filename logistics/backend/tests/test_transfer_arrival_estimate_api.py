@@ -107,7 +107,7 @@ def _vehicle(
         warehouse_id=source.id,
         active=active,
         capacity=capacity,
-        can_use_trailer=True,
+        has_trailer=True,
         default_trailer=(
             SimpleNamespace(id=uuid4(), active=True, warehouse_id=source.id)
             if trailer

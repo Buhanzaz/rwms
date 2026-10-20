@@ -126,9 +126,9 @@ def vehicle(warehouse_id: UUID) -> DbVehicle:
         active=True,
         average_speed_city=35,
         average_speed_region=65,
-        height_safety_margin_mm=0,
-        width_safety_margin_mm=0,
-        weight_safety_margin_kg=0,
+        height_safety_margin_m=0,
+        width_safety_margin_m=0,
+        weight_safety_margin_t=0,
         notes="",
     )
     result.default_trailer = None

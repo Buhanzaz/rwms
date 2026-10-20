@@ -29,43 +29,34 @@ from app.schemas.domain import (
     VehicleUpdate,
 )
 
-
-def _legacy_vehicle_payload() -> dict[str, object]:
-    """Build one complete backward-compatible kilogram/millimetre payload."""
-
-    return {
-        "name": "Canonical truck",
-        "registration_number": "A123BC77",
-        "capacity": 2,
-        "is_hgv": True,
-        "tare_weight_kg": 12_000,
-        "max_gross_weight_kg": 22_000,
-        "length_mm": 9_200,
-        "width_mm": 2_500,
-        "height_mm": 3_200,
-        "max_axle_load_kg": 10_000,
-        "payload_capacity_kg": 8_000,
-        "can_use_trailer": True,
-    }
-
-
-def test_legacy_kilogram_fields_are_converted_to_exact_tonnes() -> None:
-    """A legacy payload is converted once into the canonical model."""
-
-    vehicle = VehicleCreate.model_validate(_legacy_vehicle_payload())
-
-    assert vehicle.tare_weight_t == Decimal("12.000")
-    assert vehicle.max_gross_weight_t == Decimal("22.000")
-    assert vehicle.axle_load_t == Decimal("10.000")
-    assert vehicle.payload_capacity_t == Decimal("8.000")
-    assert vehicle.length_m == Decimal("9.200")
-    assert vehicle.width_m == Decimal("2.500")
-    assert vehicle.height_m == Decimal("3.200")
-    assert vehicle.has_trailer is True
+_LEGACY_VEHICLE_FIELDS = {
+    "tare_weight_kg": 12_000,
+    "max_gross_weight_kg": 22_000,
+    "length_mm": 9_200,
+    "width_mm": 2_500,
+    "height_mm": 3_200,
+    "max_axle_load_kg": 10_000,
+    "payload_capacity_kg": 8_000,
+    "platform_length_mm": 6_000,
+    "platform_width_mm": 2_500,
+    "platform_height_from_ground_mm": 1_300,
+    "max_platform_payload_kg": 7_000,
+    "max_cargo_length_mm": 7_000,
+    "max_cargo_width_mm": 2_600,
+    "max_cargo_height_mm": 3_000,
+    "max_cargo_weight_kg": 6_000,
+    "can_use_trailer": True,
+    "combined_length_with_trailer_mm": 18_500,
+    "coupling_length_mm": 1_300,
+    "height_safety_margin_mm": 100,
+    "width_safety_margin_mm": 50,
+    "weight_safety_margin_kg": 200,
+    "is_hgv": True,
+}
 
 
-def test_canonical_input_does_not_mutate_legacy_projection() -> None:
-    """The deprecated kilogram/millimetre fields are input-only, never derived."""
+def test_canonical_vehicle_input_is_stored_without_a_second_projection() -> None:
+    """Canonical values pass through unchanged; no legacy field is synthesized."""
 
     vehicle = VehicleCreate(
         name="Canonical truck",
@@ -80,9 +71,56 @@ def test_canonical_input_does_not_mutate_legacy_projection() -> None:
         has_trailer=False,
     )
 
-    assert vehicle.tare_weight_kg is None
-    assert vehicle.length_mm is None
-    assert vehicle.can_use_trailer is None
+    assert vehicle.tare_weight_t == Decimal("12.345")
+    assert vehicle.length_m == Decimal("9.215")
+    assert vehicle.has_trailer is False
+
+
+@pytest.mark.parametrize("field", sorted(_LEGACY_VEHICLE_FIELDS))
+def test_legacy_vehicle_fields_are_rejected(field: str) -> None:
+    """Every removed kilogram/millimetre, alias and dead field is forbidden."""
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        VehicleCreate.model_validate(
+            {
+                "name": "Legacy field truck",
+                "registration_number": "L100BC77",
+                field: _LEGACY_VEHICLE_FIELDS[field],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("tare_weight_kg", 3_000),
+        ("max_gross_weight_kg", 10_000),
+        ("length_mm", 8_000),
+        ("width_mm", 2_500),
+        ("height_mm", 1_800),
+        ("platform_length_mm", 6_000),
+        ("platform_width_mm", 2_500),
+        ("platform_height_from_ground_mm", 900),
+        ("max_platform_payload_kg", 6_000),
+        ("payload_capacity_kg", 7_000),
+        ("max_axle_load_kg", 10_000),
+        ("max_cargo_length_mm", 7_000),
+        ("max_cargo_width_mm", 2_600),
+        ("max_cargo_height_mm", 3_000),
+        ("max_cargo_weight_kg", 6_000),
+    ),
+)
+def test_legacy_trailer_fields_are_rejected(field: str, value: int) -> None:
+    """A trailer accepts canonical tonnes/metres only."""
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TrailerCreate.model_validate(
+            {
+                "name": "Legacy field trailer",
+                "registration_number": "L200BC77",
+                field: value,
+            }
+        )
 
 
 def test_new_vehicle_without_trailer_facts_is_explicitly_false() -> None:
@@ -91,34 +129,6 @@ def test_new_vehicle_without_trailer_facts_is_explicitly_false() -> None:
     vehicle = VehicleCreate(name="Solo truck", registration_number="C789BC77")
 
     assert vehicle.has_trailer is False
-
-
-def test_conflicting_canonical_and_legacy_units_are_rejected() -> None:
-    """Two different values for the same physical fact cannot be silently merged."""
-
-    with pytest.raises(ValidationError, match="different values"):
-        VehicleCreate.model_validate(
-            {
-                "name": "Conflicting truck",
-                "registration_number": "D100BC77",
-                "tare_weight_t": 12.5,
-                "tare_weight_kg": 12_000,
-            }
-        )
-
-
-def test_conflicting_trailer_aliases_are_rejected() -> None:
-    """The deprecated capability alias must agree with the canonical boolean."""
-
-    with pytest.raises(ValidationError, match="different values"):
-        VehicleCreate.model_validate(
-            {
-                "name": "Conflicting trailer",
-                "registration_number": "D101BC77",
-                "has_trailer": False,
-                "can_use_trailer": True,
-            }
-        )
 
 
 def test_default_trailer_requires_canonical_trailer_capability() -> None:
@@ -148,7 +158,7 @@ def test_gross_mass_below_tare_mass_is_rejected() -> None:
 
 
 def test_partial_update_normalizes_only_canonical_columns() -> None:
-    """A PATCH converts legacy input but never returns or writes a second projection."""
+    """A PATCH validates canonical fields and never produces a legacy projection."""
 
     current = SimpleNamespace(
         tare_weight_t=Decimal("12.000"),
@@ -163,7 +173,7 @@ def test_partial_update_normalizes_only_canonical_columns() -> None:
     )
 
     updates = normalize_vehicle_fields(
-        {"tare_weight_kg": 12_500},
+        {"tare_weight_t": Decimal("12.5")},
         current=current,
         allow_clear=True,
     )
@@ -172,7 +182,7 @@ def test_partial_update_normalizes_only_canonical_columns() -> None:
 
 
 def test_partial_update_can_clear_a_physical_fact() -> None:
-    """An explicit null clears the canonical value without a legacy counterpart."""
+    """An explicit null clears the canonical value."""
 
     current = SimpleNamespace(
         tare_weight_t=Decimal("12.000"),
@@ -196,7 +206,7 @@ def test_partial_update_can_clear_a_physical_fact() -> None:
 
 
 def test_canonical_specification_keeps_tonne_metre_values() -> None:
-    """The routing specification no longer projects integer units."""
+    """The routing specification exposes canonical values unchanged."""
 
     specification = VehicleSpecification(
         tare_weight_t=Decimal("12.345"),
@@ -214,10 +224,10 @@ def test_canonical_specification_keeps_tonne_metre_values() -> None:
     assert specification.has_trailer is True
 
 
-def test_vehicle_specification_does_not_read_legacy_columns() -> None:
-    """Legacy columns are a rollback projection, not an active fallback."""
+def test_vehicle_specification_reads_canonical_columns_only() -> None:
+    """A row without canonical values stays explicitly unknown."""
 
-    legacy_row = SimpleNamespace(
+    entity = SimpleNamespace(
         tare_weight_t=None,
         max_gross_weight_t=None,
         axle_load_t=None,
@@ -225,17 +235,10 @@ def test_vehicle_specification_does_not_read_legacy_columns() -> None:
         length_m=None,
         width_m=None,
         height_m=None,
-        tare_weight_kg=12_000,
-        max_gross_weight_kg=22_000,
-        max_axle_load_kg=10_000,
-        payload_capacity_kg=8_000,
-        length_mm=9_200,
-        width_mm=2_500,
-        height_mm=3_200,
         has_trailer=False,
     )
 
-    specification = vehicle_specification(legacy_row)
+    specification = vehicle_specification(entity)
 
     assert specification.tare_weight_t is None
     assert specification.length_m is None
@@ -243,7 +246,7 @@ def test_vehicle_specification_does_not_read_legacy_columns() -> None:
 
 
 def test_unit_conversion_helpers_are_exact_and_reject_negative_values() -> None:
-    """One conversion layer is shared by persistence, API and routing."""
+    """One conversion layer is shared by request cargo and persistence boundaries."""
 
     assert kilograms_to_tonnes(12_345) == Decimal("12.345")
     assert tonnes_to_kilograms(Decimal("12.345")) == 12_345
@@ -253,30 +256,22 @@ def test_unit_conversion_helpers_are_exact_and_reject_negative_values() -> None:
         kilograms_to_tonnes(-1)
 
 
-def test_axle_load_profile_uses_canonical_tonnes_only() -> None:
+def test_axle_load_profile_requires_canonical_tonnes() -> None:
     """Measured axle loads are persisted and read in tonnes only."""
 
     canonical = VehicleLoadProfileCreate(
         configuration_type="CARGO_ON_TRUCK",
         max_actual_axle_load_t=Decimal("7.8"),
     )
-    legacy = VehicleLoadProfileCreate(
-        configuration_type="CARGO_ON_TRUCK",
-        max_actual_axle_load_kg=7_800,
-    )
-    with pytest.raises(ValidationError, match="required"):
-        VehicleLoadProfileCreate(configuration_type="CARGO_ON_TRUCK")
-    with pytest.raises(ValidationError, match="different values"):
-        VehicleLoadProfileCreate(
-            configuration_type="CARGO_ON_TRUCK",
-            max_actual_axle_load_t=Decimal("7.9"),
-            max_actual_axle_load_kg=7_800,
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        VehicleLoadProfileCreate.model_validate(
+            {
+                "configuration_type": "CARGO_ON_TRUCK",
+                "max_actual_axle_load_kg": 7_800,
+            }
         )
 
-    assert canonical.max_actual_axle_load_kg is None
-    assert legacy.max_actual_axle_load_t == Decimal("7.800")
     assert load_profile_axle_load_t(canonical) == Decimal("7.800")
-    assert load_profile_axle_load_t(legacy) == Decimal("7.800")
 
 
 def test_vehicle_read_serializes_canonical_values_as_json_numbers() -> None:
@@ -295,7 +290,6 @@ def test_vehicle_read_serializes_canonical_values_as_json_numbers() -> None:
         "vehicle_type": None,
         "manufacturer": None,
         "model": None,
-        "is_hgv": True,
         "tare_weight_t": Decimal("12.345"),
         "max_gross_weight_t": Decimal("22.000"),
         "axle_load_t": Decimal("10.000"),
@@ -316,60 +310,35 @@ def test_vehicle_read_serializes_canonical_values_as_json_numbers() -> None:
     assert payload["length_m"] == 9.215
     assert payload["has_trailer"] is True
     assert "tare_weight_kg" not in payload
+    assert "is_hgv" not in payload
 
 
-def test_removed_duplicate_vehicle_fields_are_rejected() -> None:
-    """Derived fields that duplicate canonical data cannot be supplied again."""
+def test_trailer_update_accepts_canonical_values_and_clears_them() -> None:
+    """Trailer normalization handles canonical updates and explicit clearing."""
 
-    for field, value in (
-        ("platform_width_mm", 2_500),
-        ("combined_length_with_trailer_mm", 18_500),
-    ):
-        with pytest.raises(ValidationError, match="no longer supported"):
-            VehicleCreate.model_validate(
-                {
-                    "name": "Removed field truck",
-                    "registration_number": "G400BC77",
-                    field: value,
-                }
-            )
-
-    accepted = VehicleCreate.model_validate(
-        {
-            "name": "Explicit null truck",
-            "registration_number": "G401BC77",
-            "platform_width_mm": None,
-            "combined_length_with_trailer_mm": None,
-        }
+    current = SimpleNamespace(
+        tare_weight_t=Decimal("3.000"),
+        max_gross_weight_t=None,
+        axle_load_t=None,
+        payload_capacity_t=None,
+        length_m=Decimal("8.000"),
+        width_m=None,
+        height_m=None,
+        platform_length_m=None,
+        platform_height_from_ground_m=None,
+        max_platform_payload_t=None,
+        max_cargo_length_m=None,
+        max_cargo_width_m=None,
+        max_cargo_height_m=None,
+        max_cargo_weight_t=None,
     )
-    assert accepted.platform_width_mm is None
-    assert accepted.combined_length_with_trailer_mm is None
-    assert accepted.has_trailer is False
 
-
-def test_removed_duplicate_trailer_field_is_rejected() -> None:
-    """A trailer cannot reintroduce the dead platform width column."""
-
-    with pytest.raises(ValidationError, match="no longer supported"):
-        TrailerCreate.model_validate(
-            {
-                "name": "Removed field trailer",
-                "registration_number": "G402BC77",
-                "platform_width_mm": 2_500,
-            }
-        )
-    assert normalize_trailer_fields({"platform_width_mm": None}) == {}
-
-
-def test_removed_duplicate_vehicle_field_is_rejected_on_update() -> None:
-    """A PATCH that supplies a removed duplicate field fails instead of ignoring it."""
-
-    with pytest.raises(VehicleSpecificationError, match="no longer supported"):
-        normalize_vehicle_fields(
-            {"combined_length_with_trailer_mm": 18_500},
-            current=SimpleNamespace(has_trailer=False),
-            allow_clear=True,
-        )
+    assert normalize_trailer_fields(
+        {"length_m": Decimal("8.5")}, current=current, allow_clear=True
+    ) == {"length_m": Decimal("8.500")}
+    assert normalize_trailer_fields(
+        {"width_m": None}, current=current, allow_clear=True
+    ) == {"width_m": None}
 
 
 def test_vehicle_update_schema_no_longer_invents_a_trailer_flag() -> None:

@@ -17,8 +17,6 @@ from sqlalchemy.orm import selectinload
 
 from app.db import Base
 from app.domain.vehicle import (
-    LEGACY_TRAILER_FIELDS,
-    LEGACY_VEHICLE_FIELDS,
     VehicleSpecificationError,
     normalize_trailer_fields,
     normalize_vehicle_fields,
@@ -764,8 +762,7 @@ async def create_vehicle(
         has_trailer=payload.has_trailer,
         trailer_id=payload.default_trailer_id,
     )
-    values = payload.model_dump(exclude=set(LEGACY_VEHICLE_FIELDS))
-    entity = Vehicle(warehouse_id=warehouse_id, **values)
+    entity = Vehicle(warehouse_id=warehouse_id, **payload.model_dump())
     session.add(entity)
     await session.flush()
     return entity
@@ -809,7 +806,7 @@ async def update_vehicle(
     )
     values = payload.model_dump(
         exclude_unset=True,
-        exclude={"expected_version", *LEGACY_VEHICLE_FIELDS},
+        exclude={"expected_version"},
     )
     normalized = _normalized_vehicle_updates(payload, entity)
     await _validate_vehicle_trailer_assignment(
@@ -879,7 +876,7 @@ async def update_vehicle_configuration(
     _assert_catalog_version(entity, "vehicle", payload.vehicle.expected_version)
     values = payload.vehicle.model_dump(
         exclude_unset=True,
-        exclude={"expected_version", *LEGACY_VEHICLE_FIELDS},
+        exclude={"expected_version"},
     )
     normalized = _normalized_vehicle_updates(payload.vehicle, entity)
     await _validate_vehicle_trailer_assignment(
@@ -904,9 +901,8 @@ async def update_vehicle_configuration(
 
 
 def _load_profile_values(profile: VehicleLoadProfileCreate) -> dict[str, object]:
-    """Project one request profile to canonical persistence fields only."""
+    """Project one request profile to canonical persistence fields."""
 
-    assert profile.max_actual_axle_load_t is not None
     return {
         "configuration_type": profile.configuration_type,
         "max_actual_axle_load_t": profile.max_actual_axle_load_t,
@@ -948,8 +944,7 @@ async def create_trailer(
     """Create a trailer owned by one warehouse."""
 
     await require_warehouse(session, warehouse_id)
-    values = payload.model_dump(exclude=set(LEGACY_TRAILER_FIELDS))
-    entity = Trailer(warehouse_id=warehouse_id, **values)
+    entity = Trailer(warehouse_id=warehouse_id, **payload.model_dump())
     session.add(entity)
     await session.flush()
     return entity

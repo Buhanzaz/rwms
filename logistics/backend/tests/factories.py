@@ -110,7 +110,6 @@ async def make_routable_vehicle(session: AsyncSession, warehouse: Warehouse) -> 
                 vehicle_type="FLATBED_CRANE",
                 manufacturer="Test",
                 model="Solo",
-                is_hgv=True,
                 tare_weight_t=Decimal("10"),
                 max_gross_weight_t=Decimal("20"),
                 length_m=Decimal("9"),

@@ -35,7 +35,6 @@ def _vehicle(**changes: Any) -> VehicleRoutingSpec:
 
     vehicle = VehicleRoutingSpec(
         vehicle_id=uuid4(),
-        is_hgv=True,
         tare_weight_t=D("12"),
         max_gross_weight_t=D("22"),
         length_m=D("9.2"),

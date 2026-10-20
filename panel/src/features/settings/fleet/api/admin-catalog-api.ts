@@ -44,7 +44,6 @@ export type AdminVehicleSpecification = {
   vehicleType: string | null
   manufacturer: string | null
   model: string | null
-  isHgv: boolean | null
   hasTrailer: boolean
   defaultTrailerId: string | null
   couplingLengthM: number | null
@@ -67,7 +66,6 @@ export function defaultAdminVehicleSpecification(): AdminVehicleSpecification {
     vehicleType: null,
     manufacturer: null,
     model: null,
-    isHgv: null,
     hasTrailer: false,
     defaultTrailerId: null,
     couplingLengthM: null,
@@ -151,12 +149,6 @@ function nullableString(value: unknown): string | null {
   return value
 }
 
-function nullableBoolean(value: unknown): boolean | null {
-  if (value !== null && typeof value !== "boolean")
-    throw new Error("Expected a nullable boolean")
-  return value
-}
-
 function parsePhysical(
   value: Record<string, unknown>
 ): AdminPhysicalSpecification {
@@ -203,7 +195,6 @@ function parseVehicle(
     vehicleType: nullableString(value.vehicle_type),
     manufacturer: nullableString(value.manufacturer),
     model: nullableString(value.model),
-    isHgv: nullableBoolean(value.is_hgv),
     hasTrailer,
     defaultTrailerId: trailerId,
     couplingLengthM: nullablePositiveNumber(value.coupling_length_m),
@@ -335,7 +326,6 @@ function vehiclePayload(vehicle: AdminVehicleSpecification) {
     vehicle_type: vehicle.vehicleType?.trim() || null,
     manufacturer: vehicle.manufacturer?.trim() || null,
     model: vehicle.model?.trim() || null,
-    is_hgv: vehicle.isHgv,
     has_trailer: vehicle.hasTrailer,
     default_trailer_id: vehicle.defaultTrailerId,
     coupling_length_m: vehicle.couplingLengthM,

@@ -696,18 +696,20 @@ work.
   [`vehicle.py`](../../logistics/backend/app/domain/vehicle.py),
   [`0038`](../../logistics/backend/migrations/versions/20260908_0038_canonical_vehicle_spec.py),
   [`0039`](../../logistics/backend/migrations/versions/20261020_0039_canonical_trailer_and_extensions.py),
+  [`0040`](../../logistics/backend/migrations/versions/20261020_0040_remove_legacy_vehicle_fields.py),
   [`vehicle-model-audit.md`](../../logistics/docs/vehicle-model-audit.md).
 - Smallest decision needed: keep the routing-extension block as an explicit
   technical equipment configuration, replace it with a different loading-profile
   model, or accept less precise route checks; separately decide whether the mass
-  safety margin must participate in the gross-weight check and when the inactive
-  legacy kg/mm columns can be dropped.
-- Resolution and date: none; the canonical model is authoritative for all new
-  writes. The dead `platform_width_mm` and the redundant
-  `combined_length_with_trailer_mm` were removed from the active contract, and
-  the tri-state trailer flag was replaced by `has_trailer`. Combination length
-  is derived from the canonical vehicle, coupling and trailer lengths; legacy
-  kg/mm remains input-only during the transition.
+  safety margin must participate in the gross-weight check.
+- Resolution and date: legacy removal completed on 2026-10-20. `0040` drops the
+  kilogram/millimetre projection, `can_use_trailer`, the derived
+  `combined_length_with_trailer_mm` and the unused `is_hgv`; requests and
+  responses accept canonical fields only. The clean schema contains only
+  canonical columns, the tri-state trailer flag was replaced by `has_trailer`,
+  and combination length is derived from the canonical vehicle, coupling and
+  trailer lengths. The routing-extension and mass-margin decisions above remain
+  open.
 
 ## Question Template
 

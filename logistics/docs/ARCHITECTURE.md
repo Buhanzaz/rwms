@@ -81,16 +81,14 @@ Vehicles and trailers use one canonical physical model: `tare_weight_t`,
 `length_m`, `width_m` and `height_m` in metres, plus the required `has_trailer`
 vehicle boolean. Persisted values are `NUMERIC(12, 3)`, so one kilogram and one
 millimetre remain exactly representable; `app/domain/vehicle.py` owns all
-conversion and validation. Deprecated kilogram/millimetre fields are accepted on
-input for one transition period and converted once; responses expose canonical
-values only, and the legacy columns remain in the database only as a rollback
-projection. Routing-extension fields (platform sizes, cargo limits, coupling
+validation. Routing-extension fields (platform sizes, cargo limits, coupling
 length, safety margins and measured axle loads) use the same canonical units;
-calculations read the canonical projection and never mix units. Removed duplicate
-fields `platform_width_mm` and `combined_length_with_trailer_mm` are rejected,
-and combination length is derived from the tractor length plus coupling length
-and trailer length. Alembic `20260908_0038` and `20261020_0039` backfill the
-canonical columns additively without dropping legacy data.
+calculations read canonical values only. The legacy kilogram/millimetre
+projection, the derived combined length and the unused `is_hgv` flag were
+removed: requests and responses accept canonical fields only. Combination length
+is derived from the tractor length plus coupling length and trailer length.
+Alembic `20260908_0038` and `20261020_0039` backfill the canonical columns, and
+`20261020_0040` drops the legacy projection.
 
 Vehicles also own their operational axle-load profiles as one aggregate. Vehicle
 reads, including workspace vehicles, embed only each profile's configuration

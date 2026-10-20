@@ -84,7 +84,6 @@ class VehicleRoutingSpec:
     """Routing-relevant canonical physical specification of the powered vehicle."""
 
     vehicle_id: EntityId
-    is_hgv: bool | None = None
     tare_weight_t: Decimal | None = None
     max_gross_weight_t: Decimal | None = None
     length_m: Decimal | None = None
@@ -154,7 +153,6 @@ class EffectiveTruckProfile:
     vehicle_id: EntityId
     trailer_id: EntityId | None
     trailer_attached: bool
-    is_hgv: bool
     height_meters: float
     width_meters: float
     length_meters: float
@@ -189,7 +187,6 @@ class EffectiveTruckProfile:
             str(self.vehicle_id),
             str(self.trailer_id) if self.trailer_id is not None else None,
             self.trailer_attached,
-            self.is_hgv,
             self.height_meters,
             self.width_meters,
             self.length_meters,
@@ -213,7 +210,6 @@ class EffectiveTruckProfile:
             "vehicleId": str(self.vehicle_id),
             "trailerId": str(self.trailer_id) if self.trailer_id is not None else None,
             "trailerAttached": self.trailer_attached,
-            "isHgv": self.is_hgv,
             "cargoCount": self.cargo_count,
             "cargoPlacements": [
                 {
@@ -272,7 +268,6 @@ class EffectiveTruckProfileCalculator:
         self._require_nonnegative_margins(vehicle)
 
         required_vehicle: dict[str, object | None] = {
-            "vehicle.is_hgv": vehicle.is_hgv,
             "vehicle.tare_weight_t": vehicle.tare_weight_t,
             "vehicle.max_gross_weight_t": vehicle.max_gross_weight_t,
             "vehicle.length_m": vehicle.length_m,
@@ -396,7 +391,6 @@ class EffectiveTruckProfileCalculator:
             vehicle_id=vehicle.vehicle_id,
             trailer_id=load.trailer_id,
             trailer_attached=load.trailer_attached,
-            is_hgv=bool(vehicle.is_hgv),
             height_meters=float(effective_height),
             width_meters=float(effective_width),
             length_meters=float(effective_length),

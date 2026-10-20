@@ -103,7 +103,6 @@ const catalogSchema = z.object({
   vehicle_type: z.string(),
   manufacturer: z.string(),
   model: z.string(),
-  is_hgv: nullableBoolean,
   // Canonical physical model, tonnes and metres.
   tare_weight_t: nullablePositiveDecimal,
   max_gross_weight_t: nullablePositiveDecimal,
@@ -174,7 +173,7 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
       // not silently become solo-only just because the operator skipped the field.
       capacity: vehicle?.capacity ?? 2, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
       notes: vehicle?.notes ?? '', active: vehicle?.active ?? true,
-      vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
+      vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '',
       tare_weight_t: vehicle?.tare_weight_t ?? null,
       max_gross_weight_t: vehicle?.max_gross_weight_t ?? null,
       axle_load_t: vehicle?.axle_load_t ?? null,
@@ -226,7 +225,6 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
       vehicle_type: formValues.vehicle_type.trim() || null,
       manufacturer: formValues.manufacturer.trim() || null,
       model: formValues.model.trim() || null,
-      is_hgv: formValues.is_hgv,
       tare_weight_t: formValues.tare_weight_t,
       max_gross_weight_t: formValues.max_gross_weight_t,
       axle_load_t: formValues.axle_load_t,
@@ -273,7 +271,6 @@ export function CatalogDialog({ value, busy, onClose, onSubmit }: {
             <p className="field__hint">Маршрутизация использует эти эксплуатационные данные. Заполняйте их по документам; неизвестные критические параметры не будут подменены. Длины указаны в метрах, массы — в тоннах.</p>
             <div className="form-grid" style={{ marginTop: 10 }}>
               <Field label="Тип транспорта" defaultValue={values.vehicle_type} {...register('vehicle_type')} />
-              <SelectField label="Грузовой автомобиль" defaultValue={values.is_hgv === null ? '' : String(values.is_hgv)} {...register('is_hgv', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
               <Field label="Модель" defaultValue={values.model} {...register('model')} />
               <Field label="Количество осей машины" type="number" min="1" defaultValue={values.axle_count ?? undefined} {...register('axle_count', optionalNumberRegistration())} error={errors.axle_count?.message} />
             </div>

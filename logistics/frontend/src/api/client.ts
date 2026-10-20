@@ -291,7 +291,6 @@ export interface VehicleInput {
   vehicle_type?: string | null;
   manufacturer?: string | null;
   model?: string | null;
-  is_hgv?: boolean | null;
   /** Canonical physical model: masses in tonnes, dimensions in metres. */
   tare_weight_t?: number | null;
   max_gross_weight_t?: number | null;
@@ -531,7 +530,6 @@ function parseRoutingProfileSnapshot(value: unknown): RoutingProfileSnapshot | n
     typeof vehicleId !== 'string'
     || (trailerId !== null && typeof trailerId !== 'string')
     || typeof record.trailerAttached !== 'boolean'
-    || typeof record.isHgv !== 'boolean'
     || typeof configurationType !== 'string'
     || !loadConfigurationTypes.includes(configurationType as VehicleLoadConfigurationType)
     || !Array.isArray(placementsRaw)
@@ -552,7 +550,6 @@ function parseRoutingProfileSnapshot(value: unknown): RoutingProfileSnapshot | n
     vehicleId,
     trailerId,
     trailerAttached: record.trailerAttached,
-    isHgv: record.isHgv,
     cargoCount,
     cargoPlacements: cargoPlacements as RoutingCargoPlacementSnapshot[],
     configurationType: configurationType as VehicleLoadConfigurationType,

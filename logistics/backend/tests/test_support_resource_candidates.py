@@ -193,7 +193,7 @@ def _fact(identity: RwmsDriverIdentity | None = None) -> SupportResourceFact:
     vehicle = SimpleNamespace(
         capacity=1,
         default_trailer=None,
-        can_use_trailer=False,
+        has_trailer=False,
     )
     shift = SimpleNamespace(
         id=uuid4(),

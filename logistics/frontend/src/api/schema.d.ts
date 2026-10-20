@@ -1884,8 +1884,6 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Is Hgv */
-            is_hgv: boolean | null;
             length_m?: number | null;
             /** Load Profiles */
             load_profiles: components["schemas"]["VehicleLoadProfileRead"][];
@@ -4770,7 +4768,7 @@ export interface components {
         };
         /**
          * TrailerCreate
-         * @description Input for a warehouse-owned trailer and its physical limits.
+         * @description Input for a warehouse-owned trailer and its canonical physical limits.
          */
         TrailerCreate: {
             /**
@@ -4782,30 +4780,12 @@ export interface components {
             axle_count?: number | null;
             axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Height Mm */
-            height_mm?: number | null;
             length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Length Mm */
-            length_mm?: number | null;
-            /** Max Axle Load Kg */
-            max_axle_load_kg?: number | null;
             max_cargo_height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Height Mm */
-            max_cargo_height_mm?: number | null;
             max_cargo_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Length Mm */
-            max_cargo_length_mm?: number | null;
-            /** Max Cargo Weight Kg */
-            max_cargo_weight_kg?: number | null;
             max_cargo_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             max_cargo_width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Width Mm */
-            max_cargo_width_mm?: number | null;
-            /** Max Gross Weight Kg */
-            max_gross_weight_kg?: number | null;
             max_gross_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Platform Payload Kg */
-            max_platform_payload_kg?: number | null;
             max_platform_payload_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             name: components["schemas"]["NonBlank"];
             /**
@@ -4813,24 +4793,12 @@ export interface components {
              * @default
              */
             notes: string;
-            /** Payload Capacity Kg */
-            payload_capacity_kg?: number | null;
             payload_capacity_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             platform_height_from_ground_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Height From Ground Mm */
-            platform_height_from_ground_mm?: number | null;
             platform_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Length Mm */
-            platform_length_mm?: number | null;
-            /** Platform Width Mm */
-            platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
-            /** Tare Weight Kg */
-            tare_weight_kg?: number | null;
             tare_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Width Mm */
-            width_mm?: number | null;
         };
         /**
          * TrailerRead
@@ -4885,52 +4853,22 @@ export interface components {
             /** Expected Version */
             expected_version: number;
             height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Height Mm */
-            height_mm?: number | null;
             length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Length Mm */
-            length_mm?: number | null;
-            /** Max Axle Load Kg */
-            max_axle_load_kg?: number | null;
             max_cargo_height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Height Mm */
-            max_cargo_height_mm?: number | null;
             max_cargo_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Length Mm */
-            max_cargo_length_mm?: number | null;
-            /** Max Cargo Weight Kg */
-            max_cargo_weight_kg?: number | null;
             max_cargo_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             max_cargo_width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Width Mm */
-            max_cargo_width_mm?: number | null;
-            /** Max Gross Weight Kg */
-            max_gross_weight_kg?: number | null;
             max_gross_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Platform Payload Kg */
-            max_platform_payload_kg?: number | null;
             max_platform_payload_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             name?: components["schemas"]["NonBlank"] | null;
             /** Notes */
             notes?: string | null;
-            /** Payload Capacity Kg */
-            payload_capacity_kg?: number | null;
             payload_capacity_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             platform_height_from_ground_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Height From Ground Mm */
-            platform_height_from_ground_mm?: number | null;
             platform_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Length Mm */
-            platform_length_mm?: number | null;
-            /** Platform Width Mm */
-            platform_width_mm?: number | null;
             registration_number?: components["schemas"]["NonBlank"] | null;
-            /** Tare Weight Kg */
-            tare_weight_kg?: number | null;
             tare_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Width Mm */
-            width_mm?: number | null;
         };
         /**
          * TransferArrivalEstimateRead
@@ -5219,11 +5157,8 @@ export interface components {
          * VehicleCreate
          * @description Input for a vehicle, routing speeds, and its canonical physical data.
          *
-         *     The canonical physical model contains only masses in tonnes, dimensions in
-         *     metres and a non-null ``has_trailer`` boolean.  Kilogram/millimetre fields
-         *     remain accepted for a transition period and are converted once; responses
-         *     contain only canonical values.  ``can_use_trailer`` is accepted as an alias
-         *     for ``has_trailer``.  Removed duplicate fields are rejected.
+         *     The physical model contains only masses in tonnes, dimensions in metres and
+         *     a non-null ``has_trailer`` boolean; kilogram/millimetre fields are rejected.
          */
         VehicleCreate: {
             /**
@@ -5245,21 +5180,11 @@ export interface components {
             axle_count?: number | null;
             axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /**
-             * Can Use Trailer
-             * @deprecated
-             * @description Deprecated: use has_trailer
-             */
-            can_use_trailer?: boolean | null;
-            /**
              * Capacity
              * @default 2
              */
             capacity: number;
-            /** Combined Length With Trailer Mm */
-            combined_length_with_trailer_mm?: number | null;
             coupling_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Coupling Length Mm */
-            coupling_length_mm?: number | null;
             /** Default Trailer Id */
             default_trailer_id?: string | null;
             /**
@@ -5268,54 +5193,16 @@ export interface components {
              */
             has_trailer: boolean;
             height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /**
-             * Height Mm
-             * @deprecated
-             * @description Deprecated: height in millimetres; use height_m
-             */
-            height_mm?: number | null;
             /** @default 0 */
             height_safety_margin_m: components["schemas"]["NonNegativeDecimal-Input"];
-            /** Height Safety Margin Mm */
-            height_safety_margin_mm?: number | null;
-            /** Is Hgv */
-            is_hgv?: boolean | null;
             length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /**
-             * Length Mm
-             * @deprecated
-             * @description Deprecated: length in millimetres; use length_m
-             */
-            length_mm?: number | null;
             /** Manufacturer */
             manufacturer?: string | null;
-            /**
-             * Max Axle Load Kg
-             * @deprecated
-             * @description Deprecated: axle load in kilograms; use axle_load_t
-             */
-            max_axle_load_kg?: number | null;
             max_cargo_height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Height Mm */
-            max_cargo_height_mm?: number | null;
             max_cargo_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Length Mm */
-            max_cargo_length_mm?: number | null;
-            /** Max Cargo Weight Kg */
-            max_cargo_weight_kg?: number | null;
             max_cargo_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             max_cargo_width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Width Mm */
-            max_cargo_width_mm?: number | null;
-            /**
-             * Max Gross Weight Kg
-             * @deprecated
-             * @description Deprecated: gross mass in kilograms; use max_gross_weight_t
-             */
-            max_gross_weight_kg?: number | null;
             max_gross_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Platform Payload Kg */
-            max_platform_payload_kg?: number | null;
             max_platform_payload_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Model */
             model?: string | null;
@@ -5325,46 +5212,18 @@ export interface components {
              * @default
              */
             notes: string;
-            /**
-             * Payload Capacity Kg
-             * @deprecated
-             * @description Deprecated: payload capacity in kilograms; use payload_capacity_t
-             */
-            payload_capacity_kg?: number | null;
             payload_capacity_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             platform_height_from_ground_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Height From Ground Mm */
-            platform_height_from_ground_mm?: number | null;
             platform_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Length Mm */
-            platform_length_mm?: number | null;
-            /** Platform Width Mm */
-            platform_width_mm?: number | null;
             registration_number: components["schemas"]["NonBlank"];
-            /**
-             * Tare Weight Kg
-             * @deprecated
-             * @description Deprecated: vehicle mass in kilograms; use tare_weight_t
-             */
-            tare_weight_kg?: number | null;
             tare_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
-            /** Weight Safety Margin Kg */
-            weight_safety_margin_kg?: number | null;
             /** @default 0 */
             weight_safety_margin_t: components["schemas"]["NonNegativeDecimal-Input"];
             width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /**
-             * Width Mm
-             * @deprecated
-             * @description Deprecated: width in millimetres; use width_m
-             */
-            width_mm?: number | null;
             /** @default 0 */
             width_safety_margin_m: components["schemas"]["NonNegativeDecimal-Input"];
-            /** Width Safety Margin Mm */
-            width_safety_margin_mm?: number | null;
         };
         /**
          * VehicleLoadProfileCreate
@@ -5372,14 +5231,8 @@ export interface components {
          */
         VehicleLoadProfileCreate: {
             configuration_type: components["schemas"]["VehicleLoadProfileType"];
-            /**
-             * Max Actual Axle Load Kg
-             * @deprecated
-             * @description Deprecated: axle load in kilograms; use max_actual_axle_load_t
-             */
-            max_actual_axle_load_kg?: number | null;
             /** @description Measured peak axle load in tonnes */
-            max_actual_axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
+            max_actual_axle_load_t: components["schemas"]["CanonicalDecimal-Input"];
         };
         /**
          * VehicleLoadProfileRead
@@ -5423,8 +5276,6 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Is Hgv */
-            is_hgv: boolean | null;
             length_m?: number | null;
             /** Load Profiles */
             load_profiles: components["schemas"]["VehicleLoadProfileRead"][];
@@ -5461,7 +5312,7 @@ export interface components {
         };
         /**
          * VehicleUpdate
-         * @description Partial vehicle update with legacy input-only compatibility.
+         * @description Partial canonical vehicle update; no legacy unit projections.
          */
         VehicleUpdate: {
             /** Active */
@@ -5473,15 +5324,9 @@ export interface components {
             /** Axle Count */
             axle_count?: number | null;
             axle_load_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Can Use Trailer */
-            can_use_trailer?: boolean | null;
             /** Capacity */
             capacity?: number | null;
-            /** Combined Length With Trailer Mm */
-            combined_length_with_trailer_mm?: number | null;
             coupling_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Coupling Length Mm */
-            coupling_length_mm?: number | null;
             /** Default Trailer Id */
             default_trailer_id?: string | null;
             /** Expected Version */
@@ -5489,69 +5334,31 @@ export interface components {
             /** Has Trailer */
             has_trailer?: boolean | null;
             height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Height Mm */
-            height_mm?: number | null;
             height_safety_margin_m?: components["schemas"]["NonNegativeDecimal-Input"] | null;
-            /** Height Safety Margin Mm */
-            height_safety_margin_mm?: number | null;
-            /** Is Hgv */
-            is_hgv?: boolean | null;
             length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Length Mm */
-            length_mm?: number | null;
             /** Manufacturer */
             manufacturer?: string | null;
-            /** Max Axle Load Kg */
-            max_axle_load_kg?: number | null;
             max_cargo_height_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Height Mm */
-            max_cargo_height_mm?: number | null;
             max_cargo_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Length Mm */
-            max_cargo_length_mm?: number | null;
-            /** Max Cargo Weight Kg */
-            max_cargo_weight_kg?: number | null;
             max_cargo_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             max_cargo_width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Cargo Width Mm */
-            max_cargo_width_mm?: number | null;
-            /** Max Gross Weight Kg */
-            max_gross_weight_kg?: number | null;
             max_gross_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Max Platform Payload Kg */
-            max_platform_payload_kg?: number | null;
             max_platform_payload_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Model */
             model?: string | null;
             name?: components["schemas"]["NonBlank"] | null;
             /** Notes */
             notes?: string | null;
-            /** Payload Capacity Kg */
-            payload_capacity_kg?: number | null;
             payload_capacity_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             platform_height_from_ground_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Height From Ground Mm */
-            platform_height_from_ground_mm?: number | null;
             platform_length_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Platform Length Mm */
-            platform_length_mm?: number | null;
-            /** Platform Width Mm */
-            platform_width_mm?: number | null;
             registration_number?: components["schemas"]["NonBlank"] | null;
-            /** Tare Weight Kg */
-            tare_weight_kg?: number | null;
             tare_weight_t?: components["schemas"]["CanonicalDecimal-Input"] | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
-            /** Weight Safety Margin Kg */
-            weight_safety_margin_kg?: number | null;
             weight_safety_margin_t?: components["schemas"]["NonNegativeDecimal-Input"] | null;
             width_m?: components["schemas"]["CanonicalDecimal-Input"] | null;
-            /** Width Mm */
-            width_mm?: number | null;
             width_safety_margin_m?: components["schemas"]["NonNegativeDecimal-Input"] | null;
-            /** Width Safety Margin Mm */
-            width_safety_margin_mm?: number | null;
         };
         /**
          * WarehouseCreate

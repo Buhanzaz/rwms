@@ -22,10 +22,8 @@ from pydantic import (
 
 from app.domain.vehicle import (
     VehicleSpecificationError,
-    kilograms_to_tonnes,
     normalize_trailer_fields,
     normalize_vehicle_fields,
-    tonnes_to_kilograms,
 )
 from app.models.domain import (
     CustomerDeliveryPurpose,
@@ -48,11 +46,6 @@ type NonNegativeDecimal = Annotated[
     Decimal,
     Field(ge=0, max_digits=12, decimal_places=3),
 ]
-_LEGACY_LENGTH_FIELD_OPTIONS: dict[str, Any] = {
-    "deprecated": True,
-    "x-legacy-unit": "mm",
-}
-_LEGACY_MASS_FIELD_OPTIONS: dict[str, Any] = {"deprecated": True, "x-legacy-unit": "kg"}
 
 
 def _shift_duration_seconds(start: time, end: time) -> int:
@@ -415,11 +408,8 @@ class VehiclePhysicalFields(ApiModel):
 class VehicleCreate(VehiclePhysicalFields):
     """Input for a vehicle, routing speeds, and its canonical physical data.
 
-    The canonical physical model contains only masses in tonnes, dimensions in
-    metres and a non-null ``has_trailer`` boolean.  Kilogram/millimetre fields
-    remain accepted for a transition period and are converted once; responses
-    contain only canonical values.  ``can_use_trailer`` is accepted as an alias
-    for ``has_trailer``.  Removed duplicate fields are rejected.
+    The physical model contains only masses in tonnes, dimensions in metres and
+    a non-null ``has_trailer`` boolean; kilogram/millimetre fields are rejected.
     """
 
     name: NonBlank
@@ -431,79 +421,17 @@ class VehicleCreate(VehiclePhysicalFields):
     vehicle_type: str | None = None
     manufacturer: str | None = None
     model: str | None = None
-    is_hgv: bool | None = None
     has_trailer: bool = False
     height_safety_margin_m: NonNegativeDecimal = Decimal(0)
     width_safety_margin_m: NonNegativeDecimal = Decimal(0)
     weight_safety_margin_t: NonNegativeDecimal = Decimal(0)
-    # Legacy input-only projection.  It is never persisted as authoritative.
-    tare_weight_kg: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: vehicle mass in kilograms; use tare_weight_t",
-        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
-    )
-    max_gross_weight_kg: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: gross mass in kilograms; use max_gross_weight_t",
-        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
-    )
-    length_mm: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: length in millimetres; use length_m",
-        json_schema_extra=_LEGACY_LENGTH_FIELD_OPTIONS,
-    )
-    width_mm: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: width in millimetres; use width_m",
-        json_schema_extra=_LEGACY_LENGTH_FIELD_OPTIONS,
-    )
-    height_mm: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: height in millimetres; use height_m",
-        json_schema_extra=_LEGACY_LENGTH_FIELD_OPTIONS,
-    )
     axle_count: int | None = Field(default=None, gt=0)
-    max_axle_load_kg: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: axle load in kilograms; use axle_load_t",
-        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
-    )
-    payload_capacity_kg: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: payload capacity in kilograms; use payload_capacity_t",
-        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
-    )
-    platform_length_mm: int | None = Field(default=None, gt=0)
-    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
-    max_platform_payload_kg: int | None = Field(default=None, gt=0)
-    max_cargo_length_mm: int | None = Field(default=None, gt=0)
-    max_cargo_width_mm: int | None = Field(default=None, gt=0)
-    max_cargo_height_mm: int | None = Field(default=None, gt=0)
-    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
-    can_use_trailer: bool | None = Field(
-        default=None,
-        description="Deprecated: use has_trailer",
-        json_schema_extra={"deprecated": True},
-    )
     default_trailer_id: UUID | None = None
-    combined_length_with_trailer_mm: int | None = Field(default=None, gt=0)
-    platform_width_mm: int | None = Field(default=None, gt=0)
-    coupling_length_mm: int | None = Field(default=None, gt=0)
-    height_safety_margin_mm: int | None = Field(default=None, ge=0)
-    width_safety_margin_mm: int | None = Field(default=None, ge=0)
-    weight_safety_margin_kg: int | None = Field(default=None, ge=0)
     notes: str = ""
 
     @model_validator(mode="after")
     def normalize_physical_units(self) -> VehicleCreate:
-        """Reconcile canonical and legacy units into one canonical payload."""
+        """Validate canonical values and the trailer-capability invariant."""
 
         try:
             updates = normalize_vehicle_fields(
@@ -519,7 +447,7 @@ class VehicleCreate(VehiclePhysicalFields):
 
 
 class VehicleUpdate(VehiclePhysicalFields):
-    """Partial vehicle update with legacy input-only compatibility."""
+    """Partial canonical vehicle update; no legacy unit projections."""
 
     expected_version: int = Field(ge=1)
     name: NonBlank | None = None
@@ -531,34 +459,12 @@ class VehicleUpdate(VehiclePhysicalFields):
     vehicle_type: str | None = None
     manufacturer: str | None = None
     model: str | None = None
-    is_hgv: bool | None = None
     has_trailer: bool | None = None
     height_safety_margin_m: NonNegativeDecimal | None = None
     width_safety_margin_m: NonNegativeDecimal | None = None
     weight_safety_margin_t: NonNegativeDecimal | None = None
-    tare_weight_kg: int | None = Field(default=None, gt=0)
-    max_gross_weight_kg: int | None = Field(default=None, gt=0)
-    length_mm: int | None = Field(default=None, gt=0)
-    width_mm: int | None = Field(default=None, gt=0)
-    height_mm: int | None = Field(default=None, gt=0)
     axle_count: int | None = Field(default=None, gt=0)
-    max_axle_load_kg: int | None = Field(default=None, gt=0)
-    payload_capacity_kg: int | None = Field(default=None, gt=0)
-    platform_length_mm: int | None = Field(default=None, gt=0)
-    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
-    max_platform_payload_kg: int | None = Field(default=None, gt=0)
-    max_cargo_length_mm: int | None = Field(default=None, gt=0)
-    max_cargo_width_mm: int | None = Field(default=None, gt=0)
-    max_cargo_height_mm: int | None = Field(default=None, gt=0)
-    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
-    can_use_trailer: bool | None = None
     default_trailer_id: UUID | None = None
-    combined_length_with_trailer_mm: int | None = Field(default=None, gt=0)
-    platform_width_mm: int | None = Field(default=None, gt=0)
-    coupling_length_mm: int | None = Field(default=None, gt=0)
-    height_safety_margin_mm: int | None = Field(default=None, ge=0)
-    width_safety_margin_mm: int | None = Field(default=None, ge=0)
-    weight_safety_margin_kg: int | None = Field(default=None, ge=0)
     notes: str | None = None
 
 
@@ -566,43 +472,15 @@ class VehicleLoadProfileCreate(ApiModel):
     """One measured operational peak axle-load value embedded in a vehicle."""
 
     configuration_type: VehicleLoadProfileType
-    max_actual_axle_load_t: CanonicalDecimal | None = Field(
-        default=None, description="Measured peak axle load in tonnes"
+    max_actual_axle_load_t: CanonicalDecimal = Field(
+        description="Measured peak axle load in tonnes"
     )
-    max_actual_axle_load_kg: int | None = Field(
-        default=None,
-        gt=0,
-        description="Deprecated: axle load in kilograms; use max_actual_axle_load_t",
-        json_schema_extra=_LEGACY_MASS_FIELD_OPTIONS,
-    )
-
-    @model_validator(mode="after")
-    def normalize_axle_load_units(self) -> VehicleLoadProfileCreate:
-        """Convert a legacy kilogram value and reject contradictory input."""
-
-        if self.max_actual_axle_load_t is None and self.max_actual_axle_load_kg is None:
-            raise ValueError(
-                "max_actual_axle_load_t or max_actual_axle_load_kg is required"
-            )
-        if self.max_actual_axle_load_t is None:
-            assert self.max_actual_axle_load_kg is not None
-            self.max_actual_axle_load_t = kilograms_to_tonnes(
-                self.max_actual_axle_load_kg
-            )
-        elif self.max_actual_axle_load_kg is not None and tonnes_to_kilograms(
-            self.max_actual_axle_load_t
-        ) != self.max_actual_axle_load_kg:
-            raise ValueError(
-                "max_actual_axle_load_t and max_actual_axle_load_kg describe "
-                "different values"
-            )
-        return self
 
     @field_serializer("max_actual_axle_load_t", when_used="json")
-    def serialize_max_actual_axle_load(self, value: Decimal | None) -> float | None:
+    def serialize_max_actual_axle_load(self, value: Decimal) -> float:
         """Emit the canonical axle load as a JSON number."""
 
-        return None if value is None else float(value)
+        return float(value)
 
 
 class VehicleLoadProfileRead(ApiModel):
@@ -633,7 +511,6 @@ class VehicleRead(VehiclePhysicalFields):
     vehicle_type: str | None
     manufacturer: str | None
     model: str | None
-    is_hgv: bool | None
     has_trailer: bool
     default_trailer_id: UUID | None
     axle_count: int | None = Field(default=None, gt=0)
@@ -691,32 +568,17 @@ class TrailerPhysicalFields(ApiModel):
 
 
 class TrailerCreate(TrailerPhysicalFields):
-    """Input for a warehouse-owned trailer and its physical limits."""
+    """Input for a warehouse-owned trailer and its canonical physical limits."""
 
     name: NonBlank
     registration_number: NonBlank
     active: bool = True
     axle_count: int | None = Field(default=None, gt=0)
-    tare_weight_kg: int | None = Field(default=None, gt=0)
-    max_gross_weight_kg: int | None = Field(default=None, gt=0)
-    length_mm: int | None = Field(default=None, gt=0)
-    width_mm: int | None = Field(default=None, gt=0)
-    height_mm: int | None = Field(default=None, gt=0)
-    platform_length_mm: int | None = Field(default=None, gt=0)
-    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
-    max_platform_payload_kg: int | None = Field(default=None, gt=0)
-    payload_capacity_kg: int | None = Field(default=None, gt=0)
-    max_axle_load_kg: int | None = Field(default=None, gt=0)
-    max_cargo_length_mm: int | None = Field(default=None, gt=0)
-    max_cargo_width_mm: int | None = Field(default=None, gt=0)
-    max_cargo_height_mm: int | None = Field(default=None, gt=0)
-    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
-    platform_width_mm: int | None = Field(default=None, gt=0)
     notes: str = ""
 
     @model_validator(mode="after")
     def normalize_physical_units(self) -> TrailerCreate:
-        """Convert legacy trailer units exactly once before persistence."""
+        """Validate canonical values before persistence."""
 
         try:
             updates = normalize_trailer_fields(self.model_dump(exclude_unset=True))
@@ -736,21 +598,6 @@ class TrailerUpdate(TrailerPhysicalFields):
     registration_number: NonBlank | None = None
     active: bool | None = None
     axle_count: int | None = Field(default=None, gt=0)
-    tare_weight_kg: int | None = Field(default=None, gt=0)
-    max_gross_weight_kg: int | None = Field(default=None, gt=0)
-    length_mm: int | None = Field(default=None, gt=0)
-    width_mm: int | None = Field(default=None, gt=0)
-    height_mm: int | None = Field(default=None, gt=0)
-    platform_length_mm: int | None = Field(default=None, gt=0)
-    platform_height_from_ground_mm: int | None = Field(default=None, gt=0)
-    max_platform_payload_kg: int | None = Field(default=None, gt=0)
-    payload_capacity_kg: int | None = Field(default=None, gt=0)
-    max_axle_load_kg: int | None = Field(default=None, gt=0)
-    max_cargo_length_mm: int | None = Field(default=None, gt=0)
-    max_cargo_width_mm: int | None = Field(default=None, gt=0)
-    max_cargo_height_mm: int | None = Field(default=None, gt=0)
-    max_cargo_weight_kg: int | None = Field(default=None, gt=0)
-    platform_width_mm: int | None = Field(default=None, gt=0)
     notes: str | None = None
 
 

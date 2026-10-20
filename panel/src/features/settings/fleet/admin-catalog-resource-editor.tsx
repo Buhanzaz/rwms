@@ -131,7 +131,6 @@ function initialValues(
     vehicleType: vehicle.vehicleType ?? "",
     manufacturer: vehicle.manufacturer ?? "",
     model: vehicle.model ?? "",
-    isHgv: vehicle.isHgv == null ? "unknown" : String(vehicle.isHgv),
     hasTrailer: String(vehicle.hasTrailer),
     defaultTrailerId: vehicle.defaultTrailerId ?? "none",
     ...Object.fromEntries(
@@ -212,7 +211,6 @@ function parseInput(
       vehicleType: read("vehicleType") || null,
       manufacturer: read("manufacturer") || null,
       model: read("model") || null,
-      isHgv: read("isHgv") === "unknown" ? null : read("isHgv") === "true",
       hasTrailer,
       defaultTrailerId,
       loadProfiles: vehicleLoadProfileTypes.flatMap((type) => {
@@ -375,35 +373,6 @@ export function AdminCatalogResourceEditor({
     )
   }
 
-  function nullableFlag(key: string, label: string) {
-    const id = `catalog-resource-${key}`
-    return (
-      <Field data-invalid={Boolean(errors[key])} data-disabled={pending}>
-        <FieldLabel id={`${id}-label`}>{label}</FieldLabel>
-        <ToggleGroup
-          id={id}
-          type="single"
-          variant="outline"
-          aria-labelledby={`${id}-label`}
-          aria-invalid={Boolean(errors[key])}
-          aria-describedby={errors[key] ? `${id}-error` : undefined}
-          value={values[key]}
-          disabled={pending}
-          onValueChange={(value) => {
-            if (value) setValue(key, value)
-          }}
-        >
-          <ToggleGroupItem value="unknown">Не указано</ToggleGroupItem>
-          <ToggleGroupItem value="true">Да</ToggleGroupItem>
-          <ToggleGroupItem value="false">Нет</ToggleGroupItem>
-        </ToggleGroup>
-        {errors[key] ? (
-          <FieldError id={`${id}-error`}>{errors[key]}</FieldError>
-        ) : null}
-      </Field>
-    )
-  }
-
   const vehicleKeys = vehicleNumbers.map(([key]) => key)
   const currentTrailerMissing =
     values.defaultTrailerId !== "none" &&
@@ -464,13 +433,14 @@ export function AdminCatalogResourceEditor({
                 </Field>
                 <SpecificationSection
                   title="Автомобиль"
-                  invalid={Boolean(errors.isHgv)}
+                  invalid={["vehicleType", "manufacturer", "model"].some(
+                    (key) => Boolean(errors[key])
+                  )}
                 >
                   <FieldGroup className="grid gap-4 sm:grid-cols-2">
                     {inputField("vehicleType", "Тип автомобиля")}
                     {inputField("manufacturer", "Производитель")}
                     {inputField("model", "Модель")}
-                    {nullableFlag("isHgv", "Грузовой автомобиль (HGV)")}
                   </FieldGroup>
                 </SpecificationSection>
               </>

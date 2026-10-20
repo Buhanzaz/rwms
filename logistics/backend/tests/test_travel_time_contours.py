@@ -75,7 +75,6 @@ def _truck_profile() -> EffectiveTruckProfile:
         vehicle_id="truck-1",
         trailer_id="trailer-1",
         trailer_attached=True,
-        is_hgv=True,
         height_meters=4.05,
         width_meters=2.55,
         length_meters=18.5,
